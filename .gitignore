@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+tools/
+run_data*/
+local_update_source/
+*.spec
+backups/
+dist/*_update.exe
+docs/git-version-report.html
