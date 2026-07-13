@@ -150,15 +150,18 @@ def test_html_page_adapts_file_picker_for_mobile_and_local_share():
     assert "shouldLoadSharedFiles" in page
     assert "applyFileMode" in page
     assert 'data-file-mode' in page
-    assert "从相册或文件选择" in page
+    assert "从图库或文件选择" in page
     assert 'id="imageInput"' in page
     assert 'id="documentInput"' in page
     assert 'id="chooseImages"' in page
     assert 'id="chooseDocuments"' in page
-    assert "选图片/相册" in page
+    assert "选图库媒体" in page
     assert "选文档/文件" in page
     assert ".pdf,.doc,.docx" in page
     assert "image/heic" in page
+    assert "video/mp4" in page
+    assert ".mp4,.mov,.m4v,.webm" in page
+    assert "支持图片、视频和文档" in page
     assert "发布给手机下载" in page
     assert '"/files/share"' in page
     assert "loadSharedFiles" in page

@@ -1,0 +1,10 @@
+{
+    "name":  "DoubaoLanInputBridge",
+    "version":  "0.9.6",
+    "exe":  "DoubaoLanInputBridge_zh2en.exe",
+    "sha256":  "3dea823662ca48b9d478f470c343ab595658af6d8e78f28301b2ec2f2db17a17",
+    "guide":  "index.html",
+    "zip":  "DoubaoLanInputBridge-0.9.6-windows.zip",
+    "generated_at":  "2026-07-13 16:43:22",
+    "includes_private_runtime_data":  false
+}

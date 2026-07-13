@@ -49,7 +49,7 @@ from qrcode.constants import ERROR_CORRECT_M
 
 APP_NAME = "豆包语音输入桥"
 APP_ID = "DoubaoLanInputBridge"
-APP_VERSION = "0.9.1"
+APP_VERSION = "0.9.6"
 APP_ICON_RELATIVE_PATH = "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20
@@ -364,13 +364,28 @@ def read_or_create_access_key() -> str:
         if key:
             return key
     key = secrets.token_urlsafe(24)
-    KEY_FILE.write_text(key, encoding="utf-8")
+    write_access_key(key)
     return key
+
+
+def write_access_key(key: str) -> None:
+    KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = KEY_FILE.with_name(f".{KEY_FILE.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    temp_file.write_text(key, encoding="utf-8")
+    os.replace(temp_file, KEY_FILE)
+
+
+def current_access_key(fallback: str = "") -> str:
+    try:
+        key = KEY_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        key = ""
+    return key or fallback
 
 
 def write_new_access_key() -> str:
     key = secrets.token_urlsafe(24)
-    KEY_FILE.write_text(key, encoding="utf-8")
+    write_access_key(key)
     return key
 
 
@@ -1430,7 +1445,21 @@ def format_file_size(size: int | float | str | None) -> str:
 def is_image_history_file(file_info: dict) -> bool:
     content_type = str(file_info.get("content_type", "")).lower()
     name = str(file_info.get("name") or file_info.get("path") or "").lower()
-    return content_type.startswith("image/") or name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+    return content_type.startswith("image/") or name.endswith(
+        (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif")
+    )
+
+
+def is_video_history_file(file_info: dict) -> bool:
+    content_type = str(file_info.get("content_type", "")).lower()
+    name = str(file_info.get("name") or file_info.get("path") or "").lower()
+    return content_type.startswith("video/") or name.endswith(
+        (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".wmv", ".3gp", ".3gpp")
+    )
+
+
+def is_gallery_history_file(file_info: dict) -> bool:
+    return is_image_history_file(file_info) or is_video_history_file(file_info)
 
 
 def history_record_preview(record: dict) -> dict:
@@ -1444,6 +1473,8 @@ def history_record_preview(record: dict) -> dict:
         }
     files = [item for item in (record.get("files") or []) if isinstance(item, dict)]
     image_count = sum(1 for item in files if is_image_history_file(item))
+    video_count = sum(1 for item in files if is_video_history_file(item))
+    gallery_count = image_count + video_count
     total_size = sum(int(item.get("bytes", 0) or 0) for item in files)
     names = [str(item.get("name") or Path(str(item.get("path", ""))).name) for item in files]
     preview = "、".join(names[:3])
@@ -1452,9 +1483,20 @@ def history_record_preview(record: dict) -> dict:
     if image_count and image_count == len(files):
         kind = "图片"
         info = f"{image_count} 张 | {format_file_size(total_size)}"
-    elif image_count:
+    elif video_count and video_count == len(files):
+        kind = "视频"
+        info = f"{video_count} 个 | {format_file_size(total_size)}"
+    elif gallery_count and gallery_count == len(files):
+        kind = "媒体"
+        info = f"{len(files)} 个 | 图片 {image_count} 张 | 视频 {video_count} 个 | {format_file_size(total_size)}"
+    elif gallery_count:
         kind = "混合"
-        info = f"{len(files)} 个 | 图片 {image_count} 张 | {format_file_size(total_size)}"
+        counts = []
+        if image_count:
+            counts.append(f"图片 {image_count} 张")
+        if video_count:
+            counts.append(f"视频 {video_count} 个")
+        info = f"{len(files)} 个 | {' | '.join(counts)} | {format_file_size(total_size)}"
     else:
         kind = "文件"
         info = f"{len(files)} 个 | {format_file_size(total_size)}"
@@ -1466,6 +1508,18 @@ def first_image_history_path(record: dict) -> Path | None:
         return None
     for item in record.get("files") or []:
         if not isinstance(item, dict) or not is_image_history_file(item):
+            continue
+        path = Path(str(item.get("path", "")))
+        if path.is_file():
+            return path
+    return None
+
+
+def first_gallery_history_path(record: dict) -> Path | None:
+    if record.get("type") != "file":
+        return None
+    for item in record.get("files") or []:
+        if not isinstance(item, dict) or not is_gallery_history_file(item):
             continue
         path = Path(str(item.get("path", "")))
         if path.is_file():
@@ -1764,6 +1818,27 @@ def resolve_shared_download(filename: str, share_dir: Path = MOBILE_SHARE_DIR) -
 
 def share_uploaded_files(files: list[dict]) -> dict:
     return {"files": len(files), "items": list_shared_files(MOBILE_SHARE_DIR)}
+
+
+def publish_text_for_mobile_download(text: str, share_dir: Path = MOBILE_SHARE_DIR) -> dict:
+    content = str(text or "")
+    if not content.strip():
+        raise ValueError("没有输入要发布的文字")
+    if len(content) > MAX_TEXT_LENGTH:
+        raise ValueError(f"文字过长，最多 {MAX_TEXT_LENGTH} 字")
+    filename = f"bridge-text-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+    target = unique_upload_path(share_dir, filename)
+    target.write_text(content, encoding="utf-8")
+    published = [
+        {
+            "name": target.name,
+            "path": str(target.resolve()),
+            "bytes": target.stat().st_size,
+            "content_type": "text/plain; charset=utf-8",
+        }
+    ]
+    record_file_history(published, action="share")
+    return {"files": 1, "items": list_shared_files(share_dir), "published": published}
 
 
 def publish_files_for_mobile_download(paths: list[Path | str], share_dir: Path = MOBILE_SHARE_DIR) -> dict:
@@ -2183,11 +2258,11 @@ def html_page(access_key: str, server_name: str) -> str:
       <div id="fileToolsPanel" class="file-tools collapsible-panel" hidden>
         <div class="file-tools-head">
           <strong id="fileToolsTitle">文件剪贴板</strong>
-          <span id="fileToolsHint">图片、Word、PDF、小文件</span>
+          <span id="fileToolsHint">图片、视频、Word、PDF、小文件</span>
         </div>
         <div class="file-row">
           <input id="fileInput" class="file-input-native" type="file" multiple>
-          <input id="imageInput" class="file-input-native" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.heic,.heif,image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif">
+          <input id="imageInput" class="file-input-native" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.heic,.heif,.mp4,.mov,.m4v,.webm,.mkv,.avi,.wmv,.3gp,.3gpp,image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,video/mp4,video/quicktime,video/x-m4v,video/webm,video/x-matroska,video/x-msvideo,video/x-ms-wmv,video/3gpp">
           <input id="documentInput" class="file-input-native" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.zip,.rar,.7z,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
           <div id="fileDropzone" class="file-dropzone" role="button" tabindex="0" aria-label="选择或拖放文件">
             <div class="file-dropzone-main">
@@ -2201,7 +2276,7 @@ def html_page(access_key: str, server_name: str) -> str:
             <div id="fileList" class="file-list" aria-live="polite"></div>
           </div>
           <div class="mobile-file-actions">
-            <button id="chooseImages" type="button" class="ghost-button">选图片/相册</button>
+            <button id="chooseImages" type="button" class="ghost-button">选图库媒体</button>
             <button id="chooseDocuments" type="button" class="ghost-button">选文档/文件</button>
           </div>
           <div class="file-action-row">
@@ -2348,8 +2423,8 @@ def html_page(access_key: str, server_name: str) -> str:
         document.body.dataset.fileMode = "mobile-clipboard";
         fileToolsTitleEl.textContent = "文件到电脑";
         fileToolsHintEl.textContent = "";
-        fileDropzoneTitleEl.textContent = "从相册或文件选择";
-        fileDropzoneHintEl.textContent = "选择后自动上传到电脑剪贴板。";
+        fileDropzoneTitleEl.textContent = "从图库或文件选择";
+        fileDropzoneHintEl.textContent = "支持图片、视频和文档，点击发送后粘贴到电脑。";
         uploadFilesBtn.textContent = "选择后自动上传";
         return;
       }}
@@ -2364,7 +2439,7 @@ def html_page(access_key: str, server_name: str) -> str:
       }}
       document.body.dataset.fileMode = "desktop-clipboard";
       fileToolsTitleEl.textContent = "文件剪贴板";
-      fileToolsHintEl.textContent = "图片、Word、PDF、小文件";
+      fileToolsHintEl.textContent = "图片、视频、Word、PDF、小文件";
       fileDropzoneTitleEl.textContent = "点按选择，或把文件拖到这里";
       fileDropzoneHintEl.textContent = "最多 8 个文件，总大小不超过 50MB。";
       uploadFilesBtn.textContent = "放入剪贴板";
@@ -2732,6 +2807,24 @@ def html_page(access_key: str, server_name: str) -> str:
 </html>'''
 
 
+def invalid_access_key_page() -> str:
+    return '''<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>二维码已失效</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f7f6; color: #142421; font-family: "Microsoft YaHei UI", sans-serif; }
+    main { width: min(86vw, 420px); padding: 28px; background: #fff; border: 1px solid #dce8e6; border-radius: 14px; text-align: center; }
+    h1 { margin: 0 0 12px; font-size: 24px; }
+    p { margin: 0; color: #61716e; line-height: 1.7; }
+  </style>
+</head>
+<body><main><h1>二维码已失效</h1><p>请回到电脑 APP，打开“扫码连接手机”，点击“刷新二维码”，然后重新扫码。</p></main></body>
+</html>'''
+
+
 class BridgeServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler_class, access_key: str, log_queue=None):
         super().__init__(server_address, handler_class)
@@ -2752,8 +2845,15 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args) -> None:
         self.server.add_log(format % args)
 
+    def active_access_key(self) -> str:
+        key = current_access_key(self.server.access_key)
+        if key != self.server.access_key:
+            self.server.access_key = key
+            self.server.add_log("access key synchronized from local configuration")
+        return key
+
     def is_authorized(self, key: str | None) -> bool:
-        return bool(key and secrets.compare_digest(key, self.server.access_key))
+        return bool(key and secrets.compare_digest(key, self.active_access_key()))
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -2761,12 +2861,13 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         key = (params.get("key") or [""])[0]
         if parsed.path in ("", "/"):
             if not self.is_authorized(key):
-                text_response(self, HTTPStatus.UNAUTHORIZED, "invalid access key")
+                text_response(self, HTTPStatus.UNAUTHORIZED, invalid_access_key_page(), "text/html; charset=utf-8")
                 return
+            active_key = self.active_access_key()
             text_response(
                 self,
                 HTTPStatus.OK,
-                html_page(self.server.access_key, f"http://{self.headers.get('Host', '127.0.0.1')}/?key={self.server.access_key}"),
+                html_page(active_key, f"http://{self.headers.get('Host', '127.0.0.1')}/?key={active_key}"),
                 "text/html; charset=utf-8",
             )
             return
@@ -3123,7 +3224,7 @@ class BridgeGui:
         self.status_var = tk.StringVar(value="未启动")
         self.status_badge_var = tk.StringVar(value="待启动")
         self.status_title_var = tk.StringVar(value="服务未启动")
-        self.status_detail_var = tk.StringVar(value="点击“启动”后，手机即可扫码发送文字、图片和文件到这台电脑。")
+        self.status_detail_var = tk.StringVar(value="点击“启动”后，手机即可扫码发送文字、图片、视频和文件到这台电脑。")
         self.status_port_var = tk.StringVar(value=f"端口 {DEFAULT_PORT}")
         self.key_var = tk.StringVar(value=self.access_key)
         self.qr_hint_var = tk.StringVar(value="启动后生成二维码")
@@ -3175,7 +3276,7 @@ class BridgeGui:
         messagebox.showinfo(
             APP_NAME,
             "对外分发版已就绪。\n\n"
-            "1. 点击“启动服务”，手机扫码即可互传文字、图片和文件。\n"
+            "1. 点击“启动服务”，手机扫码即可互传文字、图片、视频和文件。\n"
             "2. 如需提示词润色，点击“配置”写入 MiniMax API Key。\n"
             "3. 遇到问题时，点击“复制诊断信息”发给维护者。\n\n"
             "本机访问密钥、API Key、日志和上传文件只保存在当前电脑。",
@@ -3315,7 +3416,7 @@ class BridgeGui:
         ).grid(row=0, column=0, sticky="w")
         tk.Label(
             preview_header,
-            text="最近 10 条文字、图片和文件记录。每 5 秒自动刷新，图片会显示缩略图。",
+            text="最近 10 条文字、图片、视频和文件记录。每 5 秒自动刷新，图片会显示缩略图。",
             bg=UI_COLORS["surface"],
             fg=UI_COLORS["muted"],
             font=("", 10),
@@ -3448,7 +3549,7 @@ class BridgeGui:
         self.set_status(
             "stopped",
             "服务未启动",
-            "点击“启动服务”后，手机即可扫码发送文字、图片和文件到这台电脑。",
+            "点击“启动服务”后，手机即可扫码发送文字、图片、视频和文件到这台电脑。",
             "待启动",
         )
         self.sync_service_buttons()
@@ -3903,7 +4004,7 @@ class BridgeGui:
             self.set_status(
                 "running",
                 "服务运行中",
-                "手机扫码后即可发送文字、图片和文件。",
+                "手机扫码后即可发送文字、图片、视频和文件。",
                 "可用",
             )
             self.sync_service_buttons()
@@ -3943,7 +4044,7 @@ class BridgeGui:
         self.set_status(
             "running",
             "服务运行中",
-            "手机扫码后即可发送文字、图片和文件。",
+            "手机扫码后即可发送文字、图片、视频和文件。",
             "可用",
         )
         self.sync_service_buttons()
@@ -4016,7 +4117,7 @@ class BridgeGui:
         ).grid(row=0, column=0, pady=(24, 6))
         tk.Label(
             self.qr_window,
-            text="手机和电脑在同一 Wi-Fi 下，扫码即可发送文字、图片和文件。访问密钥已隐藏。",
+            text="手机和电脑在同一 Wi-Fi 下，扫码即可发送文字、图片、视频和文件。访问密钥已隐藏。",
             bg=UI_COLORS["surface"],
             fg=UI_COLORS["muted"],
             font=("", 10),
@@ -4066,8 +4167,9 @@ class BridgeGui:
             if getattr(self, "qr_popup_link_var", None):
                 self.qr_popup_link_var.set(f"局域网扫码链接已生成 · {display_qr_target(url)}")
             if getattr(self, "qr_popup_check_var", None):
+                qr_host = urlparse(url).hostname or preferred_lan_host()
                 self.qr_popup_check_var.set(
-                    f"连接自检：手机先打开 {build_health_url(FIXED_LAN_UPDATE_HOST, self.current_port())}\n"
+                    f"连接自检：手机先打开 {build_health_url(qr_host, self.current_port())}\n"
                     "能看到 ok=true 说明网络通；打不开通常是不同 Wi-Fi、路由器 AP 隔离或 Windows 防火墙拦截。"
                 )
         if read_mobile_host_override():
@@ -4082,7 +4184,7 @@ class BridgeGui:
 
     def copy_connection_self_check(self) -> None:
         self.root.clipboard_clear()
-        self.root.clipboard_append(build_connection_self_check(self.current_port(), bool(self.server), FIXED_LAN_UPDATE_HOST))
+        self.root.clipboard_append(build_connection_self_check(self.current_port(), bool(self.server), preferred_lan_host()))
         self.log("connection self-check copied to clipboard")
 
     def show_config_dialog(self) -> None:

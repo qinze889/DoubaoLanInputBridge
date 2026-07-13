@@ -261,6 +261,33 @@ def test_qr_matrix_generates_for_mobile_access_url():
     assert any(any(row) for row in matrix)
 
 
+def test_request_handler_synchronizes_rotated_access_key_from_disk(tmp_path, monkeypatch):
+    app = load_app()
+    key_file = tmp_path / "access_key.txt"
+    key_file.write_text("new-key", encoding="utf-8")
+    monkeypatch.setattr(app, "KEY_FILE", key_file)
+
+    class FakeServer:
+        access_key = "old-key"
+
+        def add_log(self, message):
+            self.message = message
+
+    fake_handler = type(
+        "FakeHandler",
+        (),
+        {
+            "server": FakeServer(),
+            "active_access_key": app.BridgeRequestHandler.active_access_key,
+        },
+    )()
+
+    assert app.BridgeRequestHandler.active_access_key(fake_handler) == "new-key"
+    assert fake_handler.server.access_key == "new-key"
+    assert app.BridgeRequestHandler.is_authorized(fake_handler, "new-key") is True
+    assert app.BridgeRequestHandler.is_authorized(fake_handler, "old-key") is False
+
+
 def test_mobile_access_hosts_default_to_detected_lan_addresses(tmp_path, monkeypatch):
     app = load_app()
     monkeypatch.delenv(app.MOBILE_HOST_ENV, raising=False)
@@ -453,7 +480,7 @@ def test_gui_has_prominent_service_status_card():
     assert "self.status_detail_var" in source
     assert "font=(\"\", 20, \"bold\")" in source
     assert "服务运行中" in source
-    assert "手机扫码后即可发送文字、图片和文件" in source
+    assert "手机扫码后即可发送文字、图片、视频和文件" in source
     assert "sync_service_buttons" in source
     assert "self.service_toggle_button" in source
     assert "text=\"停止服务\"" in source
@@ -610,7 +637,7 @@ def test_diagnostics_report_redacts_secrets_and_includes_distribution_context(tm
 
     report = app.build_diagnostics_report(port=8769, service_running=True)
 
-    assert "0.9.1" in report
+    assert "0.9.6" in report
     assert "service_running: true" in report
     assert "port: 8769" in report
     assert "lan_hosts: 192.168.1.63" in report
@@ -650,7 +677,7 @@ def test_self_check_report_redacts_secrets_and_covers_release_health(tmp_path, m
 def test_gui_exposes_distribution_config_first_run_and_diagnostics_controls():
     source = APP_PATH.read_text(encoding="utf-8")
 
-    assert 'APP_VERSION = "0.9.1"' in source
+    assert 'APP_VERSION = "0.9.6"' in source
     assert "FIRST_RUN_FILE" in source
     assert "maybe_show_first_run_guide" in source
     assert "show_config_dialog" in source
@@ -663,7 +690,7 @@ def test_gui_exposes_distribution_config_first_run_and_diagnostics_controls():
 def test_gui_exposes_clipboard_history_window_and_open_actions():
     source = APP_PATH.read_text(encoding="utf-8")
 
-    assert 'APP_VERSION = "0.9.1"' in source
+    assert 'APP_VERSION = "0.9.6"' in source
     assert "show_history_window" in source
     assert "refresh_history_window" in source
     assert "HISTORY_WINDOW_LIMIT = 10" in source
@@ -723,8 +750,17 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert 'selected="true"' in source
     assert "QSystemTrayIcon" in source
     assert "class QrDialog(QDialog)" in source
+    assert "刷新二维码" in source
+    assert "def refresh_access_key" in source
+    assert "self.parent_window.regenerate_access_key()" in source
+    assert "旧二维码和旧链接会立即失效" in source
     assert "QApplication.clipboard().setText" in source
     assert "bridge.BridgeServer" in source
+    assert "def regenerate_access_key" in source
+    assert "bridge.write_new_access_key()" in source
+    assert "self.server.access_key = self.access_key" in source
+    assert "def sync_access_key" in source
+    assert "bridge.current_access_key(self.access_key)" in source
     assert "history_search" in source
     assert "搜索历史：输入文字、文件名或类型" in source
     assert "search_clipboard_history" in source
@@ -735,7 +771,7 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert "bridge.format_history_timestamp(record.get(\"ts\"))" in source
     assert "每 5 秒" in source
     assert "连接摘要" in source
-    assert "最近 10 条文字、图片和文件。双击文字复制，双击文件打开。" in source
+    assert "最近 10 条文字、图片、视频和文件。双击文字复制，双击文件打开。" in source
     assert "立即刷新" in source
     assert "miniButton" in source
     assert "文件夹" in source
@@ -745,9 +781,15 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert '#previewCard[kind="text"]' in source
     assert '#previewCard[kind="file"]' in source
     assert '#previewThumb[kind="image"]' in source
+    assert '#previewCard[kind="video"]' in source
+    assert '#previewThumb[kind="media"]' in source
     assert '#previewKind[kind="mixed"]' in source
     assert "QFileDialog" in source
     assert "发布给手机" in source
+    assert "show_publish_menu" in source
+    assert "发布文字" in source
+    assert "发布文件" in source
+    assert "publish_text_for_mobile_download" in source
     assert "default_file_picker_dir()" in source
     assert "手机打开扫码页面后，在底部“文件缓冲区”点击“刷新”，即可下载。" in source
     assert "publish_files_for_mobile" in source
@@ -771,6 +813,10 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert "连接自检" in source
     assert "手机先测" in source
     assert "复制自检信息" in source
+    assert "bridge.build_access_url(bridge.preferred_lan_host(), self.port, self.access_key)" in source
+    assert "bridge.build_health_url(bridge.preferred_lan_host(), self.port)" in source
+    assert "bridge.build_connection_self_check(self.port, bool(self.server), bridge.preferred_lan_host())" in source
+    assert "bridge.build_access_url(bridge.FIXED_LAN_UPDATE_HOST, self.port, self.access_key)" not in source
     assert "Wi-Fi 自动连接二维码需要明文 Wi-Fi 密码" in source
     assert "QLabel(url)" not in source
     assert "right_layout.addWidget(self.log_text)" not in source

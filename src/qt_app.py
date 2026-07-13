@@ -174,7 +174,14 @@ class PreviewCard(QFrame):
 
         preview = bridge.history_record_preview(record)
         kind_value = str(preview.get("kind", ""))
-        kind_style = "text" if kind_value == "文字" else ("image" if kind_value == "图片" else ("mixed" if kind_value == "混合" else "file"))
+        kind_style_map = {
+            "文字": "text",
+            "图片": "image",
+            "视频": "video",
+            "媒体": "media",
+            "混合": "mixed",
+        }
+        kind_style = kind_style_map.get(kind_value, "file")
         self.setProperty("kind", kind_style)
         ts = bridge.format_history_timestamp(record.get("ts"))
 
@@ -254,30 +261,29 @@ class PreviewCard(QFrame):
 
 
 class QrDialog(QDialog):
-    def __init__(self, parent, url: str):
+    def __init__(self, parent):
         super().__init__(parent)
+        self.parent_window = parent
         self.setWindowTitle("扫码连接手机")
         self.setMinimumSize(520, 720)
         self.setWindowIcon(app_icon())
-        self.self_check_text = parent.connection_self_check()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(10)
         title = QLabel("扫码连接手机")
         title.setObjectName("dialogTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint = QLabel("手机和电脑在同一 Wi-Fi 下，扫码即可发送文字、图片和文件。访问密钥已隐藏。")
+        hint = QLabel("手机和电脑在同一 Wi-Fi 下，扫码即可发送文字、图片、视频和文件。访问密钥已隐藏。")
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        qr = QLabel()
-        qr.setObjectName("qrBox")
-        qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        qr.setPixmap(qr_pixmap(url, 9))
-        link = QLabel(f"局域网扫码链接已生成 · {display_qr_target(url)}")
-        link.setObjectName("qrLink")
-        link.setWordWrap(True)
-        link.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.qr = QLabel()
+        self.qr.setObjectName("qrBox")
+        self.qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.link = QLabel()
+        self.link.setObjectName("qrLink")
+        self.link.setWordWrap(True)
+        self.link.setAlignment(Qt.AlignmentFlag.AlignCenter)
         check_box = QFrame()
         check_box.setObjectName("selfCheckBox")
         check_layout = QVBoxLayout(check_box)
@@ -285,32 +291,47 @@ class QrDialog(QDialog):
         check_layout.setSpacing(5)
         check_title = QLabel("连接自检")
         check_title.setObjectName("boxTitle")
-        health = QLabel(f"手机先测：{parent.health_url()}")
-        health.setObjectName("muted")
-        health.setWordWrap(True)
+        self.health = QLabel()
+        self.health.setObjectName("muted")
+        self.health.setWordWrap(True)
         check_hint = QLabel("能看到 ok=true 说明网络通；打不开通常是不同 Wi-Fi、路由器 AP 隔离或 Windows 防火墙拦截。Wi-Fi 自动连接二维码需要明文 Wi-Fi 密码，当前不自动生成。")
         check_hint.setObjectName("muted")
         check_hint.setWordWrap(True)
         check_layout.addWidget(check_title)
-        check_layout.addWidget(health)
+        check_layout.addWidget(self.health)
         check_layout.addWidget(check_hint)
         actions = QHBoxLayout()
+        refresh_btn = QPushButton("刷新二维码")
+        refresh_btn.setObjectName("primaryButton")
+        refresh_btn.clicked.connect(self.refresh_access_key)
         copy_btn = QPushButton("复制扫码链接")
-        copy_btn.setObjectName("primaryButton")
-        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(url))
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.parent_window.mobile_url()))
         check_btn = QPushButton("复制自检信息")
-        check_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.self_check_text))
+        check_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.parent_window.connection_self_check()))
         local_btn = QPushButton("打开本机页面")
         local_btn.clicked.connect(lambda: webbrowser.open(parent.local_url()))
+        actions.addWidget(refresh_btn)
         actions.addWidget(copy_btn)
         actions.addWidget(check_btn)
         actions.addWidget(local_btn)
         layout.addWidget(title)
         layout.addWidget(hint)
-        layout.addWidget(qr, 1)
-        layout.addWidget(link)
+        layout.addWidget(self.qr, 1)
+        layout.addWidget(self.link)
         layout.addWidget(check_box)
         layout.addLayout(actions)
+        self.refresh_qr()
+
+    def refresh_qr(self) -> None:
+        url = self.parent_window.mobile_url()
+        self.qr.setPixmap(qr_pixmap(url, 9))
+        self.link.setText(f"局域网扫码链接已生成 · {display_qr_target(url)}")
+        self.health.setText(f"手机先测：{self.parent_window.health_url()}")
+
+    def refresh_access_key(self) -> None:
+        self.parent_window.regenerate_access_key()
+        self.refresh_qr()
+        QMessageBox.information(self, APP_NAME, "二维码已刷新。旧二维码和旧链接会立即失效，请用手机重新扫码。")
 
 
 class ManageDialog(QDialog):
@@ -453,7 +474,7 @@ class BridgeQtWindow(QMainWindow):
 
         self._build_ui()
         self._build_tray()
-        self.apply_status("stopped", "待启动", "服务未启动", "点击启动后，手机即可扫码发送文字、图片和文件。")
+        self.apply_status("stopped", "待启动", "服务未启动", "点击启动后，手机即可扫码发送文字、图片、视频和文件。")
         self.update_service_controls("stopped")
 
         self.log_timer = QTimer(self)
@@ -502,7 +523,7 @@ class BridgeQtWindow(QMainWindow):
         header_text = QVBoxLayout()
         h1 = QLabel("最近内容预览")
         h1.setObjectName("pageTitle")
-        sub = QLabel("最近 10 条文字、图片和文件。双击文字复制，双击文件打开。")
+        sub = QLabel("最近 10 条文字、图片、视频和文件。双击文字复制，双击文件打开。")
         sub.setObjectName("muted")
         self.refresh_status = QLabel("自动刷新中 · 每 5 秒 · 上次刷新：等待首次刷新")
         self.refresh_status.setObjectName("refreshStatus")
@@ -558,7 +579,7 @@ class BridgeQtWindow(QMainWindow):
         scan_side_btn.clicked.connect(self.show_qr)
         publish_btn = QPushButton("发布给手机")
         publish_btn.setObjectName("primaryButton")
-        publish_btn.clicked.connect(self.publish_files_for_mobile)
+        publish_btn.clicked.connect(self.show_publish_menu)
         self.service_button = QPushButton("启动服务")
         self.service_button.setObjectName("secondaryButton")
         self.service_button.clicked.connect(self.toggle_server)
@@ -619,13 +640,14 @@ class BridgeQtWindow(QMainWindow):
         self.show_normal()
 
     def mobile_url(self) -> str:
-        return bridge.build_access_url(bridge.FIXED_LAN_UPDATE_HOST, self.port, self.access_key)
+        self.sync_access_key()
+        return bridge.build_access_url(bridge.preferred_lan_host(), self.port, self.access_key)
 
     def health_url(self) -> str:
-        return bridge.build_health_url(bridge.FIXED_LAN_UPDATE_HOST, self.port)
+        return bridge.build_health_url(bridge.preferred_lan_host(), self.port)
 
     def connection_self_check(self) -> str:
-        return bridge.build_connection_self_check(self.port, bool(self.server), bridge.FIXED_LAN_UPDATE_HOST)
+        return bridge.build_connection_self_check(self.port, bool(self.server), bridge.preferred_lan_host())
 
     def local_url(self) -> str:
         return bridge.build_access_url("127.0.0.1", self.port, self.access_key)
@@ -710,7 +732,7 @@ class BridgeQtWindow(QMainWindow):
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         bridge.write_lan_update_manifest_url(self.port)
         self.update_service_controls("running")
-        self.apply_status("running", "可用", "服务运行中", "手机扫码后即可发送文字、图片和文件。")
+        self.apply_status("running", "可用", "服务运行中", "手机扫码后即可发送文字、图片、视频和文件。")
         self.log(f"server started port={self.port}")
 
     def stop_server(self) -> None:
@@ -791,15 +813,32 @@ class BridgeQtWindow(QMainWindow):
             QMessageBox.critical(self, APP_NAME, str(exc))
 
     def show_qr(self) -> None:
-        QrDialog(self, self.mobile_url()).exec()
+        QrDialog(self).exec()
 
     def copy_mobile_url(self) -> None:
         QApplication.clipboard().setText(self.mobile_url())
         self.log("mobile url copied")
 
     def copy_key(self) -> None:
+        self.sync_access_key()
         QApplication.clipboard().setText(self.access_key)
         self.log("access key copied")
+
+    def sync_access_key(self) -> str:
+        latest_key = bridge.current_access_key(self.access_key)
+        if latest_key != self.access_key:
+            self.access_key = latest_key
+            if self.server:
+                self.server.access_key = latest_key
+            self.log("access key synchronized")
+        return self.access_key
+
+    def regenerate_access_key(self) -> str:
+        self.access_key = bridge.write_new_access_key()
+        if self.server:
+            self.server.access_key = self.access_key
+        self.log("access key regenerated")
+        return self.access_key
 
     def show_manage(self) -> None:
         ManageDialog(self).exec()
@@ -872,6 +911,36 @@ class BridgeQtWindow(QMainWindow):
     def open_mobile_share_folder(self) -> None:
         bridge.MOBILE_SHARE_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(str(bridge.MOBILE_SHARE_DIR))
+
+    def show_publish_menu(self) -> None:
+        menu = QMenu(self)
+        text_action = menu.addAction("发布文字")
+        file_action = menu.addAction("发布文件")
+        button = self.sender()
+        pos = button.mapToGlobal(button.rect().bottomLeft()) if isinstance(button, QPushButton) else self.mapToGlobal(self.rect().center())
+        action = menu.exec(pos)
+        if action is text_action:
+            self.publish_text_for_mobile()
+        elif action is file_action:
+            self.publish_files_for_mobile()
+
+    def publish_text_for_mobile(self) -> None:
+        default_text = QApplication.clipboard().text()
+        text, ok = QInputDialog.getMultiLineText(self, APP_NAME, "输入要发布给手机的文字：", default_text)
+        if not ok:
+            return
+        try:
+            result = bridge.publish_text_for_mobile_download(text)
+            self.refresh_preview()
+            self.log("published text for mobile download")
+            name = result["published"][0]["name"]
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                f"已发布文字：{name}\n\n手机打开扫码页面后，在底部“文件缓冲区”点击“刷新”，即可下载。",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, APP_NAME, str(exc))
 
     def publish_files_for_mobile(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "选择要发布给手机下载的文件", default_file_picker_dir())
@@ -949,6 +1018,8 @@ QPushButton:hover { background: #f0fbf8; }
 #previewCard[kind="text"] { border-left: 5px solid #0ea58f; }
 #previewCard[kind="file"] { border-left: 5px solid #2563eb; }
 #previewCard[kind="image"] { border-left: 5px solid #7c3aed; }
+#previewCard[kind="video"] { border-left: 5px solid #dc2626; }
+#previewCard[kind="media"] { border-left: 5px solid #0891b2; }
 #previewCard[kind="mixed"] { border-left: 5px solid #d97706; }
 #previewCard:hover { background: #f0fbf8; border-color: #9edfd4; }
 #previewCard[selected="true"] { background: #e7fbf6; border: 2px solid #0ea58f; }
@@ -956,6 +1027,8 @@ QPushButton:hover { background: #f0fbf8; }
 #previewThumb[kind="text"] { background: #e7fbf6; border-color: #9edfd4; color: #04756a; }
 #previewThumb[kind="file"] { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
 #previewThumb[kind="image"] { background: #f5f3ff; border-color: #ddd6fe; color: #6d28d9; }
+#previewThumb[kind="video"] { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+#previewThumb[kind="media"] { background: #ecfeff; border-color: #a5f3fc; color: #0e7490; }
 #previewThumb[kind="mixed"] { background: #fff7ed; border-color: #fed7aa; color: #c2410c; }
 #previewTitle { font-weight: 800; color: #10231f; }
 #previewMeta { color: #61716e; font-size: 12px; }
@@ -963,6 +1036,8 @@ QPushButton:hover { background: #f0fbf8; }
 #previewKind[kind="text"] { background: #e7fbf6; color: #04756a; }
 #previewKind[kind="file"] { background: #eff6ff; color: #1d4ed8; }
 #previewKind[kind="image"] { background: #f5f3ff; color: #6d28d9; }
+#previewKind[kind="video"] { background: #fef2f2; color: #b91c1c; }
+#previewKind[kind="media"] { background: #ecfeff; color: #0e7490; }
 #previewKind[kind="mixed"] { background: #fff7ed; color: #c2410c; }
 #emptyPreview { background: #fbfdfd; border: 1px solid #dce8e6; border-radius: 14px; padding: 24px; color: #61716e; }
 #logBox { background: #fbfdfd; border: 1px solid #dce8e6; border-radius: 10px; }

@@ -132,6 +132,25 @@ def test_publish_files_for_mobile_download_copies_files_and_records_history(tmp_
     assert history[0]["files"][0]["path"] == str((share_dir / "report.txt").resolve())
 
 
+def test_publish_text_for_mobile_download_creates_txt_and_records_history(tmp_path, monkeypatch):
+    app = load_app()
+    share_dir = tmp_path / "share"
+    history_file = tmp_path / "clipboard_history.json"
+    monkeypatch.setattr(app, "HISTORY_FILE", history_file)
+
+    result = app.publish_text_for_mobile_download("手机可下载的文字", share_dir=share_dir)
+
+    assert result["files"] == 1
+    published = result["published"][0]
+    assert published["name"].startswith("bridge-text-")
+    assert published["name"].endswith(".txt")
+    assert (share_dir / published["name"]).read_text(encoding="utf-8") == "手机可下载的文字"
+    assert result["items"][0]["name"] == published["name"]
+    history = app.list_clipboard_history()
+    assert history[0]["action"] == "share"
+    assert history[0]["files"][0]["content_type"] == "text/plain; charset=utf-8"
+
+
 def test_clipboard_history_records_text_files_pins_and_cleans_old_items(tmp_path, monkeypatch):
     app = load_app()
     history_file = tmp_path / "clipboard_history.json"
@@ -206,12 +225,25 @@ def test_history_record_preview_describes_text_images_and_files(tmp_path, monkey
         [{"name": "photo.jpg", "path": str(image_path), "bytes": 2048, "content_type": "image/jpeg"}],
         now=2,
     )
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake video bytes")
+    video_record = app.record_file_history(
+        [{"name": "clip.mp4", "path": str(video_path), "bytes": 3072, "content_type": "video/mp4"}],
+        now=3,
+    )
+    media_record = app.record_file_history(
+        [
+            {"name": "photo.png", "path": str(tmp_path / "photo.png"), "bytes": 1024, "content_type": "image/png"},
+            {"name": "clip.mov", "path": str(tmp_path / "clip.mov"), "bytes": 4096, "content_type": "video/quicktime"},
+        ],
+        now=4,
+    )
     mixed_record = app.record_file_history(
         [
             {"name": "photo.png", "path": str(tmp_path / "photo.png"), "bytes": 1024, "content_type": "image/png"},
             {"name": "report.pdf", "path": str(tmp_path / "report.pdf"), "bytes": 4096, "content_type": "application/pdf"},
         ],
-        now=3,
+        now=5,
     )
 
     assert app.history_record_preview(text_record)["kind"] == "文字"
@@ -221,9 +253,20 @@ def test_history_record_preview_describes_text_images_and_files(tmp_path, monkey
         "preview": "photo.jpg",
         "info": "1 张 | 2.0 KB",
     }
+    assert app.history_record_preview(video_record) == {
+        "kind": "视频",
+        "preview": "clip.mp4",
+        "info": "1 个 | 3.0 KB",
+    }
+    assert app.history_record_preview(media_record)["kind"] == "媒体"
+    assert "图片 1 张" in app.history_record_preview(media_record)["info"]
+    assert "视频 1 个" in app.history_record_preview(media_record)["info"]
     assert app.history_record_preview(mixed_record)["kind"] == "混合"
     assert "图片 1 张" in app.history_record_preview(mixed_record)["info"]
+    assert app.is_video_history_file({"name": "movie.mov", "content_type": ""})
+    assert app.is_gallery_history_file({"name": "movie.webm", "content_type": "video/webm"})
     assert app.first_image_history_path(image_record) == image_path
+    assert app.first_gallery_history_path(video_record) == video_path
 
 
 def test_format_history_timestamp_includes_full_date_and_minute():
