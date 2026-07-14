@@ -47,7 +47,7 @@ import gui_app as bridge
 
 APP_NAME = bridge.APP_NAME
 APP_VERSION = bridge.APP_VERSION
-SINGLE_INSTANCE_NAME = f"{bridge.APP_ID}.qt.main"
+SINGLE_INSTANCE_NAME = f"{bridge.APP_ID}.qt.main.{APP_VERSION}"
 PREVIEW_AUTO_REFRESH_MS = 5000
 PREVIEW_TITLE_LIMIT = 96
 
@@ -325,7 +325,7 @@ class QrDialog(QDialog):
     def refresh_qr(self) -> None:
         url = self.parent_window.mobile_url()
         self.qr.setPixmap(qr_pixmap(url, 9))
-        self.link.setText(f"局域网扫码链接已生成 · {display_qr_target(url)}")
+        self.link.setText(f"v{APP_VERSION} · 局域网扫码链接已生成 · {display_qr_target(url)}")
         self.health.setText(f"手机先测：{self.parent_window.health_url()}")
 
     def refresh_access_key(self) -> None:
@@ -650,6 +650,7 @@ class BridgeQtWindow(QMainWindow):
         return bridge.build_connection_self_check(self.port, bool(self.server), bridge.preferred_lan_host())
 
     def local_url(self) -> str:
+        self.sync_access_key()
         return bridge.build_access_url("127.0.0.1", self.port, self.access_key)
 
     def log(self, message: str) -> None:
@@ -718,18 +719,37 @@ class BridgeQtWindow(QMainWindow):
         selected = self.port
         last_error = ""
         for candidate in range(selected, selected + bridge.PORT_AUTO_INCREMENT_LIMIT + 1):
+            if bridge.is_tcp_port_in_use(candidate):
+                last_error = f"端口 {candidate} 已被其他服务占用"
+                self.log(f"port {candidate} already in use; trying next port")
+                continue
+            candidate_server = None
             try:
-                self.server = bridge.BridgeServer(("0.0.0.0", candidate), bridge.BridgeRequestHandler, self.access_key, self.log_queue)
-                self.port = candidate
-                break
+                candidate_server = bridge.BridgeServer(
+                    ("0.0.0.0", candidate),
+                    bridge.BridgeRequestHandler,
+                    self.access_key,
+                    self.log_queue,
+                )
             except OSError as exc:
                 last_error = str(exc)
+                continue
+            threading.Thread(target=candidate_server.serve_forever, daemon=True).start()
+            verified, detail = bridge.wait_for_bridge_server_identity(candidate, os.getpid())
+            if not verified:
+                last_error = f"端口 {candidate} 启动自检失败：{detail}"
+                self.log(last_error)
+                candidate_server.shutdown()
+                candidate_server.server_close()
+                continue
+            self.server = candidate_server
+            self.port = candidate
+            break
         if not self.server:
             self.update_service_controls("error")
             self.apply_status("error", "失败", "服务启动失败", last_error)
             QMessageBox.critical(self, APP_NAME, last_error)
             return
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
         bridge.write_lan_update_manifest_url(self.port)
         self.update_service_controls("running")
         self.apply_status("running", "可用", "服务运行中", "手机扫码后即可发送文字、图片、视频和文件。")

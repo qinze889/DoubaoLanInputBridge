@@ -18,6 +18,7 @@ import time
 import webbrowser
 from email.parser import BytesParser
 from email.policy import default as email_policy_default
+from http.client import HTTPConnection
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -49,7 +50,7 @@ from qrcode.constants import ERROR_CORRECT_M
 
 APP_NAME = "豆包语音输入桥"
 APP_ID = "DoubaoLanInputBridge"
-APP_VERSION = "0.9.6"
+APP_VERSION = "0.9.8"
 APP_ICON_RELATIVE_PATH = "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20
@@ -1220,6 +1221,58 @@ def preferred_lan_host() -> str:
         if is_allowed_mobile_lan_host(host):
             return host
     return FIXED_LAN_UPDATE_HOST
+
+
+def bridge_probe_hosts() -> list[str]:
+    override = read_mobile_host_override()
+    detected_hosts = [override] if override else get_lan_ipv4_addresses()
+    hosts = ["127.0.0.1", *detected_hosts]
+    return list(dict.fromkeys(hosts))
+
+
+def is_tcp_port_in_use(port: int, hosts: list[str] | None = None, timeout: float = 0.2) -> bool:
+    for host in hosts or bridge_probe_hosts():
+        try:
+            with socket.create_connection((host, int(port)), timeout=timeout):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def wait_for_bridge_server_identity(
+    port: int,
+    expected_pid: int,
+    hosts: list[str] | None = None,
+    timeout: float = 2.0,
+) -> tuple[bool, str]:
+    targets = hosts or bridge_probe_hosts()
+    deadline = time.monotonic() + timeout
+    last_error = "服务未响应"
+    while time.monotonic() < deadline:
+        all_valid = True
+        for host in targets:
+            connection = HTTPConnection(host, int(port), timeout=0.4)
+            try:
+                connection.request("GET", "/health")
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                if response.status != HTTPStatus.OK:
+                    raise ValueError(f"{host}:{port} 返回 HTTP {response.status}")
+                if int(payload.get("pid", 0)) != int(expected_pid):
+                    raise ValueError(f"{host}:{port} 属于其他进程 PID {payload.get('pid')}")
+                if str(payload.get("version", "")) != APP_VERSION:
+                    raise ValueError(f"{host}:{port} 返回其他版本 {payload.get('version')}")
+            except Exception as exc:
+                all_valid = False
+                last_error = str(exc)
+                break
+            finally:
+                connection.close()
+        if all_valid:
+            return True, ""
+        time.sleep(0.08)
+    return False, last_error
 
 
 def write_lan_update_manifest_url(port: int) -> str:

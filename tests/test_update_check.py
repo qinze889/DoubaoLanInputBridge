@@ -1,5 +1,8 @@
 import importlib.util
 import hashlib
+import os
+import socket
+import threading
 from pathlib import Path
 
 
@@ -296,6 +299,41 @@ def test_mobile_access_hosts_default_to_detected_lan_addresses(tmp_path, monkeyp
 
     assert app.get_mobile_access_hosts() == ["192.168.1.63"]
     assert app.build_access_url("192.168.1.63", 8765, "access key") == "http://192.168.1.63:8765/?key=access%20key"
+
+
+def test_busy_port_detection_checks_specific_loopback_listener():
+    app = load_app()
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    try:
+        port = listener.getsockname()[1]
+        assert app.is_tcp_port_in_use(port, hosts=["127.0.0.1"]) is True
+    finally:
+        listener.close()
+
+
+def test_server_identity_probe_validates_current_pid_and_version(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "KEY_FILE", tmp_path / "access_key.txt")
+    app.write_access_key("probe-key")
+    server = app.BridgeServer(("127.0.0.1", 0), app.BridgeRequestHandler, "probe-key")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        assert app.wait_for_bridge_server_identity(port, os.getpid(), hosts=["127.0.0.1"])[0] is True
+        verified, detail = app.wait_for_bridge_server_identity(
+            port,
+            os.getpid() + 1,
+            hosts=["127.0.0.1"],
+            timeout=0.2,
+        )
+        assert verified is False
+        assert "其他进程" in detail
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_mobile_access_host_can_be_overridden_by_environment(tmp_path, monkeypatch):
@@ -637,7 +675,7 @@ def test_diagnostics_report_redacts_secrets_and_includes_distribution_context(tm
 
     report = app.build_diagnostics_report(port=8769, service_running=True)
 
-    assert "0.9.6" in report
+    assert "0.9.8" in report
     assert "service_running: true" in report
     assert "port: 8769" in report
     assert "lan_hosts: 192.168.1.63" in report
@@ -677,7 +715,7 @@ def test_self_check_report_redacts_secrets_and_covers_release_health(tmp_path, m
 def test_gui_exposes_distribution_config_first_run_and_diagnostics_controls():
     source = APP_PATH.read_text(encoding="utf-8")
 
-    assert 'APP_VERSION = "0.9.6"' in source
+    assert 'APP_VERSION = "0.9.8"' in source
     assert "FIRST_RUN_FILE" in source
     assert "maybe_show_first_run_guide" in source
     assert "show_config_dialog" in source
@@ -690,7 +728,7 @@ def test_gui_exposes_distribution_config_first_run_and_diagnostics_controls():
 def test_gui_exposes_clipboard_history_window_and_open_actions():
     source = APP_PATH.read_text(encoding="utf-8")
 
-    assert 'APP_VERSION = "0.9.6"' in source
+    assert 'APP_VERSION = "0.9.8"' in source
     assert "show_history_window" in source
     assert "refresh_history_window" in source
     assert "HISTORY_WINDOW_LIMIT = 10" in source
@@ -721,6 +759,7 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert "from PySide6.QtNetwork import QLocalServer, QLocalSocket" in source
     assert "class SingleInstanceGuard" in source
     assert "SINGLE_INSTANCE_NAME" in source
+    assert 'SINGLE_INSTANCE_NAME = f"{bridge.APP_ID}.qt.main.{APP_VERSION}"' in source
     assert "single_instance.is_secondary" in source
     assert "set_activate_callback(window.show_normal)" in source
     assert "self.tray.activated.connect(self.on_tray_activated)" in source
@@ -814,6 +853,8 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert "手机先测" in source
     assert "复制自检信息" in source
     assert "bridge.build_access_url(bridge.preferred_lan_host(), self.port, self.access_key)" in source
+    assert 'self.link.setText(f"v{APP_VERSION}' in source
+    assert 'def local_url(self) -> str:' in source
     assert "bridge.build_health_url(bridge.preferred_lan_host(), self.port)" in source
     assert "bridge.build_connection_self_check(self.port, bool(self.server), bridge.preferred_lan_host())" in source
     assert "bridge.build_access_url(bridge.FIXED_LAN_UPDATE_HOST, self.port, self.access_key)" not in source
