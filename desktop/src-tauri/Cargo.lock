@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "doubao-lan-input-bridge"
-version = "0.12.2"
+version = "1.0.0"
 dependencies = [
  "log",
  "serde",

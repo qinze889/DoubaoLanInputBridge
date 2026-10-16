@@ -1,5 +1,6 @@
 import importlib.util
 import hashlib
+import json
 import os
 import socket
 import threading
@@ -84,7 +85,7 @@ def test_check_for_update_accepts_bom_prefixed_manifest(monkeypatch):
         return FakeResponse()
 
     monkeypatch.setattr(app, "read_update_manifest_url", lambda: "file:///C:/updates/update.json")
-    monkeypatch.setattr(app, "urlopen", fake_urlopen)
+    monkeypatch.setattr(app, "_open_direct", fake_urlopen)
 
     result = app.check_for_update()
 
@@ -797,7 +798,7 @@ def test_diagnostics_report_redacts_secrets_and_includes_distribution_context(tm
 
     report = app.build_diagnostics_report(port=8769, service_running=True)
 
-    assert "0.12.2" in report
+    assert app.APP_VERSION in report
     assert "service_running: true" in report
     assert "port: 8769" in report
     assert "lan_hosts: 192.168.1.63" in report
@@ -836,8 +837,9 @@ def test_self_check_report_redacts_secrets_and_covers_release_health(tmp_path, m
 
 def test_gui_exposes_distribution_config_first_run_and_diagnostics_controls():
     source = APP_PATH.read_text(encoding="utf-8")
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
-    assert 'APP_VERSION = "0.12.2"' in source
+    assert f'APP_VERSION = "{version}"' in source
     assert "FIRST_RUN_FILE" in source
     assert "maybe_show_first_run_guide" in source
     assert "show_config_dialog" in source
@@ -849,8 +851,9 @@ def test_gui_exposes_distribution_config_first_run_and_diagnostics_controls():
 
 def test_gui_exposes_clipboard_history_window_and_open_actions():
     source = APP_PATH.read_text(encoding="utf-8")
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
-    assert 'APP_VERSION = "0.12.2"' in source
+    assert f'APP_VERSION = "{version}"' in source
     assert "show_history_window" in source
     assert "refresh_history_window" in source
     assert "HISTORY_WINDOW_LIMIT = 30" in source
@@ -1026,3 +1029,369 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert "访问密钥" in source
     assert "完整历史" in source
     assert "复制连接" in source
+
+
+# ---------------------------------------------------------------- GitHub 更新源
+
+
+def test_github_repo_from_url_accepts_common_forms():
+    app = load_app()
+
+    expected = "qinze889/DoubaoLanInputBridge"
+    assert app.github_repo_from_url("https://github.com/qinze889/DoubaoLanInputBridge") == expected
+    assert app.github_repo_from_url("https://github.com/qinze889/DoubaoLanInputBridge/") == expected
+    assert app.github_repo_from_url("https://github.com/qinze889/DoubaoLanInputBridge/releases") == expected
+    assert app.github_repo_from_url("https://github.com/qinze889/DoubaoLanInputBridge.git") == expected
+    assert app.github_repo_from_url("https://api.github.com/repos/qinze889/DoubaoLanInputBridge/releases/latest") == expected
+    assert app.github_repo_from_url("qinze889/DoubaoLanInputBridge") == expected
+
+
+def test_github_repo_from_url_rejects_non_github_sources():
+    app = load_app()
+
+    assert app.github_repo_from_url("http://192.168.1.63:8765/__updates__/update.json") == ""
+    assert app.github_repo_from_url("file:///C:/updates/update.json") == ""
+    assert app.github_repo_from_url("") == ""
+
+
+def test_pick_release_asset_prefers_nsis_setup_over_msi_and_archives():
+    app = load_app()
+
+    asset = app.pick_release_asset(
+        {
+            "assets": [
+                {"name": "source.zip", "browser_download_url": "https://x/s.zip"},
+                {"name": "pkg.msi", "browser_download_url": "https://x/o.msi"},
+                {"name": "声笺_0.12.2_x64-setup.exe", "browser_download_url": "https://x/setup.exe"},
+            ]
+        }
+    )
+
+    assert asset["name"] == "声笺_0.12.2_x64-setup.exe"
+
+
+def test_pick_release_asset_falls_back_to_msi():
+    app = load_app()
+
+    asset = app.pick_release_asset(
+        {"assets": [{"name": "pkg.msi", "browser_download_url": "https://x/o.msi"}]}
+    )
+
+    assert asset["name"] == "pkg.msi"
+
+
+def test_pick_release_asset_returns_empty_without_installer():
+    app = load_app()
+
+    assert app.pick_release_asset({"assets": [{"name": "src.zip"}]}) == {}
+    assert app.pick_release_asset({}) == {}
+    assert app.pick_release_asset({"assets": "not-a-list"}) == {}
+
+
+def test_normalize_github_release_maps_tag_asset_digest_and_notes():
+    app = load_app()
+
+    result = app.normalize_github_release(
+        {
+            "tag_name": "v0.13.0",
+            "body": "  本次更新：集成隧道  ",
+            "assets": [
+                {
+                    "name": "shenjian-0.13.0-setup.exe",
+                    "browser_download_url": "https://github.com/x/y/releases/download/v0.13.0/shenjian-0.13.0-setup.exe",
+                    "digest": "sha256:ABCDEF",
+                }
+            ],
+        },
+        current_version="0.12.2",
+    )
+
+    assert result["available"] is True
+    assert result["version"] == "0.13.0"
+    assert result["sha256"] == "abcdef"
+    assert result["source"] == "github"
+    assert result["tag"] == "v0.13.0"
+    assert result["notes"] == "本次更新：集成隧道"
+    assert result["url"].endswith("shenjian-0.13.0-setup.exe")
+
+
+def test_normalize_github_release_without_digest_leaves_checksum_empty():
+    app = load_app()
+
+    result = app.normalize_github_release(
+        {"tag_name": "0.13.0", "assets": [{"name": "a-setup.exe", "browser_download_url": "https://x/a.exe"}]},
+        current_version="0.12.2",
+    )
+
+    assert result["available"] is True
+    assert result["sha256"] == ""
+
+
+def test_normalize_github_release_requires_version():
+    app = load_app()
+
+    try:
+        app.normalize_github_release({"assets": []})
+    except ValueError as exc:
+        assert "版本号" in str(exc)
+    else:
+        raise AssertionError("缺少 tag 时应报错")
+
+
+def test_read_update_manifest_url_defaults_to_github(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.delenv(app.UPDATE_MANIFEST_ENV, raising=False)
+    monkeypatch.setattr(app, "UPDATE_URL_FILE", tmp_path / "missing_update_url.txt")
+
+    assert app.read_update_manifest_url() == f"https://github.com/{app.GITHUB_REPO_DEFAULT}"
+
+
+def test_read_update_manifest_url_prefers_configured_file(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.delenv(app.UPDATE_MANIFEST_ENV, raising=False)
+    target = tmp_path / "update_url.txt"
+    target.write_text("http://192.168.1.63:8765/__updates__/update.json\n", encoding="utf-8")
+    monkeypatch.setattr(app, "UPDATE_URL_FILE", target)
+
+    assert app.read_update_manifest_url() == "http://192.168.1.63:8765/__updates__/update.json"
+
+
+def test_check_for_update_queries_github_releases_api(monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "read_update_manifest_url", lambda: "https://github.com/qinze889/DoubaoLanInputBridge")
+    seen = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "tag_name": "v9.9.9",
+                    "body": "notes",
+                    "assets": [
+                        {
+                            "name": "shenjian-9.9.9-setup.exe",
+                            "browser_download_url": "https://x/setup.exe",
+                            "digest": "sha256:abc",
+                        }
+                    ],
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        seen.append(request.full_url)
+        return FakeResponse()
+
+    monkeypatch.setattr(app, "_open_direct", fake_urlopen)
+
+    result = app.check_for_update()
+
+    assert seen == ["https://api.github.com/repos/qinze889/DoubaoLanInputBridge/releases/latest"]
+    assert result["configured"] is True
+    assert result["available"] is True
+    assert result["version"] == "9.9.9"
+    assert result["sha256"] == "abc"
+    assert result["source"] == "github"
+
+
+def test_check_for_update_degrades_to_error_instead_of_raising(monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "read_update_manifest_url", lambda: "https://github.com/qinze889/DoubaoLanInputBridge")
+
+    def failing_urlopen(request, timeout):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(app, "_open_direct", failing_urlopen)
+
+    result = app.check_for_update()
+
+    assert result["configured"] is True
+    assert result["available"] is False
+    assert "connection refused" in result["error"]
+
+
+def test_check_for_update_caches_within_ttl(monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "read_update_manifest_url", lambda: "https://github.com/qinze889/DoubaoLanInputBridge")
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"tag_name": "v0.12.2", "assets": []}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        return FakeResponse()
+
+    monkeypatch.setattr(app, "_open_direct", fake_urlopen)
+
+    app.check_for_update()
+    app.check_for_update()
+
+    assert len(calls) == 1
+
+    app.check_for_update(use_cache=False)
+
+    assert len(calls) == 2
+
+
+def test_check_for_update_does_not_cache_failures(monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "read_update_manifest_url", lambda: "https://github.com/qinze889/DoubaoLanInputBridge")
+    calls = []
+
+    def failing_urlopen(request, timeout):
+        calls.append(1)
+        raise OSError("temporary failure")
+
+    monkeypatch.setattr(app, "_open_direct", failing_urlopen)
+
+    assert app.check_for_update().get("error")
+    assert app.check_for_update().get("error")
+
+    assert len(calls) == 2
+
+
+def test_reset_update_check_cache_forces_refetch(monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "read_update_manifest_url", lambda: "https://github.com/qinze889/DoubaoLanInputBridge")
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"tag_name": "v0.12.2", "assets": []}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append(1)
+        return FakeResponse()
+
+    monkeypatch.setattr(app, "_open_direct", fake_urlopen)
+
+    app.check_for_update()
+    app.reset_update_check_cache()
+    app.check_for_update()
+
+    assert len(calls) == 2
+
+
+def test_refresh_lan_update_manifest_url_never_clobbers_github_source(tmp_path, monkeypatch):
+    """默认源已是 GitHub，启动时的回写不能把用户选的源覆盖成局域网地址。"""
+    app = load_app()
+    monkeypatch.delenv(app.UPDATE_MANIFEST_ENV, raising=False)
+    target = tmp_path / "update_url.txt"
+    target.write_text("https://github.com/qinze889/DoubaoLanInputBridge\n", encoding="utf-8")
+    monkeypatch.setattr(app, "UPDATE_URL_FILE", target)
+
+    assert app.refresh_lan_update_manifest_url(8790) == ""
+    assert target.read_text(encoding="utf-8").strip() == "https://github.com/qinze889/DoubaoLanInputBridge"
+
+
+def test_refresh_lan_update_manifest_url_never_writes_default_source(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.delenv(app.UPDATE_MANIFEST_ENV, raising=False)
+    target = tmp_path / "update_url.txt"
+    monkeypatch.setattr(app, "UPDATE_URL_FILE", target)
+
+    assert app.refresh_lan_update_manifest_url(8790) == ""
+    assert not target.exists()
+
+
+def test_refresh_lan_update_manifest_url_refreshes_existing_lan_source(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.delenv(app.UPDATE_MANIFEST_ENV, raising=False)
+    target = tmp_path / "update_url.txt"
+    target.write_text("http://192.168.1.63:8765/__updates__/update.json\n", encoding="utf-8")
+    monkeypatch.setattr(app, "UPDATE_URL_FILE", target)
+
+    url = app.refresh_lan_update_manifest_url(8790)
+
+    assert url == "http://192.168.1.63:8765/__updates__/update.json"
+    assert target.read_text(encoding="utf-8").strip() == url
+
+
+# ---------------------------------------------------------------- 直连（绕开失效代理）
+
+
+def test_direct_opener_registers_no_proxy_route(monkeypatch):
+    """环境里存在失效代理时，更新链路必须能直连。
+
+    ProxyHandler 按 proxies 映射动态注册 "<scheme>_open"；空映射等于不注册任何
+    代理路由，请求不会被送去 HTTP_PROXY。因此这里断言「没有代理路由」即可。
+    """
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:10808")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:10808")
+    app = load_app()
+
+    handler_names = [type(h).__name__ for h in app._local_only_opener.handlers]
+    assert "ProxyHandler" not in handler_names
+    assert "proxy" not in getattr(app._local_only_opener, "handle_open", {})
+
+
+def test_check_for_update_uses_direct_opener(monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "read_update_manifest_url", lambda: "https://github.com/qinze889/DoubaoLanInputBridge")
+    used = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"tag_name": "v9.9.9", "assets": []}).encode("utf-8")
+
+    def fake_open_direct(request, timeout):
+        used.append(request.full_url)
+        return FakeResponse()
+
+    monkeypatch.setattr(app, "_open_direct", fake_open_direct)
+
+    result = app.check_for_update()
+
+    assert used == ["https://api.github.com/repos/qinze889/DoubaoLanInputBridge/releases/latest"]
+    assert result["available"] is True
+
+
+def test_download_update_package_defaults_to_direct_opener(tmp_path, monkeypatch):
+    app = load_app()
+    used = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"installer-bytes"
+
+    def fake_open_direct(request, timeout):
+        used.append(request.full_url)
+        return FakeResponse()
+
+    monkeypatch.setattr(app, "_open_direct", fake_open_direct)
+
+    package = app.download_update_package("https://example.com/setup.exe", "9.9.9", "", download_dir=tmp_path)
+
+    assert used == ["https://example.com/setup.exe"]
+    assert package.read_bytes() == b"installer-bytes"

@@ -942,7 +942,7 @@ class BridgeQtWindow(QMainWindow):
             self.apply_status("error", "失败", "服务启动失败", last_error)
             QMessageBox.critical(self, APP_NAME, last_error)
             return
-        bridge.write_lan_update_manifest_url(self.port)
+        bridge.refresh_lan_update_manifest_url(self.port)
         self.update_service_controls("running")
         self.apply_status("running", "可用", "服务运行中", "手机扫码后即可发送文字、图片、视频和文件。")
         self.log(f"server started port={self.port}")
@@ -1156,7 +1156,7 @@ class BridgeQtWindow(QMainWindow):
 
         if self.server:
             try:
-                bridge.write_lan_update_manifest_url(self.port)
+                bridge.refresh_lan_update_manifest_url(self.port)
             except Exception as exc:
                 self.log(f"update source self-heal skipped: {exc}")
 

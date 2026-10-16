@@ -51,7 +51,7 @@ from qrcode.constants import ERROR_CORRECT_M
 
 APP_NAME = "声笺"
 APP_ID = "DoubaoLanInputBridge"
-APP_VERSION = "0.12.2"
+APP_VERSION = "1.0.0"
 APP_ICON_RELATIVE_PATH = "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20
@@ -64,6 +64,18 @@ MOBILE_HOST_ENV = "DOUBAO_BRIDGE_HOST"
 PUBLIC_URL_ENV = "DOUBAO_BRIDGE_PUBLIC_URL"
 PUBLIC_PROBE_ENV = "DOUBAO_BRIDGE_PUBLIC_PROBE"
 PUBLIC_ENTRY_PROBE_TTL = 30.0
+GITHUB_REPO_DEFAULT = "qinze889/DoubaoLanInputBridge"
+GITHUB_RELEASES_LATEST_API = "https://api.github.com/repos/{repo}/releases/latest"
+GITHUB_RELEASES_API = "https://api.github.com/repos/{repo}/releases"
+UPDATE_CHECK_CACHE_TTL = 1800.0
+TUNNEL_DEFAULT_METRICS_PORT = 20244
+TUNNEL_READY_TIMEOUT = 25.0
+TUNNEL_LOG_TAIL_BYTES = 4000
+CLOUDFLARED_CANDIDATE_PATHS = (
+    r"C:\Program Files (x86)\cloudflared\cloudflared.exe",
+    r"C:\Program Files\cloudflared\cloudflared.exe",
+)
+UPDATE_ASSET_SUFFIXES = ("-setup.exe", ".msi")
 MINIMAX_DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
 MINIMAX_DEFAULT_MODEL = "MiniMax-M3"
 MINIMAX_TIMEOUT_SECONDS = 45.0
@@ -226,6 +238,8 @@ UPDATE_URL_FILE = DATA_DIR / "update_url.txt"
 MOBILE_HOST_FILE = DATA_DIR / "mobile_host.txt"
 PUBLIC_URL_FILE = DATA_DIR / "public_url.txt"
 PUBLIC_PROBE_FILE = DATA_DIR / "public_probe.txt"
+TUNNEL_CONFIG_FILE = DATA_DIR / "tunnel.json"
+UPDATE_CHECK_CACHE_FILE = DATA_DIR / "update_check_cache.json"
 FIRST_RUN_FILE = DATA_DIR / "first_run_guide_seen.txt"
 PROMPT_LIBRARY_FILE = DATA_DIR / "prompt_library.json"
 MINIMAX_API_KEY_FILE = DATA_DIR / "minimax_api_key.txt"
@@ -438,13 +452,114 @@ def normalize_update_manifest(manifest: dict, current_version: str = APP_VERSION
     }
 
 
+# 直连 opener：忽略系统/环境代理。更新检查、更新包下载与公网探测共用。
+_local_only_opener = build_opener(ProxyHandler({}))
+
+
+def _open_direct(request: Request, timeout: float):
+    """直连请求，绕过环境代理。
+
+    HTTP_PROXY 指向未启动的本地代理时，走代理会直接 ConnectionRefused，
+    把「有新版本」误判成「检查失败」。这里与 probe_public_entry 保持同一策略。
+    """
+    return _local_only_opener.open(request, timeout=timeout)
+
+
+def github_repo_from_url(url: str) -> str:
+    """把 GitHub 仓库/发行版地址归一成 owner/repo；不是 GitHub 返回空串。"""
+    value = (url or "").strip().rstrip("/")
+    if not value:
+        return ""
+    if re.fullmatch(r"[0-9A-Za-z._-]+/[0-9A-Za-z._-]+", value):
+        return value
+    match = re.search(r"github\.com/(?:repos/)?([0-9A-Za-z._-]+)/([0-9A-Za-z._-]+)", value)
+    if not match:
+        return ""
+    repo = f"{match.group(1)}/{match.group(2)}"
+    return repo[:-4] if repo.endswith(".git") else repo
+
+
+def pick_release_asset(release: dict) -> dict:
+    """挑安装包资产：优先 NSIS 的 *-setup.exe，其次 msi。"""
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        return {}
+    ranked: list[tuple[int, dict]] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "").lower()
+        if not name.endswith(UPDATE_ASSET_SUFFIXES):
+            continue
+        ranked.append((0 if name.endswith("-setup.exe") else 1, asset))
+    if not ranked:
+        return {}
+    ranked.sort(key=lambda item: item[0])
+    return ranked[0][1]
+
+
+def normalize_github_release(release: dict, current_version: str = APP_VERSION) -> dict:
+    """把 GitHub releases API 响应转成与本地 update.json 一致的内部结构。"""
+    tag = str(release.get("tag_name") or release.get("name") or "").strip()
+    version = tag[1:] if tag[:1] in ("v", "V") else tag
+    if not version:
+        raise ValueError("GitHub 发行版缺少版本号")
+    asset = pick_release_asset(release)
+    digest = str(asset.get("digest") or "")
+    sha256 = digest.split(":", 1)[1].strip().lower() if digest.lower().startswith("sha256:") else ""
+    return {
+        "available": is_newer_version(version, current_version),
+        "version": version,
+        "url": str(asset.get("browser_download_url") or ""),
+        "notes": str(release.get("body") or "").strip(),
+        "sha256": sha256,
+        "source": "github",
+        "tag": tag,
+        "asset_name": str(asset.get("name") or ""),
+    }
+
+
+def default_update_manifest_url() -> str:
+    """未显式配置时的更新源：GitHub 发行版。"""
+    return f"https://github.com/{GITHUB_REPO_DEFAULT}"
+
+
+def fetch_update_source(url: str, timeout: float = 8.0) -> dict:
+    """读取更新源：GitHub 地址走 releases API，其余按原有 update.json 清单解析。"""
+    repo = github_repo_from_url(url)
+    if repo:
+        request = Request(
+            GITHUB_RELEASES_LATEST_API.format(repo=repo),
+            headers={
+                "User-Agent": f"{APP_ID}/{APP_VERSION}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        with _open_direct(request, timeout=timeout) as response:
+            payload = response.read().decode("utf-8-sig")
+        return normalize_github_release(json.loads(payload))
+    request = Request(url, headers={"User-Agent": f"{APP_ID}/{APP_VERSION}"})
+    with _open_direct(request, timeout=timeout) as response:
+        payload = response.read().decode("utf-8-sig")
+    result = normalize_update_manifest(json.loads(payload))
+    result["source"] = "manifest"
+    return result
+
+
 def read_update_manifest_url() -> str:
+    """更新源地址。
+
+    优先级：环境变量 DOUBAO_BRIDGE_UPDATE_URL > data_dir/update_url.txt > GitHub 默认源。
+    没有任何显式配置时直接走 GitHub 发行版，装完即可检查更新。
+    """
     env_url = os.environ.get(UPDATE_MANIFEST_ENV, "").strip()
     if env_url:
         return env_url.lstrip("\ufeff")
     if UPDATE_URL_FILE.exists():
-        return UPDATE_URL_FILE.read_text(encoding="utf-8").strip().lstrip("\ufeff")
-    return ""
+        file_url = UPDATE_URL_FILE.read_text(encoding="utf-8").strip().lstrip("\ufeff")
+        if file_url:
+            return file_url
+    return default_update_manifest_url()
 
 
 def write_text_config(path: Path, value: str) -> None:
@@ -459,7 +574,24 @@ def clear_text_config(path: Path) -> None:
         pass
 
 
-def check_for_update(manifest_url: str | None = None, timeout: float = 8.0) -> dict:
+_update_check_cache: dict = {"checked_at": 0.0, "url": "", "result": None}
+
+
+def reset_update_check_cache() -> None:
+    _update_check_cache.update({"checked_at": 0.0, "url": "", "result": None})
+
+
+def check_for_update(
+    manifest_url: str | None = None,
+    timeout: float = 8.0,
+    use_cache: bool = True,
+) -> dict:
+    """检查更新。
+
+    结果做 TTL 缓存：前端会自动轮询，而直连 GitHub 未认证额度只有 60 次/小时，
+    没有缓存会被自动检查打满。网络异常不抛给调用方，改为带 error 字段返回，
+    让界面能区分「确实已是最新版」和「查不到」。
+    """
     url = (manifest_url if manifest_url is not None else read_update_manifest_url()).strip()
     if not url:
         return {
@@ -469,13 +601,34 @@ def check_for_update(manifest_url: str | None = None, timeout: float = 8.0) -> d
             "url": "",
             "notes": "",
         }
-    request = Request(url, headers={"User-Agent": f"{APP_ID}/{APP_VERSION}"})
-    with urlopen(request, timeout=timeout) as response:
-        payload = response.read().decode("utf-8-sig")
-    manifest = json.loads(payload)
-    result = normalize_update_manifest(manifest)
+    now = time.monotonic()
+    cached = _update_check_cache.get("result")
+    if (
+        use_cache
+        and isinstance(cached, dict)
+        and _update_check_cache.get("url") == url
+        and (now - float(_update_check_cache.get("checked_at") or 0.0)) < UPDATE_CHECK_CACHE_TTL
+    ):
+        return dict(cached)
+
+    result = {
+        "configured": True,
+        "available": False,
+        "version": APP_VERSION,
+        "url": "",
+        "notes": "",
+        "manifest_url": url,
+    }
+    try:
+        fetched = fetch_update_source(url, timeout=timeout)
+    except Exception as exc:
+        result["error"] = str(exc) or exc.__class__.__name__
+        return result
+
+    result.update(fetched)
     result["configured"] = True
     result["manifest_url"] = url
+    _update_check_cache.update({"checked_at": now, "url": url, "result": dict(result)})
     return result
 
 
@@ -489,7 +642,7 @@ def download_update_package(
     version: str,
     sha256: str = "",
     download_dir: Path = UPDATE_DOWNLOAD_DIR,
-    transport=urlopen,
+    transport=None,
     timeout: float = 120.0,
 ) -> Path:
     update_url = url.strip()
@@ -497,7 +650,8 @@ def download_update_package(
         raise ValueError("更新清单缺少下载地址")
     download_dir.mkdir(parents=True, exist_ok=True)
     request = Request(update_url, headers={"User-Agent": f"{APP_ID}/{APP_VERSION}"})
-    with transport(request, timeout=timeout) as response:
+    opener = transport or _open_direct
+    with opener(request, timeout=timeout) as response:
         payload = response.read()
     if not payload:
         raise RuntimeError("下载到的更新包为空")
@@ -1253,12 +1407,15 @@ def read_public_url_override() -> str:
     """公网访问根地址覆盖（例如 https://sj.q-ze.top）。
 
     配置后二维码与扫码链接直接指向公网入口，手机不必与电脑处于同一 Wi-Fi。
-    优先级：环境变量 DOUBAO_BRIDGE_PUBLIC_URL > data_dir/public_url.txt。
+    优先级：环境变量 DOUBAO_BRIDGE_PUBLIC_URL > 隧道配置(启用时) > data_dir/public_url.txt。
     留空或删除文件即回到原有局域网行为。
     """
     env_url = (os.environ.get(PUBLIC_URL_ENV, "") or "").strip().lstrip("\ufeff")
     if env_url:
         return env_url.rstrip("/")
+    tunnel = read_tunnel_config()
+    if tunnel_config_active(tunnel):
+        return str(tunnel["public_url"]).rstrip("/")
     if PUBLIC_URL_FILE.exists():
         try:
             file_url = PUBLIC_URL_FILE.read_text(encoding="utf-8").strip().lstrip("\ufeff")
@@ -1270,19 +1427,21 @@ def read_public_url_override() -> str:
 
 
 _public_entry_probe_state: dict = {"checked_at": 0.0, "ok": False}
-_local_only_opener = build_opener(ProxyHandler({}))
 
 
 def read_public_probe_override() -> str:
     """可用性探测地址。
 
-    优先级：环境变量 DOUBAO_BRIDGE_PUBLIC_PROBE > data_dir/public_probe.txt。
+    优先级：环境变量 DOUBAO_BRIDGE_PUBLIC_PROBE > 隧道配置(启用时) > data_dir/public_probe.txt。
     两者都为空表示不做探测，只要配了公网入口就直接用（保留最简行为）。
     推荐指向隧道 metrics 的 /ready：本地请求，毫秒级且直接反映隧道连接状态。
     """
     env_probe = (os.environ.get(PUBLIC_PROBE_ENV, "") or "").strip().lstrip("\ufeff")
     if env_probe:
         return env_probe
+    tunnel = read_tunnel_config()
+    if tunnel_config_active(tunnel):
+        return tunnel_probe_url(tunnel)
     if PUBLIC_PROBE_FILE.exists():
         try:
             file_probe = PUBLIC_PROBE_FILE.read_text(encoding="utf-8").strip().lstrip("\ufeff")
@@ -1291,6 +1450,18 @@ def read_public_probe_override() -> str:
         if file_probe:
             return file_probe
     return ""
+
+
+def fetch_public_entry_status(probe_url: str, timeout: float = 2.0) -> bool:
+    """单次探测，不走缓存。
+
+    状态展示与启动等待必须看到实时结果，否则 TTL 缓存会把「隧道刚断」显示成健康。
+    """
+    try:
+        with _local_only_opener.open(Request(probe_url, method="GET"), timeout=timeout) as response:
+            return int(getattr(response, "status", 0) or 0) == 200
+    except Exception:
+        return False
 
 
 def probe_public_entry(probe_url: str, timeout: float = 2.0) -> bool:
@@ -1306,16 +1477,333 @@ def probe_public_entry(probe_url: str, timeout: float = 2.0) -> bool:
     if checked_at and (now - checked_at) < PUBLIC_ENTRY_PROBE_TTL:
         return bool(_public_entry_probe_state.get("ok"))
 
-    ok = False
-    try:
-        with _local_only_opener.open(Request(probe_url, method="GET"), timeout=timeout) as response:
-            ok = int(getattr(response, "status", 0) or 0) == 200
-    except Exception:
-        ok = False
+    ok = fetch_public_entry_status(probe_url, timeout=timeout)
 
     _public_entry_probe_state["checked_at"] = now
     _public_entry_probe_state["ok"] = ok
     return ok
+
+
+# ----------------------------------------------------------------- Cloudflare 隧道托管
+#
+# 目标：把「公网入口」从手写 public_url.txt / public_probe.txt + 计划任务 vbs，
+# 收敛成 App 内可配置、可启停、可观测的一项能力。
+# 取址优先级保持为：环境变量 > 隧道配置(enabled) > public_url.txt，向后兼容。
+
+
+def tunnel_log_path(name: str = "") -> Path:
+    safe = re.sub(r"[^0-9A-Za-z._-]+", "-", (name or "").strip()).strip("-")
+    return DATA_DIR / (f"cloudflared-{safe}.log" if safe else "cloudflared-tunnel.log")
+
+
+def default_tunnel_config() -> dict:
+    return {
+        "enabled": False,
+        "name": "",
+        "public_url": "",
+        "cloudflared_path": "",
+        "metrics_port": TUNNEL_DEFAULT_METRICS_PORT,
+        "config_path": "",
+    }
+
+
+def normalize_tunnel_config(raw: dict | None) -> dict:
+    config = default_tunnel_config()
+    if not isinstance(raw, dict):
+        return config
+    config["enabled"] = bool(raw.get("enabled", False))
+    config["name"] = str(raw.get("name", "") or "").strip()
+    config["public_url"] = str(raw.get("public_url", "") or "").strip().rstrip("/")
+    config["cloudflared_path"] = str(raw.get("cloudflared_path", "") or "").strip()
+    config["config_path"] = str(raw.get("config_path", "") or "").strip()
+    try:
+        port = int(raw.get("metrics_port", TUNNEL_DEFAULT_METRICS_PORT))
+    except (TypeError, ValueError):
+        port = TUNNEL_DEFAULT_METRICS_PORT
+    config["metrics_port"] = port if 1 <= port <= 65535 else TUNNEL_DEFAULT_METRICS_PORT
+    return config
+
+
+def read_tunnel_config(path: Path | None = None) -> dict:
+    target = path or TUNNEL_CONFIG_FILE
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return default_tunnel_config()
+    return normalize_tunnel_config(raw)
+
+
+def write_tunnel_config(config: dict, path: Path | None = None) -> dict:
+    target = path or TUNNEL_CONFIG_FILE
+    normalized = normalize_tunnel_config(config)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(normalized, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    # 隧道状态变了，缓存里的入口判定立即失效，避免旧结论继续供码
+    _public_entry_probe_state["checked_at"] = 0.0
+    _public_entry_probe_state["ok"] = False
+    return normalized
+
+
+def tunnel_probe_url(config: dict) -> str:
+    port = int(config.get("metrics_port") or TUNNEL_DEFAULT_METRICS_PORT)
+    return f"http://127.0.0.1:{port}/ready"
+
+
+def tunnel_config_active(config: dict | None = None) -> bool:
+    cfg = normalize_tunnel_config(config if config is not None else read_tunnel_config())
+    return bool(cfg.get("enabled") and cfg.get("public_url"))
+
+
+def find_cloudflared(configured: str = "") -> str:
+    candidate = (configured or "").strip().strip('"')
+    if candidate and Path(candidate).is_file():
+        return candidate
+    for path in CLOUDFLARED_CANDIDATE_PATHS:
+        if Path(path).is_file():
+            return path
+    found = shutil.which("cloudflared")
+    return found or ""
+
+
+def parse_tunnel_config_text(text: str) -> dict:
+    """极简解析 cloudflared config.yml 中我们关心的两项：隧道标识与 ingress 主机名。
+
+    刻意不引入 PyYAML：只需处理顶层 `tunnel:` 标量与 `ingress:` 下的 `hostname:`，
+    解析不出来就返回空值，由界面手工填写兜底，不给 sidecar 增加打包依赖风险。
+    """
+    tunnel_id = ""
+    hostnames: list[str] = []
+    in_ingress = False
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        stripped = line.strip()
+        is_item = stripped.startswith("- ")
+        indent = len(line) - len(line.lstrip())
+        if not is_item and indent == 0:
+            if stripped.startswith("tunnel:"):
+                tunnel_id = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            # 任何新的顶层键都代表 ingress 块结束
+            in_ingress = stripped.startswith("ingress:")
+            continue
+        if not in_ingress:
+            continue
+        # ingress 条目形如 "- hostname: sj.q-ze.top"，需要先剥掉列表项前缀；
+        # 也兼容列表与父键同缩进（顶层连字符）的写法。
+        item = stripped[2:].strip() if is_item else stripped
+        if item.startswith("hostname:"):
+            value = item.split(":", 1)[1].strip().strip('"').strip("'")
+            if value and value not in hostnames:
+                hostnames.append(value)
+    return {"tunnel": tunnel_id, "hostnames": hostnames}
+
+
+def cloudflared_home() -> Path:
+    return Path.home() / ".cloudflared"
+
+
+def detect_tunnel_candidates(root: Path | None = None) -> list[dict]:
+    """扫描 ~/.cloudflared/*/config.yml，供界面一键填充。"""
+    base = root or cloudflared_home()
+    candidates: list[dict] = []
+    try:
+        children = sorted(base.iterdir())
+    except OSError:
+        return candidates
+    for child in children:
+        if not child.is_dir():
+            continue
+        config_file = child / "config.yml"
+        if not config_file.is_file():
+            continue
+        try:
+            parsed = parse_tunnel_config_text(
+                config_file.read_text(encoding="utf-8-sig", errors="replace")
+            )
+        except OSError:
+            continue
+        hostnames = list(parsed.get("hostnames") or [])
+        candidates.append(
+            {
+                "name": child.name,
+                "config_path": str(config_file),
+                "tunnel": str(parsed.get("tunnel") or ""),
+                "hostnames": hostnames,
+                "public_url": f"https://{hostnames[0]}" if hostnames else "",
+            }
+        )
+    return candidates
+
+
+_tunnel_process_state: dict = {"process": None, "pid": 0, "name": ""}
+
+
+def _reset_tunnel_process_state() -> None:
+    _tunnel_process_state.update({"process": None, "pid": 0, "name": ""})
+
+
+def tunnel_owned_pid() -> int:
+    """本进程自己拉起的 cloudflared PID；未托管或已退出返回 0。"""
+    process = _tunnel_process_state.get("process")
+    if process is None:
+        return 0
+    try:
+        if process.poll() is not None:
+            _reset_tunnel_process_state()
+            return 0
+    except Exception:
+        _reset_tunnel_process_state()
+        return 0
+    return int(_tunnel_process_state.get("pid") or 0)
+
+
+def wait_for_tunnel_ready(
+    probe_url: str,
+    timeout: float = TUNNEL_READY_TIMEOUT,
+    interval: float = 1.0,
+) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        if fetch_public_entry_status(probe_url, timeout=1.5):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+
+
+def tunnel_status(config: dict | None = None, timeout: float = 2.0) -> dict:
+    cfg = normalize_tunnel_config(config if config is not None else read_tunnel_config())
+    probe_url = tunnel_probe_url(cfg)
+    ready = fetch_public_entry_status(probe_url, timeout=timeout)
+    owned_pid = tunnel_owned_pid()
+    cloudflared = find_cloudflared(cfg.get("cloudflared_path", ""))
+    return {
+        "enabled": bool(cfg.get("enabled")),
+        "name": str(cfg.get("name") or ""),
+        "public_url": str(cfg.get("public_url") or ""),
+        "config_path": str(cfg.get("config_path") or ""),
+        "metrics_port": int(cfg.get("metrics_port") or TUNNEL_DEFAULT_METRICS_PORT),
+        "probe_url": probe_url,
+        "ready": bool(ready),
+        "running": bool(ready or owned_pid),
+        "managed": bool(owned_pid),
+        "owned_pid": owned_pid,
+        "cloudflared_path": cloudflared,
+        "cloudflared_available": bool(cloudflared),
+        "log_path": str(tunnel_log_path(str(cfg.get("name") or ""))),
+    }
+
+
+def _hidden_process_kwargs() -> dict:
+    creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+    startupinfo = None
+    if hasattr(subprocess, "STARTUPINFO"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+    return {"creationflags": creationflags, "startupinfo": startupinfo}
+
+
+def build_tunnel_command(config: dict, cloudflared: str) -> list[str]:
+    cfg = normalize_tunnel_config(config)
+    name = str(cfg.get("name") or "").strip()
+    command = [cloudflared, "tunnel"]
+    config_path = str(cfg.get("config_path") or "").strip()
+    if config_path:
+        command += ["--config", config_path]
+    command += [
+        "--no-autoupdate",
+        "--metrics",
+        f"127.0.0.1:{int(cfg.get('metrics_port') or TUNNEL_DEFAULT_METRICS_PORT)}",
+        "--loglevel",
+        "info",
+        "--logfile",
+        str(tunnel_log_path(name)),
+        "run",
+        name,
+    ]
+    return command
+
+
+def start_tunnel(
+    config: dict | None = None,
+    popen_factory=subprocess.Popen,
+    wait_ready: bool = True,
+) -> dict:
+    """启动托管隧道。
+
+    已由外部（例如计划任务）拉起且健康时不再重复拉起，避免同一隧道出现
+    多个本地连接器；这种情况返回 managed=False，由界面如实标注。
+    """
+    if not IS_WINDOWS:
+        raise RuntimeError("隧道托管目前仅支持 Windows")
+    cfg = normalize_tunnel_config(config if config is not None else read_tunnel_config())
+    cloudflared = find_cloudflared(cfg.get("cloudflared_path", ""))
+    if not cloudflared:
+        raise RuntimeError("未找到 cloudflared，请先安装或手动指定 cloudflared.exe 路径")
+    name = str(cfg.get("name") or "").strip()
+    if not name:
+        raise RuntimeError("未指定隧道名称")
+    config_path = str(cfg.get("config_path") or "").strip()
+    if config_path and not Path(config_path).is_file():
+        raise RuntimeError(f"隧道配置不存在：{config_path}")
+
+    probe_url = tunnel_probe_url(cfg)
+    if not tunnel_owned_pid() and not fetch_public_entry_status(probe_url, timeout=2.0):
+        command = build_tunnel_command(cfg, cloudflared)
+        process = popen_factory(
+            command,
+            close_fds=True,
+            cwd=str(DATA_DIR),
+            **_hidden_process_kwargs(),
+        )
+        _tunnel_process_state.update(
+            {"process": process, "pid": int(getattr(process, "pid", 0) or 0), "name": name}
+        )
+        if wait_ready:
+            wait_for_tunnel_ready(probe_url)
+    return tunnel_status(cfg)
+
+
+def stop_tunnel(runner=subprocess.run) -> dict:
+    """停止托管隧道；只作用于本进程拉起的进程，外部托管的不动。"""
+    pid = tunnel_owned_pid()
+    if not pid:
+        return {"stopped": False, "reason": "external"}
+    try:
+        runner(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+    process = _tunnel_process_state.get("process")
+    if process is not None:
+        try:
+            process.wait(timeout=5)
+        except Exception:
+            pass
+    _reset_tunnel_process_state()
+    return {"stopped": True, "reason": "managed"}
+
+
+def tunnel_log_tail(name: str = "", limit: int = TUNNEL_LOG_TAIL_BYTES) -> str:
+    path = tunnel_log_path(name)
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max(0, limit)))
+            return handle.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
 
 
 def build_access_url(host: str, port: int, access_key: str) -> str:
@@ -1434,6 +1922,21 @@ def write_lan_update_manifest_url(port: int) -> str:
     UPDATE_URL_FILE.parent.mkdir(parents=True, exist_ok=True)
     UPDATE_URL_FILE.write_text(url + "\n", encoding="utf-8")
     return url
+
+
+def is_lan_update_source_url(url: str) -> bool:
+    return "/__updates__/" in (url or "")
+
+
+def refresh_lan_update_manifest_url(port: int) -> str:
+    """启动时刷新局域网更新源端口。
+
+    只在当前更新源本来就是局域网地址时才生效 —— 默认源已改为 GitHub，
+    无条件回写会把用户显式选择的 GitHub 源覆盖掉。
+    """
+    if not is_lan_update_source_url(read_update_manifest_url()):
+        return ""
+    return write_lan_update_manifest_url(port)
 
 
 def qr_matrix(text: str) -> list[list[bool]]:
@@ -3631,18 +4134,46 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             file_response(self, image_path, inline=True)
             return
         if path == "/desktop/update":
-            json_response(self, HTTPStatus.OK, {"ok": True, "result": check_for_update(timeout=5.0)})
+            force = str((params.get("refresh") or [""])[0]).strip().lower() not in ("", "0", "false")
+            if force:
+                reset_update_check_cache()
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {"ok": True, "result": check_for_update(timeout=5.0, use_cache=not force)},
+            )
             return
-        if path == "/desktop/config":
-            minimax = read_minimax_config()
+        if path == "/desktop/tunnel":
+            config = read_tunnel_config()
             json_response(
                 self,
                 HTTPStatus.OK,
                 {
                     "ok": True,
-                    "update_url": read_update_manifest_url(),
+                    "config": config,
+                    "status": tunnel_status(config),
+                    "candidates": detect_tunnel_candidates(),
+                    "probe_url": tunnel_probe_url(config),
+                    "log_path": str(tunnel_log_path(str(config.get("name") or ""))),
+                    "log_tail": tunnel_log_tail(str(config.get("name") or "")),
+                },
+            )
+            return
+        if path == "/desktop/config":
+            minimax = read_minimax_config()
+            tunnel = read_tunnel_config()
+            update_url = read_update_manifest_url()
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "update_url": update_url,
+                    "update_source": "github" if github_repo_from_url(update_url) else "manifest",
                     "minimax_configured": bool(str(minimax.get("api_key", "")).strip()),
                     "minimax_model": str(minimax.get("model", MINIMAX_DEFAULT_MODEL)),
+                    "tunnel": tunnel,
+                    "tunnel_status": tunnel_status(tunnel),
                 },
             )
             return
@@ -3676,6 +4207,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/desktop/update/prepare",
             "/desktop/config",
             "/desktop/firewall",
+            "/desktop/tunnel/config",
+            "/desktop/tunnel/start",
+            "/desktop/tunnel/stop",
         ):
             json_response(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
             return
@@ -3886,6 +4420,50 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/desktop/tunnel/config":
+            merged = dict(read_tunnel_config())
+            for field in ("enabled", "name", "public_url", "cloudflared_path", "config_path", "metrics_port"):
+                if field in data:
+                    merged[field] = data[field]
+            saved = write_tunnel_config(merged)
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "config": saved,
+                    "status": tunnel_status(saved),
+                    "probe_url": tunnel_probe_url(saved),
+                },
+            )
+            return
+        if path in ("/desktop/tunnel/start", "/desktop/tunnel/stop"):
+            config = dict(read_tunnel_config())
+            if "name" in data:
+                config["name"] = data["name"]
+            if "public_url" in data:
+                config["public_url"] = data["public_url"]
+            if "cloudflared_path" in data:
+                config["cloudflared_path"] = data["cloudflared_path"]
+            if "config_path" in data:
+                config["config_path"] = data["config_path"]
+            if "metrics_port" in data:
+                config["metrics_port"] = data["metrics_port"]
+            starting = path.endswith("/start")
+            config["enabled"] = bool(data.get("enabled", True)) if starting else bool(config.get("enabled"))
+            config = write_tunnel_config(config)
+            if starting:
+                status = start_tunnel(config)
+            else:
+                stop_result = stop_tunnel()
+                status = tunnel_status(config)
+                status["stop_result"] = stop_result
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {"ok": True, "config": read_tunnel_config(), "status": status},
+            )
+            return
         if path == "/desktop/config":
             if "update_url" in data:
                 value = str(data.get("update_url", "")).strip()
@@ -3893,6 +4471,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     write_text_config(UPDATE_URL_FILE, value)
                 else:
                     clear_text_config(UPDATE_URL_FILE)
+                reset_update_check_cache()
             if "minimax_api_key" in data:
                 value = str(data.get("minimax_api_key", "")).strip()
                 if value:
@@ -4898,7 +5477,7 @@ class BridgeGui:
         self.sync_service_buttons()
         self.log(f"server started on port {selected_port}")
         try:
-            update_url = write_lan_update_manifest_url(selected_port)
+            update_url = refresh_lan_update_manifest_url(selected_port)
             self.log(f"lan update source configured: {update_url}")
         except Exception as exc:
             self.log(f"lan update source configure skipped: {exc}")
@@ -5287,7 +5866,7 @@ class BridgeGui:
 
 def run_server_only(port: int) -> None:
     access_key = read_or_create_access_key()
-    write_lan_update_manifest_url(port)
+    refresh_lan_update_manifest_url(port)
     server = BridgeServer(("0.0.0.0", port), BridgeRequestHandler, access_key)
     print(f"{APP_NAME} listening on {port}")
     for url in [build_access_url(host, port, access_key) for host in get_mobile_access_hosts()]:

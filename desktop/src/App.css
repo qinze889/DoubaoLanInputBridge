@@ -166,3 +166,19 @@ nav { display: grid; gap: 6px; }
 @media (max-width: 1060px) { .filter-bar { grid-template-columns: minmax(240px, 1fr) auto; } .category-tabs { grid-column: 1 / -1; grid-row: 2; } .result-count { grid-column: 2; grid-row: 1; } .history-list { height: calc(100vh - 248px); } }
 @media (max-width: 940px) { .app-shell { grid-template-columns: 188px minmax(0, 1fr); } .sidebar { padding-inline: 11px; } .brand strong { font-size: 13px; } .workspace { padding-inline: 22px; } .history-banner { gap: 12px; padding-inline: 13px; } .history-banner-icon { display: none; } .history-banner-art { width: 178px; flex-basis: 178px; } .history-banner-wave { width: 170px; } .history-banner-art::before, .history-banner-art::after { width: 166px; } .history-title { font-size: 36px; } .manage-sections { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+.update-indicator { margin-top: auto; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid #b9e1d8; border-radius: 8px; background: var(--green-soft); color: #066f61; cursor: pointer; text-align: left; }
+.update-indicator:hover:not(:disabled) { border-color: var(--green); background: #d9f2eb; }
+.update-indicator:disabled { opacity: .7; cursor: progress; }
+.update-indicator span { display: grid; gap: 2px; }
+.update-indicator strong { font-size: 13px; }
+.update-indicator small { color: var(--muted); font-size: 11px; }
+.update-indicator + .service-summary { margin-top: 0; }
+
+.tunnel-candidates { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 4px 0 10px; }
+.tunnel-candidates > span { color: var(--muted); font-size: 12px; }
+.tunnel-candidates button { display: inline-flex; align-items: center; min-height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-muted); color: var(--ink); cursor: pointer; font-size: 12px; font-weight: 650; }
+.tunnel-candidates button:hover:not(:disabled) { border-color: #9eb9b3; background: #eef6f4; }
+.tunnel-candidates button:disabled { opacity: .55; cursor: not-allowed; }
+.tunnel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.tunnel-hint { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }

@@ -49,15 +49,54 @@ type HistoryRecord = {
   summary: HistorySummary
 }
 type HistoryResponse = { items: HistoryRecord[]; total: number; has_more: boolean }
+type TunnelConfig = {
+  enabled: boolean
+  name: string
+  public_url: string
+  cloudflared_path: string
+  metrics_port: number
+  config_path: string
+}
+type TunnelStatus = {
+  enabled: boolean
+  name: string
+  public_url: string
+  probe_url: string
+  ready: boolean
+  running: boolean
+  managed: boolean
+  owned_pid: number
+  cloudflared_path: string
+  cloudflared_available: boolean
+  stop_result?: { stopped: boolean; reason: string }
+}
+type TunnelCandidate = {
+  name: string
+  config_path: string
+  tunnel: string
+  hostnames: string[]
+  public_url: string
+}
+type TunnelResponse = {
+  config: TunnelConfig
+  status: TunnelStatus
+  candidates: TunnelCandidate[]
+}
 type ConfigResponse = {
   minimax_configured: boolean
   minimax_model: string
+  update_url: string
+  update_source: string
+  tunnel: TunnelConfig
+  tunnel_status: TunnelStatus
 }
 type UpdateResult = {
   configured: boolean
   available: boolean
   version: string
   notes?: string
+  error?: string
+  source?: string
 }
 
 const CATEGORIES = [
@@ -68,9 +107,11 @@ const CATEGORIES = [
   ['file', '文件'],
 ] as const
 
+// 更新源改成 GitHub 之后，自动检查必须收敛：未认证的 releases API 只有 60 次/小时，
+// 原本 5 分钟一轮 + 聚焦节流会把它打满。服务端另有 30 分钟 TTL 缓存兜底。
 const AUTO_UPDATE_INITIAL_DELAY_MS = 1_200
-const AUTO_UPDATE_INTERVAL_MS = 5 * 60 * 1000
-const AUTO_UPDATE_FOCUS_THROTTLE_MS = 60 * 1000
+const AUTO_UPDATE_INTERVAL_MS = 30 * 60 * 1000
+const AUTO_UPDATE_FOCUS_THROTTLE_MS = 5 * 60 * 1000
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 
@@ -329,7 +370,7 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <img src="/app-icon.png" alt="" />
-          <div><strong>声笺</strong><span>桌面版 v0.12.2</span></div>
+          <div><strong>声笺</strong><span>桌面版 v{bridge?.version || '—'}</span></div>
         </div>
         <nav aria-label="主导航">
           <button className="nav-item active" onClick={() => void loadHistory(false)}><Archive size={19} /><span>史记</span><RefreshCw className="nav-trailing" size={15} /></button>
@@ -337,6 +378,15 @@ function App() {
           <button className="nav-item" onClick={() => setModal('publish')}><Send size={19} /><span>发布给手机</span></button>
           <button className="nav-item" onClick={() => setModal('manage')}><Settings size={19} /><span>管理</span></button>
         </nav>
+        {availableUpdate && (
+          <button className="update-indicator" disabled={autoUpdating} onClick={() => void installAvailableUpdate()}>
+            {autoUpdating ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}
+            <span>
+              <strong>有新版本 {availableUpdate.version}</strong>
+              <small>{autoUpdating ? '正在下载安装…' : '点击立即更新'}</small>
+            </span>
+          </button>
+        )}
         <div className={`service-summary ${runtime.running ? 'online' : ''}`}>
           <span className="status-dot" />
           <div><strong>{runtime.running ? '服务运行中' : '服务已停止'}</strong><span>{runtime.running ? '手机可以连接' : '点击启动恢复连接'}</span></div>
@@ -447,6 +497,118 @@ function PublishDialog({ onClose, onPublish }: { onClose: () => void; onPublish:
   return <DialogFrame title="发布给手机" subtitle="文字与文件可以在一次操作中同时发布。" onClose={onClose} wide><div className="publish-grid"><label className="publish-text"><span>文字内容</span><textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="输入需要在手机上复制的文字..." /></label><div className="drop-zone" onClick={() => void chooseFiles()}><Upload size={28} /><strong>拖入文件，或点击选择</strong><span>支持图片、视频、Word、PDF 和其他小文件</span></div></div>{paths.length > 0 && <div className="selected-files"><div><strong>已选择 {paths.length} 个文件</strong><button onClick={() => setPaths([])}>全部清除</button></div>{paths.map((path) => <p key={path}><File size={15} /><span>{path.split(/[\\/]/).pop()}</span><button title="移除" onClick={() => setPaths((current) => current.filter((item) => item !== path))}><X size={14} /></button></p>)}</div>}<footer className="dialog-actions"><button className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={publishing || (!text.trim() && !paths.length)} onClick={async () => { setPublishing(true); await onPublish(text, paths).finally(() => setPublishing(false)) }}>{publishing ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}发布到手机</button></footer></DialogFrame>
 }
 
+function TunnelPanel({ apiGet, apiPost, notify }: { apiGet: <T>(path: string, params?: Record<string, string | number>) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; notify: (message: string) => void }) {
+  const [config, setConfig] = useState<TunnelConfig | null>(null)
+  const [status, setStatus] = useState<TunnelStatus | null>(null)
+  const [candidates, setCandidates] = useState<TunnelCandidate[]>([])
+  const [form, setForm] = useState({ name: '', public_url: '', cloudflared_path: '', metrics_port: '20244' })
+  const [busy, setBusy] = useState('')
+
+  const applyState = useCallback((next: { config: TunnelConfig; status: TunnelStatus; candidates?: TunnelCandidate[] }) => {
+    setConfig(next.config)
+    setStatus(next.status)
+    if (next.candidates) setCandidates(next.candidates)
+    setForm({
+      name: next.config.name,
+      public_url: next.config.public_url,
+      cloudflared_path: next.config.cloudflared_path,
+      metrics_port: String(next.config.metrics_port),
+    })
+  }, [])
+
+  const load = useCallback(async () => {
+    try {
+      applyState(await apiGet<TunnelResponse>('/desktop/tunnel'))
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '读取隧道状态失败')
+    }
+  }, [apiGet, applyState, notify])
+
+  useEffect(() => { void load() }, [load])
+
+  const payload = () => ({ ...form, metrics_port: Number(form.metrics_port) || 20244 })
+
+  const save = async () => {
+    setBusy('save')
+    try {
+      const response = await apiPost<{ config: TunnelConfig; status: TunnelStatus }>('/desktop/tunnel/config', payload())
+      applyState(response)
+      notify('隧道配置已保存')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '保存隧道配置失败')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const run = async (action: 'start' | 'stop') => {
+    setBusy(action)
+    try {
+      const response = await apiPost<{ config: TunnelConfig; status: TunnelStatus }>(`/desktop/tunnel/${action}`, { ...payload(), enabled: action === 'start' })
+      applyState(response)
+      if (action === 'start') {
+        notify(response.status.ready ? '隧道已连通，二维码改用公网地址' : '隧道已启动但尚未连通，二维码暂时使用局域网地址')
+      } else if (response.status.stop_result && !response.status.stop_result.stopped) {
+        notify('该隧道由外部程序托管，未做停止')
+      } else {
+        notify('已停止声笺托管的隧道')
+      }
+      await load()
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '隧道操作失败')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const stateText = !config
+    ? '读取中…'
+    : status?.ready
+      ? '已连通'
+      : status?.running
+        ? '进程在跑但未连通'
+        : '未运行'
+  const ownerText = status?.managed ? '由声笺托管' : status?.running ? '由外部程序托管' : ''
+
+  return (
+    <section>
+      <h3>公网隧道</h3>
+      <div className="settings-row">
+        <div>
+          <strong>Cloudflare 隧道</strong>
+          <span>{stateText}{ownerText ? ` · ${ownerText}` : ''}</span>
+        </div>
+        <button className="button secondary" disabled={Boolean(busy)} onClick={() => void load()}><RefreshCw size={16} />刷新状态</button>
+      </div>
+      {candidates.length > 0 && (
+        <div className="tunnel-candidates">
+          <span>检测到本机隧道配置，点一下即可填入：</span>
+          {candidates.map((item) => (
+            <button
+              key={item.name}
+              type="button"
+              disabled={!item.public_url}
+              onClick={() => setForm({ ...form, name: item.name, public_url: item.public_url })}
+            >
+              {item.name}{item.public_url ? ` · ${item.public_url.replace(/^https?:\/\//, '')}` : ' · 未识别域名'}
+            </button>
+          ))}
+        </div>
+      )}
+      <label className="form-field"><span>隧道名称</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如 shenjian" /></label>
+      <label className="form-field"><span>公网地址</span><input value={form.public_url} onChange={(event) => setForm({ ...form, public_url: event.target.value })} placeholder="https://sj.q-ze.top" /></label>
+      <label className="form-field"><span>cloudflared 路径</span><input value={form.cloudflared_path} onChange={(event) => setForm({ ...form, cloudflared_path: event.target.value })} placeholder={status?.cloudflared_path || '留空则自动探测'} /></label>
+      <label className="form-field"><span>metrics 端口</span><input value={form.metrics_port} onChange={(event) => setForm({ ...form, metrics_port: event.target.value })} placeholder="20244" /></label>
+      <div className="tunnel-actions">
+        <button className="button secondary" disabled={Boolean(busy)} onClick={() => void save()}>保存配置</button>
+        <button className="button primary" disabled={Boolean(busy)} onClick={() => void run('start')}>启动隧道</button>
+        <button className="button secondary" disabled={Boolean(busy)} onClick={() => void run('stop')}>停止隧道</button>
+      </div>
+      <p className="tunnel-hint">隧道连通时二维码走公网地址，断开时自动回落局域网。不再需要手写 public_url.txt 或额外的计划任务。</p>
+    </section>
+  )
+}
+
 function ManageDialog({ apiGet, apiPost, currentVersion, onClose, notify }: { apiGet: <T>(path: string, params?: Record<string, string | number>) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; currentVersion: string; onClose: () => void; notify: (message: string) => void }) {
   const [config, setConfig] = useState<ConfigResponse | null>(null)
   const [apiKey, setApiKey] = useState('')
@@ -458,10 +620,11 @@ function ManageDialog({ apiGet, apiPost, currentVersion, onClose, notify }: { ap
   const checkUpdate = async () => {
     setChecking(true)
     try {
-      const response = await apiGet<{ result: UpdateResult }>('/desktop/update')
+      const response = await apiGet<{ result: UpdateResult }>('/desktop/update', { refresh: 1 })
       const result = response.result
       setUpdateResult(result)
-      notify(result.available ? `发现新版本 ${result.version}` : `当前已是最新版 ${currentVersion}`)
+      if (result.error) notify(`检查更新失败：${result.error}`)
+      else notify(result.available ? `发现新版本 ${result.version}` : `当前已是最新版 ${currentVersion}`)
     } catch (error) { notify(error instanceof Error ? error.message : '检查更新失败') } finally { setChecking(false) }
   }
   const installUpdate = async () => {
@@ -505,6 +668,7 @@ function ManageDialog({ apiGet, apiPost, currentVersion, onClose, notify }: { ap
   }
   return <DialogFrame title="管理" subtitle="低频配置集中在这里，日常使用无需进入。" onClose={onClose} wide>
     <div className="manage-sections">
+      <TunnelPanel apiGet={apiGet} apiPost={apiPost} notify={notify} />
       <section>
         <h3>更新与模型</h3>
         <div className="settings-row">

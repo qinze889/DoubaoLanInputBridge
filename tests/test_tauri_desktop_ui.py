@@ -147,8 +147,10 @@ def test_manage_dialog_exposes_complete_update_flow():
 def test_app_checks_for_updates_automatically_and_opens_prompt():
     source = APP_SOURCE.read_text(encoding="utf-8")
 
-    assert "const AUTO_UPDATE_INTERVAL_MS = 5 * 60 * 1000" in source
-    assert "const AUTO_UPDATE_FOCUS_THROTTLE_MS = 60 * 1000" in source
+    # 更新源改为 GitHub 后自动检查必须收敛：未认证的 releases API 只有 60 次/小时，
+    # 原先 5 分钟一轮会把额度打满，服务端另有 30 分钟 TTL 缓存兜底。
+    assert "const AUTO_UPDATE_INTERVAL_MS = 30 * 60 * 1000" in source
+    assert "const AUTO_UPDATE_FOCUS_THROTTLE_MS = 5 * 60 * 1000" in source
     assert "window.setInterval(checkForUpdate, AUTO_UPDATE_INTERVAL_MS)" in source
     assert "window.addEventListener('focus', checkAfterFocus)" in source
     assert "dismissedUpdateVersionRef.current !== response.result.version" in source
@@ -156,6 +158,23 @@ def test_app_checks_for_updates_automatically_and_opens_prompt():
     assert "<UpdateDialog" in source
     assert 'title="发现新版本"' in source
     assert "下载并更新" in source
+
+
+def test_sidebar_surfaces_update_entry_point():
+    """左下角常驻更新入口：发现新版本即可一键更新。"""
+    source = APP_SOURCE.read_text(encoding="utf-8")
+
+    assert 'className="update-indicator"' in source
+    assert "有新版本 {availableUpdate.version}" in source
+    assert "点击立即更新" in source
+    assert "onClick={() => void installAvailableUpdate()}" in source
+
+
+def test_version_label_reads_from_runtime_not_hardcoded():
+    source = APP_SOURCE.read_text(encoding="utf-8")
+
+    assert "桌面版 v{bridge?.version || '—'}" in source
+    assert "桌面版 v0.12.2" not in source
 
 
 def test_manage_dialog_hides_fixed_update_source():

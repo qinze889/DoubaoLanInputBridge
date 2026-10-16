@@ -190,3 +190,150 @@ def test_desktop_update_prepare_downloads_verified_installer(monkeypatch, tmp_pa
     assert payload["version"] == "0.11.2"
     assert payload["package_path"] == str(package.resolve())
     assert downloads == [("http://127.0.0.1/update.exe", "0.11.2", "abc123", 120.0)]
+
+
+# ---------------------------------------------------------------- 公网隧道路由
+
+
+def test_desktop_tunnel_returns_config_status_and_candidates(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_app, "TUNNEL_CONFIG_FILE", tmp_path / "tunnel.json")
+    monkeypatch.setattr(gui_app, "find_cloudflared", lambda configured="": "")
+    monkeypatch.setattr(gui_app, "fetch_public_entry_status", lambda probe_url, timeout=2.0: False)
+    monkeypatch.setattr(
+        gui_app,
+        "detect_tunnel_candidates",
+        lambda root=None: [
+            {
+                "name": "shenjian",
+                "config_path": "config.yml",
+                "tunnel": "c2901f65",
+                "hostnames": ["sj.q-ze.top"],
+                "public_url": "https://sj.q-ze.top",
+            }
+        ],
+    )
+
+    with running_server(monkeypatch) as port:
+        status, payload, _ = request(port, "GET", "/desktop/tunnel?key=test-key")
+
+    assert status == 200
+    assert payload["config"]["enabled"] is False
+    assert payload["status"]["ready"] is False
+    assert payload["status"]["managed"] is False
+    assert payload["probe_url"] == "http://127.0.0.1:20244/ready"
+    assert payload["candidates"][0]["public_url"] == "https://sj.q-ze.top"
+
+
+def test_desktop_tunnel_requires_key(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_app, "TUNNEL_CONFIG_FILE", tmp_path / "tunnel.json")
+
+    with running_server(monkeypatch) as port:
+        status, payload, _ = request(port, "GET", "/desktop/tunnel")
+
+    assert status == 401
+
+
+def test_desktop_tunnel_config_post_persists_and_switches_access_url(monkeypatch, tmp_path):
+    tunnel_file = tmp_path / "tunnel.json"
+    monkeypatch.setattr(gui_app, "TUNNEL_CONFIG_FILE", tunnel_file)
+    monkeypatch.setattr(gui_app, "fetch_public_entry_status", lambda probe_url, timeout=2.0: True)
+    monkeypatch.setattr(gui_app, "probe_public_entry", lambda probe_url, timeout=2.0: True)
+
+    with running_server(monkeypatch) as port:
+        status, payload, _ = request(
+            port,
+            "POST",
+            "/desktop/tunnel/config",
+            {
+                "key": "test-key",
+                "enabled": True,
+                "name": "shenjian",
+                "public_url": "https://sj.q-ze.top",
+                "metrics_port": 20244,
+            },
+        )
+        assert status == 200
+        assert payload["config"]["name"] == "shenjian"
+        assert payload["config"]["public_url"] == "https://sj.q-ze.top"
+        assert payload["status"]["ready"] is True
+
+        state_status, state, _ = request(port, "GET", "/desktop/state?key=test-key")
+
+    assert state_status == 200
+    assert state["mobile_url"] == "https://sj.q-ze.top/?key=test-key"
+    assert json.loads(tunnel_file.read_text(encoding="utf-8"))["enabled"] is True
+
+
+def test_desktop_tunnel_config_keeps_lan_when_disabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_app, "TUNNEL_CONFIG_FILE", tmp_path / "tunnel.json")
+
+    with running_server(monkeypatch) as port:
+        status, _, _ = request(
+            port,
+            "POST",
+            "/desktop/tunnel/config",
+            {"key": "test-key", "enabled": False, "name": "shenjian", "public_url": "https://sj.q-ze.top"},
+        )
+        assert status == 200
+        _, state, _ = request(port, "GET", "/desktop/state?key=test-key")
+
+    assert state["mobile_url"].startswith("http://192.168.1.88:")
+
+
+def test_desktop_tunnel_stop_reports_external_owner(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_app, "TUNNEL_CONFIG_FILE", tmp_path / "tunnel.json")
+    gui_app._reset_tunnel_process_state()
+
+    with running_server(monkeypatch) as port:
+        status, payload, _ = request(port, "POST", "/desktop/tunnel/stop", {"key": "test-key"})
+
+    assert status == 200
+    assert payload["status"]["stop_result"] == {"stopped": False, "reason": "external"}
+
+
+def test_desktop_tunnel_start_without_cloudflared_reports_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_app, "TUNNEL_CONFIG_FILE", tmp_path / "tunnel.json")
+    monkeypatch.setattr(gui_app, "IS_WINDOWS", True)
+    monkeypatch.setattr(gui_app, "find_cloudflared", lambda configured="": "")
+
+    with running_server(monkeypatch) as port:
+        status, payload, _ = request(
+            port,
+            "POST",
+            "/desktop/tunnel/start",
+            {"key": "test-key", "name": "shenjian", "public_url": "https://sj.q-ze.top"},
+        )
+
+    assert status == 500
+    assert "cloudflared" in payload["error"]
+
+
+def test_desktop_config_reports_github_update_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_app, "UPDATE_URL_FILE", tmp_path / "missing_update_url.txt")
+    monkeypatch.delenv(gui_app.UPDATE_MANIFEST_ENV, raising=False)
+
+    with running_server(monkeypatch) as port:
+        status, payload, _ = request(port, "GET", "/desktop/config?key=test-key")
+
+    assert status == 200
+    assert payload["update_source"] == "github"
+    assert payload["update_url"].startswith("https://github.com/")
+    assert payload["tunnel"]["enabled"] is False
+
+
+def test_desktop_update_refresh_query_bypasses_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_app, "UPDATE_URL_FILE", tmp_path / "missing_update_url.txt")
+    monkeypatch.delenv(gui_app.UPDATE_MANIFEST_ENV, raising=False)
+    calls = []
+
+    def fake_check(manifest_url=None, timeout=8.0, use_cache=True):
+        calls.append(use_cache)
+        return {"configured": True, "available": False, "version": gui_app.APP_VERSION, "url": "", "notes": ""}
+
+    monkeypatch.setattr(gui_app, "check_for_update", fake_check)
+
+    with running_server(monkeypatch) as port:
+        request(port, "GET", "/desktop/update?key=test-key")
+        request(port, "GET", "/desktop/update?key=test-key&refresh=1")
+
+    assert calls == [True, False]

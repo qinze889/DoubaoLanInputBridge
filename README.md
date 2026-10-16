@@ -4,7 +4,13 @@
 
 ## 当前版本
 
-- 版本：`0.12.2`
+- 版本：`1.0.0`
+- 新增：桌面端「管理」内新增「公网隧道」区，可直接配置并启停 Cloudflare 隧道。自动探测本机 `~/.cloudflared/*/config.yml` 里的隧道名与公网域名，点一下即可填入；隧道连通时二维码使用公网地址，断开时自动回落局域网。不再依赖手写 `public_url.txt` / `public_probe.txt` 或额外的计划任务脚本。
+- 新增：隧道由声笺托管时记录自身进程号，停止只作用于自己拉起的进程；检测到外部已在运行的隧道时显示为「外部托管」，不重复拉起第二个连接器。
+- 调整：更新源默认改为 GitHub 发行版（`releases/latest`），并用发行版资产自带的 SHA256 摘要校验，不必再手工维护 `update.json`。启动时不再无条件把更新源覆写回局域网地址。
+- 新增：左下角常驻更新入口，发现新版本后点击即可下载安装。
+- 调整：自动检查更新的间隔由 5 分钟放宽到 30 分钟，避免打满 GitHub 未认证接口的调用额度；服务端增加 30 分钟结果缓存，「检查更新」按钮仍会强制刷新。
+- 修复：桌面端版本号不再硬编码，改由运行中的服务实时提供。
 - 修复：切换 Wi-Fi、有线宽带或网卡后，打开“连接手机”会重新检测当前局域网地址；防火墙改为持久放行自动端口范围，并验证规则绑定的实际服务程序。
 - 修复：手机浏览器粘贴文字后输入框内容变白或消失；现在按纯文本写入选区，并显式固定移动端文字填充色。
 - 新增：Tauri 桌面端启动后自动检查更新，发现新版本会弹窗提示；支持下载、SHA256 校验、静默安装和自动重启。
@@ -193,10 +199,23 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -NoRestart
 
 ## 更新检查
 
-电脑端“检查更新”按钮会读取一个 JSON 更新清单。更新源按顺序读取：
+电脑端“检查更新”按钮会读取更新源。更新源按顺序读取：
 
 1. 环境变量 `DOUBAO_BRIDGE_UPDATE_URL`
 2. 用户数据目录里的 `update_url.txt`
+3. 未配置以上两项时，默认使用 GitHub 发行版
+
+默认源指向 GitHub 仓库（`qinze889/DoubaoLanInputBridge`），读取 `releases/latest`：
+
+```text
+https://github.com/qinze889/DoubaoLanInputBridge
+```
+
+解析规则：`tag_name` 去掉前缀 `v` 作为版本号；资产优先取 `*-setup.exe`（安装包），其次 `*.msi`；
+校验值取资产自带的 `digest`（`sha256:...`）。因此发布新版时只需打 tag 并上传安装包，无需再维护清单文件。
+
+`update_url.txt` 里写任何 GitHub 仓库地址（或 `owner/repo`）都会走这条解析；
+写局域网 `update.json` 地址则继续按下面的清单格式解析。
 
 更新清单格式：
 
@@ -224,9 +243,9 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -NoRestart
 %LOCALAPPDATA%\DoubaoLanInputBridge\update.log
 ```
 
-## 局域网更新源
+## 局域网更新源（可选）
 
-当前阶段使用局域网更新源即可，不需要 VPS。生成并配置：
+更新源默认已改为 GitHub，局域网方式保留给内网离线分发场景，需要用的时候再显式开启。生成并配置：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\publish_local_update.ps1 -ConfigureCurrentUser
