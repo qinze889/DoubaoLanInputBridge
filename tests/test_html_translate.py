@@ -37,6 +37,21 @@ def test_html_page_has_file_upload_to_clipboard_controls():
     assert '"/files/clipboard"' in page
 
 
+def test_mobile_upload_uses_real_byte_progress_without_video_size_limit():
+    app = load_app()
+
+    page = app.html_page("access-key", "http://127.0.0.1:8765/?key=access-key")
+
+    assert 'id="uploadProgress"' in page
+    assert 'role="progressbar"' in page
+    assert 'id="uploadProgressBar"' in page
+    assert "new XMLHttpRequest()" in page
+    assert 'xhr.upload.addEventListener("progress"' in page
+    assert "event.lengthComputable" in page
+    assert "视频时长不限" in page
+    assert "50MB" not in page
+
+
 def test_html_page_uses_modern_file_picker_component():
     app = load_app()
 
@@ -125,6 +140,35 @@ def test_html_page_starts_function_area_with_compact_input_drawer():
     assert "<summary" not in page
 
 
+def test_mobile_text_layout_handles_short_and_long_content_consistently():
+    app = load_app()
+
+    page = app.html_page("access-key", "http://127.0.0.1:8765/?key=access-key")
+
+    assert "resize: none" in page
+    assert "overflow-wrap: anywhere" in page
+    assert "word-break: break-word" in page
+    assert "line-height: 1.68" in page
+    assert ".shared-text-content" in page
+    assert "max-height: 8.1em" in page
+    assert "-webkit-line-clamp" not in page
+    assert ".drawer-summary { flex-direction: column; align-items: stretch; }" in page
+    assert ".drawer-summary .ghost-button { align-self: flex-start; flex: 0 0 auto; }" in page
+
+
+def test_mobile_textarea_keeps_pasted_text_visible_in_android_webviews():
+    app = load_app()
+
+    page = app.html_page("access-key", "http://192.168.1.63:8765/?key=access-key")
+
+    assert "-webkit-text-fill-color: var(--text)" in page
+    assert "caret-color: var(--accent-strong)" in page
+    assert 'textEl.addEventListener("paste"' in page
+    assert 'event.clipboardData.getData("text/plain")' in page
+    assert "textEl.setRangeText" in page
+    assert 'new Event("input", { bubbles: true })' in page
+
+
 def test_html_page_uses_only_expand_button_for_input_height():
     app = load_app()
 
@@ -132,6 +176,7 @@ def test_html_page_uses_only_expand_button_for_input_height():
 
     assert 'id="toggleInputSize"' in page
     assert "展开输入框" in page
+    assert '<input id="pressEnter" type="checkbox" checked>发送后回车' in page
     assert 'id="inputHeightRange"' not in page
     assert 'id="inputResizeGrip"' not in page
     assert 'id="inputHeightValue"' not in page
@@ -168,8 +213,13 @@ def test_html_page_adapts_file_picker_for_mobile_and_local_share():
     assert 'id="sharedFilesPanel"' in page
     assert 'id="sharedFilesList"' in page
     assert 'id="refreshSharedFiles"' in page
-    assert "文件缓冲区" in page
-    assert "文件缓冲区为空。电脑发布文件后会显示在这里。" in page
+    assert "来自电脑" in page
+    assert "电脑发布的文字和文件会显示在这里。" in page
+    assert "renderSharedItems" in page
+    assert "copySharedText" in page
+    assert "文字已复制。" in page
+    assert 'link.target = "_blank"' in page
+    assert "window.setInterval(loadSharedFiles, 5000)" in page
     assert "body[data-file-mode=\"mobile-clipboard\"] .shared-files-panel" not in page
     assert "return true;" in page
     assert "if (shouldLoadSharedFiles()) loadSharedFiles();" in page

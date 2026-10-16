@@ -1,0 +1,29 @@
+[package]
+name = "doubao-lan-input-bridge"
+version = "0.12.2"
+description = "手机与 Windows 电脑之间的文字、图片和文件传输桥"
+authors = ["qinze889"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "doubao_lan_input_bridge_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = ["tray-icon"] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2.3.5"
+tauri-plugin-dialog = "2.7.1"
+tauri-plugin-opener = "2.5.4"
+tauri-plugin-single-instance = "2.4.3"

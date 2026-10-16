@@ -9,3 +9,15 @@ local_update_source/
 backups/
 dist/*_update.exe
 docs/git-version-report.html
+desktop/node_modules/
+desktop/dist/
+desktop/sidecar-build/
+desktop/sidecar-dist/
+desktop/src-tauri/target/
+desktop/src-tauri/binaries/*.exe
+desktop/tauri-dev*.log
+desktop/src-tauri/icons/*
+!desktop/src-tauri/icons/32x32.png
+!desktop/src-tauri/icons/128x128.png
+!desktop/src-tauri/icons/128x128@2x.png
+!desktop/src-tauri/icons/icon.ico

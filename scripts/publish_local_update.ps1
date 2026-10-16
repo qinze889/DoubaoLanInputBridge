@@ -52,7 +52,8 @@ if ([string]::IsNullOrWhiteSpace($SourceExe)) {
         $SourceExe = $DefaultExe
     }
 }
-if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+$UseDefaultOutputDir = [string]::IsNullOrWhiteSpace($OutputDir)
+if ($UseDefaultOutputDir) {
     $OutputDir = Join-Path $Root "local_update_source"
 }
 
@@ -86,7 +87,23 @@ $Manifest = [ordered]@{
     sha256 = $Hash
     notes = $Notes
 }
-$Manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding ASCII
+$Manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+
+$MirrorDir = ""
+if ($UseDefaultOutputDir) {
+    $LocalAppData = $env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($LocalAppData)) {
+        $LocalAppData = [Environment]::GetFolderPath("LocalApplicationData")
+    }
+    $MirrorDir = [System.IO.Path]::GetFullPath((Join-Path $LocalAppData "DoubaoLanInputBridge\local_update_source"))
+    if ($MirrorDir -ne $OutputDir) {
+        if (!(Test-Path -LiteralPath $MirrorDir)) {
+            New-Item -ItemType Directory -Path $MirrorDir | Out-Null
+        }
+        Copy-Item -LiteralPath $PackagePath -Destination (Join-Path $MirrorDir $PackageName) -Force
+        Copy-Item -LiteralPath $ManifestPath -Destination (Join-Path $MirrorDir "update.json") -Force
+    }
+}
 
 $ManifestUrl = "http://${UpdateHost}:${UpdatePort}/__updates__/update.json"
 if ($ConfigureCurrentUser) {
@@ -108,5 +125,6 @@ if ($ConfigureCurrentUser) {
     update_host = $UpdateHost
     update_port = $UpdatePort
     sha256 = $Hash
+    mirror_source = $MirrorDir
     configured_current_user = [bool]$ConfigureCurrentUser
 } | ConvertTo-Json -Depth 5

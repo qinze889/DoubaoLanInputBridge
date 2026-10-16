@@ -180,17 +180,43 @@ def test_launch_update_script_hides_powershell_window(tmp_path):
 
 def test_firewall_rule_script_creates_persistent_private_public_rule(tmp_path):
     app = load_app()
-    exe = tmp_path / "DoubaoLanInputBridge_zh2en.exe"
+    exe = tmp_path / "bridge-service.exe"
 
-    script = app.build_firewall_rule_script(8765, str(exe))
+    script = app.build_firewall_rule_script(8766, str(exe))
 
-    assert "DoubaoLanInputBridge LAN TCP 8765" in script
+    assert "DoubaoLanInputBridge LAN TCP 8765-8784" in script
     assert "-Direction Inbound" in script
     assert "-Action Allow" in script
     assert "-Protocol TCP" in script
-    assert "-LocalPort $port" in script
+    assert "-LocalPort $portScope" in script
+    assert "$portScope = '8765-8784'" in script
     assert "-Profile Private,Public" in script
     assert str(exe) in script
+    assert "-like ($rulePrefix + ' *')" in script
+    assert "Remove-NetFirewallRule" in script
+    assert "Set-NetFirewallRule -DisplayName $ruleName -Program" not in script
+
+
+def test_firewall_status_requires_current_program_and_auto_port_range(tmp_path):
+    app = load_app()
+    exe = tmp_path / "bridge-service.exe"
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = '{"allowed":true,"reason":"allowed"}'
+
+    def fake_runner(args, **kwargs):
+        captured["script"] = args[-1]
+        return Result()
+
+    status = app.firewall_rule_status(8766, str(exe), runner=fake_runner)
+
+    assert status == {"allowed": True, "reason": "allowed"}
+    assert "DoubaoLanInputBridge LAN TCP 8765-8784" in captured["script"]
+    assert "$portScope = '8765-8784'" in captured["script"]
+    assert "Get-NetFirewallApplicationFilter" in captured["script"]
+    assert str(exe) in captured["script"]
 
 
 def test_launch_firewall_rule_elevation_uses_uac_and_hidden_launcher(tmp_path):
@@ -295,10 +321,106 @@ def test_mobile_access_hosts_default_to_detected_lan_addresses(tmp_path, monkeyp
     app = load_app()
     monkeypatch.delenv(app.MOBILE_HOST_ENV, raising=False)
     monkeypatch.setattr(app, "MOBILE_HOST_FILE", tmp_path / "missing_mobile_host.txt")
+    monkeypatch.setattr(app, "PUBLIC_URL_FILE", tmp_path / "missing_public_url.txt")
+    monkeypatch.delenv(app.PUBLIC_URL_ENV, raising=False)
     monkeypatch.setattr(app, "get_lan_ipv4_addresses", lambda: ["192.168.1.63"])
 
     assert app.get_mobile_access_hosts() == ["192.168.1.63"]
     assert app.build_access_url("192.168.1.63", 8765, "access key") == "http://192.168.1.63:8765/?key=access%20key"
+
+
+def test_public_url_override_switches_access_url_to_public_entry(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.delenv(app.PUBLIC_URL_ENV, raising=False)
+    monkeypatch.delenv(app.PUBLIC_PROBE_ENV, raising=False)
+    monkeypatch.setattr(app, "MOBILE_HOST_FILE", tmp_path / "missing_mobile_host.txt")
+    monkeypatch.setattr(app, "PUBLIC_URL_FILE", tmp_path / "missing_public_url.txt")
+    monkeypatch.setattr(app, "PUBLIC_PROBE_FILE", tmp_path / "missing_public_probe.txt")
+    monkeypatch.setattr(app, "probe_public_entry", lambda probe_url, timeout=2.0: True)
+
+    assert app.read_public_url_override() == ""
+    assert app.build_access_url("192.168.1.63", 8765, "access key") == "http://192.168.1.63:8765/?key=access%20key"
+
+    public_file = tmp_path / "public_url.txt"
+    public_file.write_text("https://sj.q-ze.top/\n", encoding="utf-8")
+    monkeypatch.setattr(app, "PUBLIC_URL_FILE", public_file)
+
+    assert app.read_public_url_override() == "https://sj.q-ze.top"
+    assert app.build_access_url("192.168.1.63", 8765, "access key") == "https://sj.q-ze.top/?key=access%20key"
+
+
+def test_public_url_falls_back_to_lan_when_entry_unreachable(tmp_path, monkeypatch):
+    """隧道不通时扫码链接应回退局域网，避免给出打不开的公网地址。"""
+    app = load_app()
+    monkeypatch.delenv(app.PUBLIC_URL_ENV, raising=False)
+    monkeypatch.delenv(app.PUBLIC_PROBE_ENV, raising=False)
+    monkeypatch.setattr(app, "MOBILE_HOST_FILE", tmp_path / "missing_mobile_host.txt")
+    public_file = tmp_path / "public_url.txt"
+    public_file.write_text("https://sj.q-ze.top", encoding="utf-8")
+    monkeypatch.setattr(app, "PUBLIC_URL_FILE", public_file)
+    probe_file = tmp_path / "public_probe.txt"
+    probe_file.write_text("http://127.0.0.1:20244/ready", encoding="utf-8")
+    monkeypatch.setattr(app, "PUBLIC_PROBE_FILE", probe_file)
+    monkeypatch.setattr(app, "probe_public_entry", lambda probe_url, timeout=2.0: False)
+
+    assert app.build_access_url("192.168.1.63", 8765, "access key") == "http://192.168.1.63:8765/?key=access%20key"
+
+
+def test_access_url_uses_public_when_probe_not_configured(tmp_path, monkeypatch):
+    """未配置探测地址时，只要配了公网入口就直接使用，不做探测。"""
+    app = load_app()
+    monkeypatch.delenv(app.PUBLIC_URL_ENV, raising=False)
+    monkeypatch.delenv(app.PUBLIC_PROBE_ENV, raising=False)
+    public_file = tmp_path / "public_url.txt"
+    public_file.write_text("https://sj.q-ze.top", encoding="utf-8")
+    monkeypatch.setattr(app, "PUBLIC_URL_FILE", public_file)
+    monkeypatch.setattr(app, "PUBLIC_PROBE_FILE", tmp_path / "missing_public_probe.txt")
+
+    def unexpected_probe(*args, **kwargs):
+        raise AssertionError("未配置探测地址时不应发起探测")
+
+    monkeypatch.setattr(app, "probe_public_entry", unexpected_probe)
+
+    assert app.build_access_url("192.168.1.63", 8765, "access key") == "https://sj.q-ze.top/?key=access%20key"
+
+
+def test_probe_public_entry_caches_result(monkeypatch):
+    """探测结果按 TTL 缓存，避免每次生成链接都发网络请求。"""
+    app = load_app()
+    calls = []
+    probe_url = "http://127.0.0.1:20244/ready"
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            calls.append(request.full_url)
+            return FakeResponse()
+
+    monkeypatch.setattr(app, "_local_only_opener", FakeOpener())
+    monkeypatch.setattr(app, "_public_entry_probe_state", {"checked_at": 0.0, "ok": False})
+
+    assert app.probe_public_entry(probe_url) is True
+    assert app.probe_public_entry(probe_url) is True
+    assert len(calls) == 1
+    assert calls[0] == probe_url
+
+
+def test_public_url_env_takes_priority_over_file(tmp_path, monkeypatch):
+    app = load_app()
+    public_file = tmp_path / "public_url.txt"
+    public_file.write_text("https://from-file.example", encoding="utf-8")
+    monkeypatch.setattr(app, "PUBLIC_URL_FILE", public_file)
+    monkeypatch.setenv(app.PUBLIC_URL_ENV, "https://from-env.example/")
+
+    assert app.read_public_url_override() == "https://from-env.example"
 
 
 def test_busy_port_detection_checks_specific_loopback_listener():
@@ -364,7 +486,7 @@ def test_lan_update_manifest_url_uses_non_loopback_host(tmp_path, monkeypatch):
 
     url = app.write_lan_update_manifest_url(8769)
 
-    assert url == "http://192.168.1.63:8769/__updates__/update.json"
+    assert url == "http://192.168.1.63:8765/__updates__/update.json"
     assert update_file.read_text(encoding="utf-8").strip() == url
 
 
@@ -675,7 +797,7 @@ def test_diagnostics_report_redacts_secrets_and_includes_distribution_context(tm
 
     report = app.build_diagnostics_report(port=8769, service_running=True)
 
-    assert "0.9.8" in report
+    assert "0.12.2" in report
     assert "service_running: true" in report
     assert "port: 8769" in report
     assert "lan_hosts: 192.168.1.63" in report
@@ -715,7 +837,7 @@ def test_self_check_report_redacts_secrets_and_covers_release_health(tmp_path, m
 def test_gui_exposes_distribution_config_first_run_and_diagnostics_controls():
     source = APP_PATH.read_text(encoding="utf-8")
 
-    assert 'APP_VERSION = "0.9.8"' in source
+    assert 'APP_VERSION = "0.12.2"' in source
     assert "FIRST_RUN_FILE" in source
     assert "maybe_show_first_run_guide" in source
     assert "show_config_dialog" in source
@@ -728,10 +850,10 @@ def test_gui_exposes_distribution_config_first_run_and_diagnostics_controls():
 def test_gui_exposes_clipboard_history_window_and_open_actions():
     source = APP_PATH.read_text(encoding="utf-8")
 
-    assert 'APP_VERSION = "0.9.8"' in source
+    assert 'APP_VERSION = "0.12.2"' in source
     assert "show_history_window" in source
     assert "refresh_history_window" in source
-    assert "HISTORY_WINDOW_LIMIT = 10" in source
+    assert "HISTORY_WINDOW_LIMIT = 30" in source
     assert 'columns = ("kind", "time", "preview", "info", "action")' in source
     assert 'show="tree headings"' in source
     assert 'heading("#0", text="预览图")' in source
@@ -784,8 +906,6 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert "contextMenuEvent" in source
     assert "select_preview_card" in source
     assert "QScrollBar:vertical" in source
-    assert "双击文字复制" in source
-    assert "双击文件打开" in source
     assert 'selected="true"' in source
     assert "QSystemTrayIcon" in source
     assert "class QrDialog(QDialog)" in source
@@ -801,37 +921,63 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert "def sync_access_key" in source
     assert "bridge.current_access_key(self.access_key)" in source
     assert "history_search" in source
-    assert "搜索历史：输入文字、文件名或类型" in source
+    assert "全局搜索历史：文字、文件名、路径或类型" in source
     assert "search_clipboard_history" in source
+    assert "PREVIEW_PAGE_SIZE = bridge.HISTORY_WINDOW_LIMIT" in source
+    assert "records_with_more = bridge.search_clipboard_history(query, self.preview_limit + 1, category)" in source
+    assert "全局历史 · 已加载 {len(records)} 条" in source
     assert "PREVIEW_AUTO_REFRESH_MS = 5000" in source
     assert "self.preview_timer.timeout.connect(self.refresh_preview)" in source
     assert "self.preview_timer.start(PREVIEW_AUTO_REFRESH_MS)" in source
     assert "自动刷新中 · 每 5 秒 · 上次刷新：" in source
     assert "bridge.format_history_timestamp(record.get(\"ts\"))" in source
     assert "每 5 秒" in source
-    assert "连接摘要" in source
-    assert "最近 10 条文字、图片、视频和文件。双击文字复制，双击文件打开。" in source
-    assert "立即刷新" in source
+    assert "连接摘要" not in source
+    assert 'topbar.setObjectName("topbar")' in source
+    assert 'center.setObjectName("workspace")' in source
+    assert "self.sidebar" not in source
+    assert 'QLabel("史记")' in source
+    assert "最近 50 条文字、图片、视频和文件" not in source
+    assert "QComboBox" in source
+    assert "history_category" in source
+    assert 'self.history_category.addItem(label, value)' in source
+    assert "bridge.search_clipboard_history(query, self.preview_limit + 1, category)" in source
+    assert "打开所选内容目录" in source
+    assert "open_selected_record_folder" in source
+    assert "打开归档目录" in source
+    assert "open_history_archive_folder" in source
+    assert "继续加载 {PREVIEW_PAGE_SIZE} 条" in source
+    assert "def reset_preview" in source
+    assert "def load_more_history" in source
+    assert 'QPushButton("刷新")' in source
     assert "miniButton" in source
     assert "文件夹" in source
     assert 'self.setProperty("kind", kind_style)' in source
     assert 'thumb.setProperty("kind", kind_style)' in source
-    assert 'kind.setProperty("kind", kind_style)' in source
+    assert 'kind.setProperty("kind", kind_style)' not in source
     assert '#previewCard[kind="text"]' in source
     assert '#previewCard[kind="file"]' in source
     assert '#previewThumb[kind="image"]' in source
     assert '#previewCard[kind="video"]' in source
     assert '#previewThumb[kind="media"]' in source
-    assert '#previewKind[kind="mixed"]' in source
+    assert '#previewKind' not in source
+    assert "self.history_search.setClearButtonEnabled(True)" in source
     assert "QFileDialog" in source
     assert "发布给手机" in source
-    assert "show_publish_menu" in source
-    assert "发布文字" in source
-    assert "发布文件" in source
+    assert "show_publish_dialog" in source
+    assert "show_publish_menu" not in source
+    assert "class PublishToMobileDialog(QDialog)" in source
+    assert "class PublishFileDropZone(QFrame)" in source
+    assert "self.setAcceptDrops(True)" in source
+    assert "filesDropped = Signal(list)" in source
+    assert 'QPushButton("选择文件")' in source
+    assert 'QPushButton("清空文件")' in source
+    assert 'QPushButton("发布到手机")' in source
+    assert "文字会显示为可复制的对话条目" in source
+    assert "两者可以同时发布" in source
     assert "publish_text_for_mobile_download" in source
     assert "default_file_picker_dir()" in source
-    assert "手机打开扫码页面后，在底部“文件缓冲区”点击“刷新”，即可下载。" in source
-    assert "publish_files_for_mobile" in source
+    assert "点击文字即可复制，点击文件即可打开" in source
     assert "publish_files_for_mobile_download" in source
     assert "共享目录" in source
     assert "class ManageDialog(QDialog)" in source

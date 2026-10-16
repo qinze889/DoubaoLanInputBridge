@@ -18,7 +18,7 @@ for tool_dir in ("pyside6", "qrcode"):
     if path.exists() and str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtCore import Qt, QTimer, QSize, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QComboBox,
     QMainWindow,
     QMessageBox,
     QFileDialog,
@@ -50,6 +52,7 @@ APP_VERSION = bridge.APP_VERSION
 SINGLE_INSTANCE_NAME = f"{bridge.APP_ID}.qt.main.{APP_VERSION}"
 PREVIEW_AUTO_REFRESH_MS = 5000
 PREVIEW_TITLE_LIMIT = 96
+PREVIEW_PAGE_SIZE = bridge.HISTORY_WINDOW_LIMIT
 
 if os.name == "nt":
     _USER32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -159,6 +162,193 @@ def default_file_picker_dir() -> str:
     return str(Path.home())
 
 
+class PublishFileDropZone(QFrame):
+    filesDropped = Signal(list)
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("publishDropZone")
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(118)
+        self.setProperty("dragActive", False)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(5)
+        title = QLabel("拖拽文件到这里")
+        title.setObjectName("dropZoneTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint = QLabel("支持图片、视频、文档等，可一次选择多个文件")
+        hint.setObjectName("muted")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.summary = QLabel("也可以点击此区域选择文件")
+        self.summary.setObjectName("dropZoneSummary")
+        self.summary.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        layout.addWidget(hint)
+        layout.addWidget(self.summary)
+
+    def set_summary(self, count: int, total_bytes: int) -> None:
+        if count:
+            self.summary.setText(f"已选择 {count} 个文件 · {bridge.format_file_size(total_bytes)}")
+        else:
+            self.summary.setText("也可以点击此区域选择文件")
+
+    def _set_drag_active(self, active: bool) -> None:
+        self.setProperty("dragActive", active)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls() and any(url.isLocalFile() for url in event.mimeData().urls()):
+            self._set_drag_active(True)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._set_drag_active(False)
+        event.accept()
+
+    def dropEvent(self, event) -> None:
+        self._set_drag_active(False)
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if paths:
+            self.filesDropped.emit(paths)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+
+class PublishToMobileDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.paths: list[Path] = []
+        self.setWindowTitle("发布给手机")
+        self.setWindowIcon(app_icon())
+        self.setMinimumSize(600, 570)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(12)
+
+        title = QLabel("发布给手机")
+        title.setObjectName("dialogTitle")
+        hint = QLabel("文字会显示为可复制的对话条目；文件会在手机中点击打开。两者可以同时发布。")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(hint)
+
+        text_label = QLabel("文字")
+        text_label.setObjectName("boxTitle")
+        self.text_input = QTextEdit()
+        self.text_input.setObjectName("publishTextInput")
+        self.text_input.setAcceptRichText(False)
+        self.text_input.setPlaceholderText("输入要发送到手机的文字，可留空")
+        self.text_input.setMinimumHeight(126)
+        self.text_input.textChanged.connect(self._update_publish_state)
+        layout.addWidget(text_label)
+        layout.addWidget(self.text_input)
+
+        file_label = QLabel("文件")
+        file_label.setObjectName("boxTitle")
+        layout.addWidget(file_label)
+        self.drop_zone = PublishFileDropZone(self)
+        self.drop_zone.clicked.connect(self.choose_files)
+        self.drop_zone.filesDropped.connect(self.add_files)
+        layout.addWidget(self.drop_zone)
+
+        self.file_list = QListWidget()
+        self.file_list.setObjectName("publishFileList")
+        self.file_list.setMaximumHeight(118)
+        self.file_list.hide()
+        layout.addWidget(self.file_list)
+
+        file_actions = QHBoxLayout()
+        choose_button = QPushButton("选择文件")
+        choose_button.setObjectName("secondaryButton")
+        choose_button.clicked.connect(self.choose_files)
+        self.clear_files_button = QPushButton("清空文件")
+        self.clear_files_button.setObjectName("secondaryButton")
+        self.clear_files_button.clicked.connect(self.clear_files)
+        self.clear_files_button.setEnabled(False)
+        file_actions.addWidget(choose_button)
+        file_actions.addWidget(self.clear_files_button)
+        file_actions.addStretch(1)
+        layout.addLayout(file_actions)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        cancel_button = QPushButton("取消")
+        cancel_button.setObjectName("secondaryButton")
+        cancel_button.clicked.connect(self.reject)
+        self.publish_button = QPushButton("发布到手机")
+        self.publish_button.setObjectName("primaryButton")
+        self.publish_button.setEnabled(False)
+        self.publish_button.clicked.connect(self._accept_if_ready)
+        actions.addWidget(cancel_button)
+        actions.addWidget(self.publish_button)
+        layout.addLayout(actions)
+
+    def choose_files(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(self, "选择要发布给手机的文件", default_file_picker_dir())
+        self.add_files(paths)
+
+    def add_files(self, paths: list[str]) -> None:
+        known = {str(path.resolve()).lower() for path in self.paths}
+        for value in paths:
+            path = Path(value)
+            if not path.is_file():
+                continue
+            resolved = path.resolve()
+            key = str(resolved).lower()
+            if key not in known:
+                self.paths.append(resolved)
+                known.add(key)
+        self._refresh_files()
+
+    def clear_files(self) -> None:
+        self.paths.clear()
+        self._refresh_files()
+
+    def _refresh_files(self) -> None:
+        self.file_list.clear()
+        total_bytes = 0
+        for path in self.paths:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            total_bytes += size
+            self.file_list.addItem(f"{path.name}  ·  {bridge.format_file_size(size)}")
+        has_files = bool(self.paths)
+        self.file_list.setVisible(has_files)
+        self.clear_files_button.setEnabled(has_files)
+        self.drop_zone.set_summary(len(self.paths), total_bytes)
+        self._update_publish_state()
+
+    def _update_publish_state(self) -> None:
+        self.publish_button.setEnabled(bool(self.text_value() or self.paths))
+
+    def _accept_if_ready(self) -> None:
+        if self.text_value() or self.paths:
+            self.accept()
+
+    def text_value(self) -> str:
+        return self.text_input.toPlainText().strip()
+
+
 class PreviewCard(QFrame):
     def __init__(self, parent, record: dict, on_select, on_activate, on_open_folder):
         super().__init__(parent)
@@ -169,7 +359,7 @@ class PreviewCard(QFrame):
         self.setObjectName("previewCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setMinimumHeight(82)
+        self.setMinimumHeight(72)
         self.setProperty("selected", False)
 
         preview = bridge.history_record_preview(record)
@@ -186,15 +376,15 @@ class PreviewCard(QFrame):
         ts = bridge.format_history_timestamp(record.get("ts"))
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 9, 10, 9)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(10)
 
         thumb = QLabel()
         thumb.setObjectName("previewThumb")
         thumb.setProperty("kind", kind_style)
-        thumb.setFixedSize(76, 54)
+        thumb.setFixedSize(64, 48)
         thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pixmap = image_thumbnail(record)
+        pixmap = image_thumbnail(record, QSize(64, 48))
         if pixmap:
             thumb.setPixmap(pixmap)
         else:
@@ -208,17 +398,12 @@ class PreviewCard(QFrame):
         title.setWordWrap(True)
         title.setToolTip(full_preview)
         title.setMaximumHeight(44)
-        meta = QLabel(f"{ts}  ·  {preview.get('info', '')}")
+        meta = QLabel(f"{kind_value}  ·  {ts}  ·  {preview.get('info', '')}")
         meta.setObjectName("previewMeta")
         meta.setWordWrap(False)
         text_box.addWidget(title)
         text_box.addWidget(meta)
         layout.addLayout(text_box, 1)
-
-        kind = QLabel(kind_value)
-        kind.setObjectName("previewKind")
-        kind.setProperty("kind", kind_style)
-        layout.addWidget(kind)
 
         actions = QHBoxLayout()
         actions.setSpacing(6)
@@ -226,11 +411,6 @@ class PreviewCard(QFrame):
         primary.setObjectName("miniButton")
         primary.clicked.connect(lambda: self.on_activate(self.record))
         actions.addWidget(primary)
-        if record.get("type") == "file":
-            folder = QPushButton("文件夹")
-            folder.setObjectName("miniButton")
-            folder.clicked.connect(lambda: self.on_open_folder(self.record))
-            actions.addWidget(folder)
         layout.addLayout(actions)
 
     def mousePressEvent(self, event):
@@ -362,18 +542,18 @@ class ManageDialog(QDialog):
         quick_grid = QGridLayout(quick)
         quick_grid.setContentsMargins(10, 10, 10, 10)
         quick_grid.setSpacing(8)
+        self.update_button = None
         actions = [
-            ("检查更新", "读取本地更新源", lambda: parent.check_update(False), False),
+            ("检查更新", "读取本地更新源", self.start_update_check, False),
             ("配置", "MiniMax / 更新源", parent.show_config, False),
             ("共享目录", "电脑发给手机下载", parent.open_mobile_share_folder, False),
             ("完整历史", "查看运行数据", parent.open_history_folder, False),
         ]
         for index, (title_text, body, callback, primary) in enumerate(actions):
-            quick_grid.addWidget(
-                self._action_tile(title_text, body, callback, primary=primary),
-                index // 2,
-                index % 2,
-            )
+            tile = self._action_tile(title_text, body, callback, primary=primary)
+            if title_text == "检查更新":
+                self.update_button = tile.findChild(QPushButton)
+            quick_grid.addWidget(tile, index // 2, index % 2)
         layout.addWidget(quick)
 
         firewall = self._action_tile(
@@ -408,6 +588,9 @@ class ManageDialog(QDialog):
         self.advanced_frame.hide()
         layout.addWidget(self.advanced_frame)
         layout.addStretch(1)
+
+    def start_update_check(self) -> None:
+        self.parent_window.check_update(False, self, self.update_button)
 
     def _action_tile(self, title: str, body: str, callback, primary: bool = False) -> QFrame:
         frame = QFrame()
@@ -457,20 +640,30 @@ class LogDialog(QDialog):
 
 
 class BridgeQtWindow(QMainWindow):
+    updateCheckFinished = Signal(dict)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(app_icon())
-        self.resize(1060, 720)
-        self.setMinimumSize(960, 640)
+        self.resize(1040, 720)
+        self.setMinimumSize(900, 620)
 
         self.access_key = bridge.read_or_create_access_key()
         self.log_queue = queue.Queue()
         self.server = None
         self.port = bridge.DEFAULT_PORT
         self.selected_preview_card = None
+        self.preview_limit = PREVIEW_PAGE_SIZE
         self.service_state = "stopped"
         self.log_lines = []
+        self.update_check_in_progress = False
+        self._update_check_silent = True
+        self._update_check_owner = None
+        self._update_check_button = None
+        self.updateCheckFinished.connect(self._show_update_result)
+
+        bridge.backfill_history_archive()
 
         self._build_ui()
         self._build_tray()
@@ -489,66 +682,93 @@ class BridgeQtWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
-        shell = QHBoxLayout(root)
+        shell = QVBoxLayout(root)
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
 
-        self.sidebar = QFrame()
-        self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(210)
-        side = QVBoxLayout(self.sidebar)
-        side.setContentsMargins(22, 26, 16, 22)
-        title = QLabel(APP_NAME)
-        title.setObjectName("appTitle")
+        topbar = QFrame()
+        topbar.setObjectName("topbar")
+        topbar_layout = QHBoxLayout(topbar)
+        topbar_layout.setContentsMargins(22, 14, 22, 14)
+        topbar_layout.setSpacing(10)
+        brand = QLabel(APP_NAME)
+        brand.setObjectName("appTitle")
         version = QLabel(f"v{APP_VERSION}")
-        version.setObjectName("muted")
-        guide = QLabel("连接摘要\n\n服务会自动启动。\n端口占用自动顺延。\n手机扫码后即可发送。")
-        guide.setObjectName("guideBox")
-        self.side_status = QLabel("服务未启动")
-        self.side_status.setObjectName("sideStatus")
-        side.addWidget(title)
-        side.addWidget(version)
-        side.addSpacing(18)
-        side.addWidget(guide)
-        side.addStretch(1)
-        side.addWidget(QLabel("当前状态"))
-        side.addWidget(self.side_status)
-        shell.addWidget(self.sidebar)
+        version.setObjectName("versionBadge")
+        self.status_card = QLabel("服务未启动")
+        self.status_card.setObjectName("statusCard")
+        self.status_card.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        scan_btn = QPushButton("扫码连接")
+        scan_btn.setObjectName("primaryButton")
+        scan_btn.clicked.connect(self.show_qr)
+        publish_btn = QPushButton("发布给手机")
+        publish_btn.clicked.connect(self.show_publish_dialog)
+        self.service_button = QPushButton("启动服务")
+        self.service_button.setObjectName("secondaryButton")
+        self.service_button.clicked.connect(self.toggle_server)
+        manage_btn = QPushButton("管理")
+        manage_btn.setObjectName("secondaryButton")
+        manage_btn.clicked.connect(self.show_manage)
+        topbar_layout.addWidget(brand)
+        topbar_layout.addWidget(version)
+        topbar_layout.addWidget(self.status_card)
+        topbar_layout.addStretch(1)
+        for widget in (scan_btn, publish_btn, self.service_button, manage_btn):
+            topbar_layout.addWidget(widget)
+        shell.addWidget(topbar)
 
         center = QFrame()
-        center.setObjectName("panel")
+        center.setObjectName("workspace")
         center_layout = QVBoxLayout(center)
-        center_layout.setContentsMargins(24, 24, 24, 24)
+        center_layout.setContentsMargins(22, 18, 22, 18)
+        center_layout.setSpacing(12)
         header = QHBoxLayout()
         header_text = QVBoxLayout()
-        h1 = QLabel("最近内容预览")
+        h1 = QLabel("史记")
         h1.setObjectName("pageTitle")
-        sub = QLabel("最近 10 条文字、图片、视频和文件。双击文字复制，双击文件打开。")
-        sub.setObjectName("muted")
         self.refresh_status = QLabel("自动刷新中 · 每 5 秒 · 上次刷新：等待首次刷新")
         self.refresh_status.setObjectName("refreshStatus")
         header_text.addWidget(h1)
-        header_text.addWidget(sub)
         header_text.addWidget(self.refresh_status)
-        refresh_btn = QPushButton("立即刷新")
-        refresh_btn.clicked.connect(self.refresh_preview)
+        refresh_btn = QPushButton("刷新")
+        refresh_btn.setObjectName("secondaryButton")
+        refresh_btn.clicked.connect(self.reset_preview)
         header.addLayout(header_text, 1)
         header.addWidget(refresh_btn)
         center_layout.addLayout(header)
 
         search_row = QHBoxLayout()
-        search_badge = QLabel("搜索")
-        search_badge.setObjectName("searchBadge")
+        search_row.setSpacing(8)
         self.history_search = QLineEdit()
         self.history_search.setObjectName("historySearch")
-        self.history_search.setPlaceholderText("搜索历史：输入文字、文件名或类型")
-        self.history_search.textChanged.connect(self.refresh_preview)
-        clear_search_btn = QPushButton("清除搜索")
-        clear_search_btn.setObjectName("miniButton")
-        clear_search_btn.clicked.connect(self.history_search.clear)
-        search_row.addWidget(search_badge)
+        self.history_search.setPlaceholderText("全局搜索历史：文字、文件名、路径或类型")
+        self.history_search.setClearButtonEnabled(True)
+        self.history_search.textChanged.connect(self.reset_preview)
+        self.history_category = QComboBox()
+        self.history_category.setObjectName("historyCategory")
+        self.history_category.setFixedWidth(138)
+        for label, value in (
+            ("全部类型", "all"),
+            ("文字", "text"),
+            ("图片", "image"),
+            ("视频", "video"),
+            ("普通文件", "file"),
+            ("图片和视频", "media"),
+            ("混合内容", "mixed"),
+        ):
+            self.history_category.addItem(label, value)
+        self.history_category.currentIndexChanged.connect(self.reset_preview)
+        search_row.addWidget(self.history_category)
         search_row.addWidget(self.history_search, 1)
-        search_row.addWidget(clear_search_btn)
+        directory_btn = QPushButton("目录")
+        directory_btn.setObjectName("secondaryButton")
+        directory_menu = QMenu(directory_btn)
+        self.open_selected_folder_action = directory_menu.addAction("打开所选内容目录")
+        self.open_selected_folder_action.setEnabled(False)
+        self.open_selected_folder_action.triggered.connect(self.open_selected_record_folder)
+        directory_menu.addAction("打开归档目录").triggered.connect(self.open_history_archive_folder)
+        directory_btn.setMenu(directory_menu)
+        search_row.addWidget(directory_btn)
         center_layout.addLayout(search_row)
 
         self.preview_area = QScrollArea()
@@ -562,34 +782,6 @@ class BridgeQtWindow(QMainWindow):
         self.preview_area.setWidget(self.preview_body)
         center_layout.addWidget(self.preview_area, 1)
         shell.addWidget(center, 1)
-
-        right = QFrame()
-        right.setObjectName("panel")
-        right.setFixedWidth(330)
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(18, 20, 18, 18)
-        right_layout.setSpacing(12)
-        status_title = QLabel("连接手机")
-        status_title.setObjectName("sectionTitle")
-        self.status_card = QLabel()
-        self.status_card.setObjectName("statusCard")
-        self.status_card.setWordWrap(True)
-        scan_side_btn = QPushButton("扫码连接手机")
-        scan_side_btn.setObjectName("primaryButton")
-        scan_side_btn.clicked.connect(self.show_qr)
-        publish_btn = QPushButton("发布给手机")
-        publish_btn.setObjectName("primaryButton")
-        publish_btn.clicked.connect(self.show_publish_menu)
-        self.service_button = QPushButton("启动服务")
-        self.service_button.setObjectName("secondaryButton")
-        self.service_button.clicked.connect(self.toggle_server)
-        manage_btn = QPushButton("管理")
-        manage_btn.setObjectName("secondaryButton")
-        manage_btn.clicked.connect(self.show_manage)
-        for widget in (status_title, self.status_card, scan_side_btn, publish_btn, self.service_button, manage_btn):
-            right_layout.addWidget(widget)
-        right_layout.addStretch(1)
-        shell.addWidget(right)
 
         self.setStyleSheet(STYLE)
         self.refresh_preview()
@@ -651,7 +843,7 @@ class BridgeQtWindow(QMainWindow):
 
     def local_url(self) -> str:
         self.sync_access_key()
-        return bridge.build_access_url("127.0.0.1", self.port, self.access_key)
+        return bridge.build_local_access_url(self.port, self.access_key)
 
     def log(self, message: str) -> None:
         self.log_queue.put(message)
@@ -666,11 +858,11 @@ class BridgeQtWindow(QMainWindow):
             self.log_lines = self.log_lines[-200:]
 
     def apply_status(self, theme: str, badge: str, title: str, detail: str) -> None:
-        self.status_card.setText(f"{title}\n{detail}")
+        self.status_card.setText(title)
+        self.status_card.setToolTip(detail)
         self.status_card.setProperty("state", theme)
         self.status_card.style().unpolish(self.status_card)
         self.status_card.style().polish(self.status_card)
-        self.side_status.setText(title)
 
     def update_service_controls(self, state: str) -> None:
         self.service_state = state
@@ -786,13 +978,24 @@ class BridgeQtWindow(QMainWindow):
             if widget:
                 widget.deleteLater()
         query = self.history_search.text().strip() if hasattr(self, "history_search") else ""
-        records = bridge.search_clipboard_history(query, bridge.HISTORY_WINDOW_LIMIT)
+        category = self.history_category.currentData() if hasattr(self, "history_category") else "all"
+        records_with_more = bridge.search_clipboard_history(query, self.preview_limit + 1, category)
+        has_more = len(records_with_more) > self.preview_limit
+        records = records_with_more[: self.preview_limit]
         if hasattr(self, "refresh_status"):
-            self.refresh_status.setText(f"自动刷新中 · 每 5 秒 · 上次刷新：{time.strftime('%Y年%m月%d日 %H:%M:%S')}")
+            scope = f"全局历史 · 已加载 {len(records)} 条"
+            if query:
+                scope += " · 搜索中"
+            self.refresh_status.setText(
+                f"{scope} · 自动刷新中 · 每 5 秒 · 上次刷新：{time.strftime('%Y年%m月%d日 %H:%M:%S')}"
+            )
         if not records:
-            empty = QLabel("没有匹配的历史记录" if query else "还没有历史记录")
+            is_filtered = bool(query or category != "all")
+            empty = QLabel("没有匹配的历史记录" if is_filtered else "还没有历史记录")
             empty.setObjectName("emptyPreview")
             self.preview_layout.insertWidget(0, empty)
+            if hasattr(self, "open_selected_folder_action"):
+                self.open_selected_folder_action.setEnabled(False)
             return
         for record in records:
             card = PreviewCard(self.preview_body, record, self.select_preview_card, self.activate_record, self.open_record_folder)
@@ -802,6 +1005,23 @@ class BridgeQtWindow(QMainWindow):
                 card.style().polish(card)
                 self.selected_preview_card = card
             self.preview_layout.insertWidget(self.preview_layout.count() - 1, card)
+        if has_more:
+            load_more_btn = QPushButton(f"继续加载 {PREVIEW_PAGE_SIZE} 条")
+            load_more_btn.setObjectName("loadMoreButton")
+            load_more_btn.clicked.connect(self.load_more_history)
+            self.preview_layout.insertWidget(self.preview_layout.count() - 1, load_more_btn)
+        if hasattr(self, "open_selected_folder_action"):
+            self.open_selected_folder_action.setEnabled(
+                bool(self.selected_preview_card and self.selected_preview_card.record.get("type") == "file")
+            )
+
+    def reset_preview(self, *_args) -> None:
+        self.preview_limit = PREVIEW_PAGE_SIZE
+        self.refresh_preview()
+
+    def load_more_history(self, *_args) -> None:
+        self.preview_limit += PREVIEW_PAGE_SIZE
+        self.refresh_preview()
 
     def select_preview_card(self, card: PreviewCard) -> None:
         if self.selected_preview_card and self.selected_preview_card is not card:
@@ -812,6 +1032,17 @@ class BridgeQtWindow(QMainWindow):
         card.setProperty("selected", True)
         card.style().unpolish(card)
         card.style().polish(card)
+        if hasattr(self, "open_selected_folder_action"):
+            self.open_selected_folder_action.setEnabled(card.record.get("type") == "file")
+
+    def open_selected_record_folder(self) -> None:
+        if not self.selected_preview_card or self.selected_preview_card.record.get("type") != "file":
+            QMessageBox.information(self, APP_NAME, "请先选择一条文件、图片或视频记录。")
+            return
+        self.open_record_folder(self.selected_preview_card.record)
+
+    def open_history_archive_folder(self) -> None:
+        os.startfile(str(bridge.ensure_history_archive_structure()))
 
     def activate_record(self, record: dict) -> None:
         try:
@@ -908,21 +1139,95 @@ class BridgeQtWindow(QMainWindow):
             elif value:
                 bridge.write_text_config(bridge.UPDATE_URL_FILE, value)
 
-    def check_update(self, silent: bool = False) -> None:
-        result = bridge.check_for_update()
+    def check_update(
+        self,
+        silent: bool = False,
+        dialog_parent: QWidget | None = None,
+        source_button: QPushButton | None = None,
+    ) -> None:
+        owner = dialog_parent if dialog_parent is not None else self
+        if self.update_check_in_progress:
+            if not silent:
+                self._update_check_silent = False
+                self._update_check_owner = owner
+                self._update_check_button = source_button
+                self._set_update_check_button(True)
+            return
+
+        if self.server:
+            try:
+                bridge.write_lan_update_manifest_url(self.port)
+            except Exception as exc:
+                self.log(f"update source self-heal skipped: {exc}")
+
+        self.update_check_in_progress = True
+        self._update_check_silent = silent
+        self._update_check_owner = owner
+        self._update_check_button = source_button
+        self._set_update_check_button(True)
+        self.log("update check started")
+        threading.Thread(target=self._check_update_worker, daemon=True).start()
+
+    def _set_update_check_button(self, checking: bool) -> None:
+        button = self._update_check_button
+        if button is None:
+            return
+        try:
+            button.setText("检查中..." if checking else "检查更新")
+            button.setEnabled(not checking)
+        except RuntimeError:
+            self._update_check_button = None
+
+    def _check_update_worker(self) -> None:
+        try:
+            result = bridge.check_for_update(timeout=5.0)
+        except Exception as exc:
+            result = {
+                "error": str(exc),
+                "configured": bool(bridge.read_update_manifest_url()),
+                "available": False,
+            }
+        self.updateCheckFinished.emit(result)
+
+    def _show_update_result(self, result: dict) -> None:
+        silent = self._update_check_silent
+        owner = self._update_check_owner
+        try:
+            if owner is None or not owner.isVisible():
+                owner = self
+        except RuntimeError:
+            owner = self
+
+        self.update_check_in_progress = False
+        self._set_update_check_button(False)
+        self._update_check_button = None
+        self._update_check_owner = None
+
         if result.get("error"):
+            self.log(f"update check failed: {result['error']}")
             if not silent:
-                QMessageBox.critical(self, APP_NAME, f"更新检查失败：{result['error']}")
+                QMessageBox.critical(owner, APP_NAME, f"更新检查失败：{result['error']}")
             return
-        if not result.get("update_available"):
+        if not result.get("configured"):
+            self.log("update check skipped: no source configured")
             if not silent:
-                QMessageBox.information(self, APP_NAME, f"已是最新版本：{APP_VERSION}")
+                QMessageBox.information(owner, APP_NAME, "未配置更新源。请在管理页的“配置”中设置更新地址。")
             return
-        if QMessageBox.question(self, APP_NAME, f"检测到新版本 {result.get('version')}，是否更新？") == QMessageBox.StandardButton.Yes:
+        if not result.get("available"):
+            self.log("already on latest version")
+            if not silent:
+                QMessageBox.information(owner, APP_NAME, f"已是最新版本：{APP_VERSION}")
+            return
+
+        version = result.get("version", "")
+        self.log(f"update available: {version}")
+        if silent:
+            return
+        if QMessageBox.question(owner, APP_NAME, f"检测到新版本 {version}，是否更新？") == QMessageBox.StandardButton.Yes:
             try:
                 bridge.begin_update_install(result)
             except Exception as exc:
-                QMessageBox.critical(self, APP_NAME, str(exc))
+                QMessageBox.critical(owner, APP_NAME, str(exc))
 
     def open_history_folder(self) -> None:
         bridge.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -932,48 +1237,32 @@ class BridgeQtWindow(QMainWindow):
         bridge.MOBILE_SHARE_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(str(bridge.MOBILE_SHARE_DIR))
 
-    def show_publish_menu(self) -> None:
-        menu = QMenu(self)
-        text_action = menu.addAction("发布文字")
-        file_action = menu.addAction("发布文件")
-        button = self.sender()
-        pos = button.mapToGlobal(button.rect().bottomLeft()) if isinstance(button, QPushButton) else self.mapToGlobal(self.rect().center())
-        action = menu.exec(pos)
-        if action is text_action:
-            self.publish_text_for_mobile()
-        elif action is file_action:
-            self.publish_files_for_mobile()
-
-    def publish_text_for_mobile(self) -> None:
-        default_text = QApplication.clipboard().text()
-        text, ok = QInputDialog.getMultiLineText(self, APP_NAME, "输入要发布给手机的文字：", default_text)
-        if not ok:
+    def show_publish_dialog(self) -> None:
+        dialog = PublishToMobileDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        text = dialog.text_value()
+        paths = list(dialog.paths)
         try:
-            result = bridge.publish_text_for_mobile_download(text)
+            published_text = False
+            published_files = 0
+            if paths:
+                result = bridge.publish_files_for_mobile_download(paths)
+                published_files = int(result["files"])
+            if text:
+                bridge.publish_text_for_mobile_download(text)
+                published_text = True
             self.refresh_preview()
-            self.log("published text for mobile download")
-            name = result["published"][0]["name"]
+            self.log(f"published to mobile text={published_text} files={published_files}")
+            parts = []
+            if published_text:
+                parts.append("1 条文字")
+            if published_files:
+                parts.append(f"{published_files} 个文件")
             QMessageBox.information(
                 self,
                 APP_NAME,
-                f"已发布文字：{name}\n\n手机打开扫码页面后，在底部“文件缓冲区”点击“刷新”，即可下载。",
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, APP_NAME, str(exc))
-
-    def publish_files_for_mobile(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "选择要发布给手机下载的文件", default_file_picker_dir())
-        if not paths:
-            return
-        try:
-            result = bridge.publish_files_for_mobile_download([Path(path) for path in paths])
-            self.refresh_preview()
-            self.log(f"published {result['files']} files for mobile download")
-            QMessageBox.information(
-                self,
-                APP_NAME,
-                f"已发布 {result['files']} 个文件。\n\n手机打开扫码页面后，在底部“文件缓冲区”点击“刷新”，即可下载。",
+                f"已发布{'和'.join(parts)}。\n\n手机打开扫码页面后，在“来自电脑”区域点击文字即可复制，点击文件即可打开。",
             )
         except Exception as exc:
             QMessageBox.critical(self, APP_NAME, str(exc))
@@ -1001,67 +1290,76 @@ class BridgeQtWindow(QMainWindow):
 
 
 STYLE = """
-QMainWindow, QWidget { background: #f4f7f6; color: #142421; font-family: "Microsoft YaHei UI"; }
-#sidebar { background: #e9f2f1; border-right: 1px solid #d7e4e2; }
-#panel { background: #ffffff; border: 1px solid #dde7e5; }
-#appTitle { font-size: 18px; font-weight: 700; }
-#pageTitle { font-size: 30px; font-weight: 800; color: #10231f; }
+QMainWindow, QWidget { background: #f5f7f7; color: #17211f; font-family: "Microsoft YaHei UI"; font-size: 13px; }
+QLabel { background: transparent; }
+#topbar { background: #ffffff; border-bottom: 1px solid #dfe6e4; }
+#workspace { background: #f5f7f7; }
+#appTitle { font-size: 18px; font-weight: 700; color: #132421; }
+#versionBadge { color: #667572; background: #f0f3f2; border-radius: 6px; padding: 3px 7px; font-size: 11px; }
+#pageTitle { font-size: 24px; font-weight: 700; color: #10231f; }
 #sectionTitle { font-size: 18px; font-weight: 800; }
 #muted, .QLabel#muted { color: #61716e; }
-#guideBox { background: #e2f6f2; border: 1px solid #b8e3dd; border-radius: 10px; padding: 14px; color: #123f39; }
-#sideStatus { color: #00796b; font-weight: 800; }
-#statusCard { background: #edfff8; border: 1px solid #72dcbf; border-radius: 12px; padding: 14px; font-size: 18px; font-weight: 800; color: #006553; }
-#statusCard[state="stopped"] { background: #f8fafc; border-color: #cbd5e1; color: #334155; }
-#statusCard[state="error"] { background: #fff1f0; border-color: #fca5a5; color: #b91c1c; }
-#softBox { background: #f8fbfb; border: 1px solid #dce8e6; border-radius: 12px; }
+#statusCard { background: #e8f7f2; border: 1px solid #a9ddce; border-radius: 7px; padding: 6px 10px; font-weight: 700; color: #076653; }
+#statusCard[state="stopped"] { background: #f1f3f3; border-color: #d6dddb; color: #52615e; }
+#statusCard[state="error"] { background: #fff1f0; border-color: #efb4af; color: #a32620; }
+#softBox { background: #f8fbfb; border: 1px solid #dce8e6; border-radius: 8px; }
 #boxTitle { font-weight: 800; color: #162623; }
-#refreshStatus { color: #0f766e; font-weight: 700; }
-#searchBadge { background: #e7fbf6; border: 1px solid #9edfd4; border-radius: 10px; padding: 8px 12px; color: #04756a; font-weight: 900; }
-#manageGroup { background: #fbfdfd; border: 1px solid #dce8e6; border-radius: 12px; }
+#refreshStatus { color: #64736f; font-size: 12px; }
+#manageGroup { background: #fbfdfd; border: 1px solid #dce8e6; border-radius: 8px; }
 #manageGroupTitle { color: #10231f; font-weight: 900; font-size: 15px; }
-#manageCompactGroup { background: #fbfdfd; border: 1px solid #dce8e6; border-radius: 14px; }
-#manageActionTile { background: #ffffff; border: 1px solid #dce8e6; border-radius: 12px; }
+#manageCompactGroup { background: #fbfdfd; border: 1px solid #dce8e6; border-radius: 8px; }
+#manageActionTile { background: #ffffff; border: 1px solid #dce8e6; border-radius: 8px; }
 #manageActionTile:hover { background: #f4fbfa; border-color: #9edfd4; }
-#manageFirewallTile { background: #e7fbf6; border: 1px solid #7ad9cb; border-radius: 14px; }
-QPushButton { border: 1px solid #d8e3e1; border-radius: 10px; background: #ffffff; padding: 8px 12px; font-weight: 700; }
-QPushButton:hover { background: #f0fbf8; }
-#primaryButton { background: #0ea58f; color: white; border-color: #0ea58f; }
-#primaryButton:hover { background: #087c70; }
+#manageFirewallTile { background: #e7fbf6; border: 1px solid #7ad9cb; border-radius: 8px; }
+QPushButton { min-height: 20px; border: 1px solid #d5dfdc; border-radius: 7px; background: #ffffff; padding: 7px 12px; font-weight: 600; }
+QPushButton:hover { background: #f0f7f5; border-color: #a8c8c1; }
+QPushButton:focus { border: 2px solid #0d9488; }
+QPushButton:disabled { color: #9aa5a2; background: #f2f4f4; border-color: #e2e7e6; }
+#primaryButton { background: #0d9488; color: white; border-color: #0d9488; }
+#primaryButton:hover { background: #0b7d73; }
 #secondaryButton { background: #ffffff; color: #18423d; border-color: #cddbd9; }
 #dangerButton { background: #bd2a21; color: white; border-color: #bd2a21; }
 #dangerGhostButton { background: #fff7f7; color: #a11d17; border-color: #f0b7b3; padding: 6px 10px; font-size: 12px; }
 #dangerGhostButton:hover { background: #ffe8e7; }
-#miniButton { padding: 5px 8px; border-radius: 8px; font-size: 12px; }
-#historySearch { background: #ffffff; border: 2px solid #9edfd4; border-radius: 10px; padding: 9px 12px; font-weight: 700; }
-#previewArea { border: none; background: #ffffff; }
-#previewCard { background: #fbfdfd; border: 1px solid #dce8e6; border-radius: 14px; }
-#previewCard[kind="text"] { border-left: 5px solid #0ea58f; }
-#previewCard[kind="file"] { border-left: 5px solid #2563eb; }
-#previewCard[kind="image"] { border-left: 5px solid #7c3aed; }
-#previewCard[kind="video"] { border-left: 5px solid #dc2626; }
-#previewCard[kind="media"] { border-left: 5px solid #0891b2; }
-#previewCard[kind="mixed"] { border-left: 5px solid #d97706; }
-#previewCard:hover { background: #f0fbf8; border-color: #9edfd4; }
-#previewCard[selected="true"] { background: #e7fbf6; border: 2px solid #0ea58f; }
-#previewThumb { background: #eef5f5; border: 1px solid #dbe8e6; border-radius: 10px; color: #00796b; font-weight: 900; }
+#miniButton { min-height: 18px; padding: 5px 9px; border-radius: 6px; font-size: 12px; }
+#historySearch, #historyCategory { min-height: 22px; background: #ffffff; border: 1px solid #cbd8d5; border-radius: 7px; padding: 7px 10px; }
+#historySearch:focus, #historyCategory:focus { border: 2px solid #0d9488; }
+QMenu { background: #ffffff; border: 1px solid #d5dfdc; padding: 5px; }
+QMenu::item { min-width: 150px; padding: 7px 12px; border-radius: 5px; }
+QMenu::item:selected { background: #e8f7f2; color: #075f51; }
+#previewArea { border: none; background: #f5f7f7; }
+#loadMoreButton { margin: 8px 80px 14px 80px; min-height: 40px; background: #eefaf7; border: 1px solid #9edfd4; color: #04756a; }
+#previewCard { background: #ffffff; border: 1px solid #dfe6e4; border-radius: 8px; }
+#previewCard[kind="text"] { border-left: 4px solid #0d9488; }
+#previewCard[kind="file"] { border-left: 4px solid #2563eb; }
+#previewCard[kind="image"] { border-left: 4px solid #7c3aed; }
+#previewCard[kind="video"] { border-left: 4px solid #dc2626; }
+#previewCard[kind="media"] { border-left: 4px solid #0891b2; }
+#previewCard[kind="mixed"] { border-left: 4px solid #d97706; }
+#previewCard:hover { background: #f8fcfb; border-color: #a9cfc7; }
+#previewCard[selected="true"] { background: #edf9f6; border: 2px solid #0d9488; }
+#previewThumb { background: #eef5f5; border: 1px solid #dbe8e6; border-radius: 7px; color: #00796b; font-weight: 800; }
 #previewThumb[kind="text"] { background: #e7fbf6; border-color: #9edfd4; color: #04756a; }
 #previewThumb[kind="file"] { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
 #previewThumb[kind="image"] { background: #f5f3ff; border-color: #ddd6fe; color: #6d28d9; }
 #previewThumb[kind="video"] { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
 #previewThumb[kind="media"] { background: #ecfeff; border-color: #a5f3fc; color: #0e7490; }
 #previewThumb[kind="mixed"] { background: #fff7ed; border-color: #fed7aa; color: #c2410c; }
-#previewTitle { font-weight: 800; color: #10231f; }
+#previewTitle { font-weight: 600; color: #17211f; }
 #previewMeta { color: #61716e; font-size: 12px; }
-#previewKind { border-radius: 999px; padding: 4px 8px; font-weight: 900; font-size: 12px; }
-#previewKind[kind="text"] { background: #e7fbf6; color: #04756a; }
-#previewKind[kind="file"] { background: #eff6ff; color: #1d4ed8; }
-#previewKind[kind="image"] { background: #f5f3ff; color: #6d28d9; }
-#previewKind[kind="video"] { background: #fef2f2; color: #b91c1c; }
-#previewKind[kind="media"] { background: #ecfeff; color: #0e7490; }
-#previewKind[kind="mixed"] { background: #fff7ed; color: #c2410c; }
-#emptyPreview { background: #fbfdfd; border: 1px solid #dce8e6; border-radius: 14px; padding: 24px; color: #61716e; }
+#emptyPreview { background: #ffffff; border: 1px solid #dce8e6; border-radius: 8px; padding: 24px; color: #61716e; }
 #logBox { background: #fbfdfd; border: 1px solid #dce8e6; border-radius: 10px; }
 #dialogTitle { font-size: 24px; font-weight: 800; }
+#publishTextInput { background: #ffffff; border: 1px solid #cbd8d5; border-radius: 8px; padding: 10px; selection-background-color: #bcebe2; }
+#publishTextInput:focus { border: 2px solid #0d9488; }
+#publishDropZone { background: #f8fbfb; border: 2px dashed #a9c9c3; border-radius: 8px; }
+#publishDropZone:hover { background: #eefaf7; border-color: #0d9488; }
+#publishDropZone[dragActive="true"] { background: #e3f8f3; border-color: #078578; }
+#dropZoneTitle { color: #143e38; font-size: 16px; font-weight: 800; }
+#dropZoneSummary { color: #08786c; font-size: 12px; font-weight: 700; }
+#publishFileList { background: #ffffff; border: 1px solid #dce8e6; border-radius: 8px; padding: 5px; outline: none; }
+#publishFileList::item { min-height: 26px; padding: 4px 7px; border-radius: 5px; }
+#publishFileList::item:selected { background: #dff5f0; color: #075f51; }
 #qrBox { background: white; border: 1px solid #d8e3e1; border-radius: 14px; padding: 16px; }
 #qrLink { color: #00796b; font-weight: 800; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 6px 2px 6px 2px; }

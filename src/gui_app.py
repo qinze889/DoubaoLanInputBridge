@@ -3,6 +3,7 @@ import base64
 import ctypes
 import hashlib
 import html
+import ipaddress
 import json
 import mimetypes
 import os
@@ -15,16 +16,16 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 import webbrowser
-from email.parser import BytesParser
-from email.policy import default as email_policy_default
 from http.client import HTTPConnection
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
@@ -48,17 +49,21 @@ import qrcode
 from qrcode.constants import ERROR_CORRECT_M
 
 
-APP_NAME = "豆包语音输入桥"
+APP_NAME = "声笺"
 APP_ID = "DoubaoLanInputBridge"
-APP_VERSION = "0.9.8"
+APP_VERSION = "0.12.2"
 APP_ICON_RELATIVE_PATH = "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20
 FIXED_LAN_UPDATE_HOST = "192.168.1.63"
+FIXED_LAN_UPDATE_PORT = 8765
 FIREWALL_RULE_PREFIX = f"{APP_ID} LAN TCP"
 MAX_TEXT_LENGTH = 20000
 UPDATE_MANIFEST_ENV = "DOUBAO_BRIDGE_UPDATE_URL"
 MOBILE_HOST_ENV = "DOUBAO_BRIDGE_HOST"
+PUBLIC_URL_ENV = "DOUBAO_BRIDGE_PUBLIC_URL"
+PUBLIC_PROBE_ENV = "DOUBAO_BRIDGE_PUBLIC_PROBE"
+PUBLIC_ENTRY_PROBE_TTL = 30.0
 MINIMAX_DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
 MINIMAX_DEFAULT_MODEL = "MiniMax-M3"
 MINIMAX_TIMEOUT_SECONDS = 45.0
@@ -219,20 +224,31 @@ KEY_FILE = DATA_DIR / "access_key.txt"
 LOG_FILE = DATA_DIR / "service.log"
 UPDATE_URL_FILE = DATA_DIR / "update_url.txt"
 MOBILE_HOST_FILE = DATA_DIR / "mobile_host.txt"
+PUBLIC_URL_FILE = DATA_DIR / "public_url.txt"
+PUBLIC_PROBE_FILE = DATA_DIR / "public_probe.txt"
 FIRST_RUN_FILE = DATA_DIR / "first_run_guide_seen.txt"
 PROMPT_LIBRARY_FILE = DATA_DIR / "prompt_library.json"
 MINIMAX_API_KEY_FILE = DATA_DIR / "minimax_api_key.txt"
 UPLOAD_DIR = DATA_DIR / "uploads"
 MOBILE_SHARE_DIR = DATA_DIR / "mobile_share"
+MOBILE_SHARE_FEED_FILE = DATA_DIR / "mobile_share_feed.json"
 HISTORY_FILE = DATA_DIR / "clipboard_history.json"
+HISTORY_ARCHIVE_DIR = DATA_DIR / "history_archive"
+TEXT_HISTORY_JSONL = HISTORY_ARCHIVE_DIR / "texts.jsonl"
+FILE_HISTORY_JSONL = HISTORY_ARCHIVE_DIR / "files.jsonl"
+HISTORY_IMAGE_DIR = HISTORY_ARCHIVE_DIR / "images"
+HISTORY_VIDEO_DIR = HISTORY_ARCHIVE_DIR / "videos"
+HISTORY_DOCUMENT_DIR = HISTORY_ARCHIVE_DIR / "files"
 UPDATE_DOWNLOAD_DIR = DATA_DIR / "updates"
 UPDATER_SCRIPT_FILE = DATA_DIR / "updater.ps1"
 UPDATE_LOG_FILE = DATA_DIR / "update.log"
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_UPLOAD_FILES = 8
+MAX_MOBILE_SHARE_ITEMS = 100
 MAX_HISTORY_ITEMS = 100
-HISTORY_WINDOW_LIMIT = 10
+HISTORY_WINDOW_LIMIT = 30
 HISTORY_RETENTION_DAYS = 7
+HISTORY_ARCHIVE_LOCK = threading.Lock()
+MOBILE_SHARE_FEED_LOCK = threading.Lock()
 _PAPER_BACKGROUND_DATA_URL = ""
 STATUS_THEMES = {
     "stopped": {
@@ -328,7 +344,9 @@ def local_update_source_candidates() -> list[Path]:
                 exe_path.parent.parent / "local_update_source",
             ]
         )
-    candidates.extend([Path.cwd() / "local_update_source", PROJECT_ROOT / "local_update_source"])
+    candidates.extend(
+        [DATA_DIR / "local_update_source", Path.cwd() / "local_update_source", PROJECT_ROOT / "local_update_source"]
+    )
     unique = []
     for path in candidates:
         resolved = path.resolve()
@@ -560,7 +578,7 @@ try {
 } catch {
     Write-UpdateLog ("updater failed: " + $_.Exception.Message)
     Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show("Auto update failed: " + $_.Exception.Message, "DoubaoLanInputBridge")
+    [System.Windows.Forms.MessageBox]::Show("Auto update failed: " + $_.Exception.Message, "声笺更新")
 }
 ''',
         encoding="utf-8-sig",
@@ -732,8 +750,18 @@ def bool_text(value: bool) -> str:
     return "true" if value else "false"
 
 
+def firewall_port_scope(port: int) -> str:
+    port = int(port)
+    if port < 1 or port > 65535:
+        raise ValueError("端口必须在 1 到 65535 之间")
+    default_end = min(65535, DEFAULT_PORT + PORT_AUTO_INCREMENT_LIMIT - 1)
+    start = DEFAULT_PORT if DEFAULT_PORT <= port <= default_end else port
+    end = min(65535, start + PORT_AUTO_INCREMENT_LIMIT - 1)
+    return str(start) if start == end else f"{start}-{end}"
+
+
 def firewall_rule_name(port: int) -> str:
-    return f"{FIREWALL_RULE_PREFIX} {int(port)}"
+    return f"{FIREWALL_RULE_PREFIX} {firewall_port_scope(port)}"
 
 
 def powershell_single_quote(value: str) -> str:
@@ -741,25 +769,21 @@ def powershell_single_quote(value: str) -> str:
 
 
 def build_firewall_rule_script(port: int, exe_path: str | None = None) -> str:
-    port = int(port)
-    if port < 1 or port > 65535:
-        raise ValueError("端口必须在 1 到 65535 之间")
+    port_scope = firewall_port_scope(port)
     target_exe = str(Path(exe_path or running_executable_path()).resolve())
     rule_name = firewall_rule_name(port)
     return "\n".join(
         [
             "$ErrorActionPreference = 'Stop'",
+            f"$rulePrefix = {powershell_single_quote(FIREWALL_RULE_PREFIX)}",
             f"$ruleName = {powershell_single_quote(rule_name)}",
             f"$program = {powershell_single_quote(target_exe)}",
-            f"$port = {port}",
-            "$existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue",
+            f"$portScope = {powershell_single_quote(port_scope)}",
+            "$existing = Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like ($rulePrefix + ' *') }",
             "if ($existing) {",
-            "    Set-NetFirewallRule -DisplayName $ruleName -Enabled True -Action Allow -Profile Private,Public",
-            "    Set-NetFirewallRule -DisplayName $ruleName -Program $program",
-            "    Set-NetFirewallPortFilter -AssociatedNetFirewallRule $existing -Protocol TCP -LocalPort $port",
-            "} else {",
-            "    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $port -Profile Private,Public -Program $program | Out-Null",
+            "    $existing | Remove-NetFirewallRule",
             "}",
+            "New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $portScope -Profile Private,Public -Program $program | Out-Null",
         ]
     )
 
@@ -794,6 +818,52 @@ def launch_firewall_rule_elevation(
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 0
     popen_factory(args, close_fds=True, creationflags=creationflags, startupinfo=startupinfo)
+
+
+def firewall_rule_status(port: int, exe_path: str | None = None, runner=subprocess.run) -> dict:
+    if not IS_WINDOWS:
+        return {"allowed": False, "reason": "unsupported"}
+    rule_name = firewall_rule_name(port)
+    port_scope = firewall_port_scope(port)
+    target_exe = str(Path(exe_path or running_executable_path()).resolve())
+    script = "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            f"$ruleName = {powershell_single_quote(rule_name)}",
+            f"$portScope = {powershell_single_quote(port_scope)}",
+            f"$program = {powershell_single_quote(target_exe)}",
+            "$rules = @(Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)",
+            "if ($rules.Count -eq 0) { @{ allowed = $false; reason = 'missing' } | ConvertTo-Json -Compress; exit 0 }",
+            "$enabled = @($rules | Where-Object { $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' })",
+            "$allowed = $false",
+            "foreach ($rule in $enabled) {",
+            "    $portFilter = $rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue",
+            "    $appFilter = $rule | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue",
+            "    $portMatches = $portFilter -and $portFilter.Protocol -eq 'TCP' -and [string]$portFilter.LocalPort -eq $portScope",
+            "    $programMatches = $appFilter -and [string]::Equals([string]$appFilter.Program, $program, [System.StringComparison]::OrdinalIgnoreCase)",
+            "    if ($portMatches -and $programMatches) { $allowed = $true; break }",
+            "}",
+            "@{ allowed = $allowed; reason = $(if ($allowed) { 'allowed' } else { 'mismatch' }) } | ConvertTo-Json -Compress",
+        ]
+    )
+    creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+    result = runner(
+        ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=8,
+        creationflags=creationflags,
+    )
+    if result.returncode != 0:
+        return {"allowed": False, "reason": "query_failed"}
+    try:
+        parsed = json.loads(result.stdout.strip())
+    except (TypeError, ValueError):
+        return {"allowed": False, "reason": "invalid_response"}
+    return {
+        "allowed": bool(parsed.get("allowed", False)),
+        "reason": str(parsed.get("reason", "unknown")),
+    }
 
 
 def build_diagnostics_report(port: int = DEFAULT_PORT, service_running: bool = False) -> str:
@@ -1179,8 +1249,88 @@ def get_mobile_access_hosts() -> list[str]:
     return hosts if hosts else [FIXED_LAN_UPDATE_HOST]
 
 
+def read_public_url_override() -> str:
+    """公网访问根地址覆盖（例如 https://sj.q-ze.top）。
+
+    配置后二维码与扫码链接直接指向公网入口，手机不必与电脑处于同一 Wi-Fi。
+    优先级：环境变量 DOUBAO_BRIDGE_PUBLIC_URL > data_dir/public_url.txt。
+    留空或删除文件即回到原有局域网行为。
+    """
+    env_url = (os.environ.get(PUBLIC_URL_ENV, "") or "").strip().lstrip("\ufeff")
+    if env_url:
+        return env_url.rstrip("/")
+    if PUBLIC_URL_FILE.exists():
+        try:
+            file_url = PUBLIC_URL_FILE.read_text(encoding="utf-8").strip().lstrip("\ufeff")
+        except OSError:
+            file_url = ""
+        if file_url:
+            return file_url.rstrip("/")
+    return ""
+
+
+_public_entry_probe_state: dict = {"checked_at": 0.0, "ok": False}
+_local_only_opener = build_opener(ProxyHandler({}))
+
+
+def read_public_probe_override() -> str:
+    """可用性探测地址。
+
+    优先级：环境变量 DOUBAO_BRIDGE_PUBLIC_PROBE > data_dir/public_probe.txt。
+    两者都为空表示不做探测，只要配了公网入口就直接用（保留最简行为）。
+    推荐指向隧道 metrics 的 /ready：本地请求，毫秒级且直接反映隧道连接状态。
+    """
+    env_probe = (os.environ.get(PUBLIC_PROBE_ENV, "") or "").strip().lstrip("\ufeff")
+    if env_probe:
+        return env_probe
+    if PUBLIC_PROBE_FILE.exists():
+        try:
+            file_probe = PUBLIC_PROBE_FILE.read_text(encoding="utf-8").strip().lstrip("\ufeff")
+        except OSError:
+            file_probe = ""
+        if file_probe:
+            return file_probe
+    return ""
+
+
+def probe_public_entry(probe_url: str, timeout: float = 2.0) -> bool:
+    """探测入口是否可用。
+
+    结果按 PUBLIC_ENTRY_PROBE_TTL 缓存，避免每次生成扫码链接都发请求。
+    使用禁用系统代理的 opener —— 本机探针走代理既慢，又可能被 Cloudflare
+    按默认 UA 拦成 403，造成"手机其实能用、本机却判定不可用"的误回退。
+    任何异常一律视为不可用，调用方据此回退局域网。
+    """
+    now = time.monotonic()
+    checked_at = float(_public_entry_probe_state.get("checked_at") or 0.0)
+    if checked_at and (now - checked_at) < PUBLIC_ENTRY_PROBE_TTL:
+        return bool(_public_entry_probe_state.get("ok"))
+
+    ok = False
+    try:
+        with _local_only_opener.open(Request(probe_url, method="GET"), timeout=timeout) as response:
+            ok = int(getattr(response, "status", 0) or 0) == 200
+    except Exception:
+        ok = False
+
+    _public_entry_probe_state["checked_at"] = now
+    _public_entry_probe_state["ok"] = ok
+    return ok
+
+
 def build_access_url(host: str, port: int, access_key: str) -> str:
+    """对外扫码地址：公网入口可用时优先公网，不可用时回退局域网。"""
+    public_base = read_public_url_override()
+    if public_base:
+        probe_url = read_public_probe_override()
+        if not probe_url or probe_public_entry(probe_url):
+            return f"{public_base}/?key={quote(access_key, safe='')}"
     return f"http://{host}:{port}/?key={quote(access_key, safe='')}"
+
+
+def build_local_access_url(port: int, access_key: str) -> str:
+    """本机自用地址：始终走回环，不受公网入口覆盖影响。"""
+    return f"http://127.0.0.1:{port}/?key={quote(access_key, safe='')}"
 
 
 def build_health_url(host: str, port: int) -> str:
@@ -1201,14 +1351,14 @@ def build_connection_self_check(port: int, service_running: bool, host: str | No
     status = "运行中" if service_running else "未启动"
     return "\n".join(
         [
-            "豆包语音输入桥连接自检",
+            "声笺连接自检",
             f"服务状态：{status}",
             f"电脑局域网入口：{target}",
             f"手机健康检查：{health_url}",
             "判断方法：",
             "1. 手机先打开健康检查地址。",
             "2. 能看到 ok=true，说明网络通，重新扫码或复制完整扫码链接。",
-            "3. 打不开或超时，说明手机到电脑被拦截：确认同一 Wi-Fi、关闭路由器 AP 隔离，或用管理员权限放行 Windows 防火墙 TCP 8765。",
+            f"3. 打不开或超时，说明手机到电脑被拦截：确认同一 Wi-Fi、关闭路由器 AP 隔离，或用管理员权限放行 Windows 防火墙 TCP {firewall_port_scope(port)}。",
             "4. 能打开 health 但页面无权限，说明链接缺少访问 key，请重新扫二维码。",
             "注意：Wi-Fi 自动连接二维码需要明文 Wi-Fi 密码，当前不自动生成。",
         ]
@@ -1276,7 +1426,11 @@ def wait_for_bridge_server_identity(
 
 
 def write_lan_update_manifest_url(port: int) -> str:
-    url = local_update_url_for_host(f"{FIXED_LAN_UPDATE_HOST}:{port}", "update.json")
+    _ = port
+    url = local_update_url_for_host(
+        f"{FIXED_LAN_UPDATE_HOST}:{FIXED_LAN_UPDATE_PORT}",
+        "update.json",
+    )
     UPDATE_URL_FILE.parent.mkdir(parents=True, exist_ok=True)
     UPDATE_URL_FILE.write_text(url + "\n", encoding="utf-8")
     return url
@@ -1473,12 +1627,124 @@ def history_record_search_text(record: dict) -> str:
     return " ".join(parts).lower()
 
 
-def search_clipboard_history(query: str = "", limit: int = HISTORY_WINDOW_LIMIT) -> list[dict]:
-    records = trim_history_records(read_history_file())
-    write_history_file(records)
+def append_history_jsonl(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with HISTORY_ARCHIVE_LOCK:
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(line)
+            handle.flush()
+
+
+def active_history_archive_dir() -> Path:
+    if HISTORY_FILE.parent.resolve() == DATA_DIR.resolve():
+        return HISTORY_ARCHIVE_DIR
+    return HISTORY_FILE.parent / "history_archive"
+
+
+def active_text_history_jsonl() -> Path:
+    return active_history_archive_dir() / "texts.jsonl"
+
+
+def active_file_history_jsonl() -> Path:
+    return active_history_archive_dir() / "files.jsonl"
+
+
+def ensure_history_archive_structure() -> Path:
+    root = active_history_archive_dir()
+    for name in ("images", "videos", "files"):
+        (root / name).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def read_history_jsonl(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    records = []
+    with HISTORY_ARCHIVE_LOCK:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(record, dict):
+            records.append(normalize_history_record(record))
+    return records
+
+
+def list_global_history() -> list[dict]:
+    merged = {}
+    for record in [
+        *read_history_file(),
+        *read_history_jsonl(active_text_history_jsonl()),
+        *read_history_jsonl(active_file_history_jsonl()),
+    ]:
+        normalized = normalize_history_record(record)
+        merged[str(normalized.get("id", history_id()))] = normalized
+    return sort_history_records(list(merged.values()))
+
+
+def backfill_history_archive() -> dict[str, int]:
+    ensure_history_archive_structure()
+    text_path = active_text_history_jsonl()
+    file_path = active_file_history_jsonl()
+    known_text_ids = {str(item.get("id", "")) for item in read_history_jsonl(text_path)}
+    known_file_ids = {str(item.get("id", "")) for item in read_history_jsonl(file_path)}
+    added_text = 0
+    added_files = 0
+    for record in sort_history_records(read_history_file()):
+        record_id = str(record.get("id", ""))
+        if record.get("type") == "text":
+            if record_id and record_id not in known_text_ids:
+                append_history_jsonl(text_path, record)
+                known_text_ids.add(record_id)
+                added_text += 1
+        elif record_id and record_id not in known_file_ids:
+            append_history_jsonl(file_path, record)
+            known_file_ids.add(record_id)
+            added_files += 1
+    return {"text": added_text, "files": added_files}
+
+
+def history_record_category(record: dict) -> str:
+    if record.get("type") == "text":
+        return "text"
+    kind = str(history_record_preview(record).get("kind", ""))
+    return {
+        "图片": "image",
+        "视频": "video",
+        "媒体": "media",
+        "混合": "mixed",
+        "文件": "file",
+    }.get(kind, "file")
+
+
+def history_category_matches(record: dict, category: str = "all") -> bool:
+    selected = str(category or "all").strip().lower()
+    if selected in ("", "all"):
+        return True
+    actual = history_record_category(record)
+    if selected == "file":
+        return actual == "file"
+    return actual == selected
+
+
+def search_clipboard_history(
+    query: str = "",
+    limit: int | None = HISTORY_WINDOW_LIMIT,
+    category: str = "all",
+) -> list[dict]:
     words = [word.lower() for word in str(query or "").split() if word.strip()]
+    records = list_global_history()
+    records = [record for record in records if history_category_matches(record, category)]
     if words:
         records = [record for record in records if all(word in history_record_search_text(record) for word in words)]
+    if limit is None:
+        return records
     return records[: max(0, int(limit))]
 
 
@@ -1603,6 +1869,7 @@ def record_text_history(
         "pinned": bool(pinned),
         "ts": history_now(now),
     }
+    append_history_jsonl(active_text_history_jsonl(), record)
     save_history_records([record] + read_history_file())
     return record
 
@@ -1636,6 +1903,7 @@ def record_file_history(
         "pinned": bool(pinned),
         "ts": history_now(now),
     }
+    append_history_jsonl(active_file_history_jsonl(), record)
     save_history_records([record] + read_history_file())
     return record
 
@@ -1665,7 +1933,7 @@ def set_history_pinned(record_id: str, pinned: bool = True) -> dict:
 
 
 def find_history_record(record_id: str) -> dict:
-    for item in read_history_file():
+    for item in list_global_history():
         if str(item.get("id", "")) == str(record_id):
             return item
     raise ValueError("历史记录不存在")
@@ -1714,38 +1982,73 @@ def unique_upload_path(upload_dir: Path, filename: str) -> Path:
     return upload_dir / f"{stem}-{now_ms()}{suffix}"
 
 
-def parse_multipart_upload(body: bytes, content_type: str, upload_dir: Path = UPLOAD_DIR) -> dict:
-    if len(body) > MAX_UPLOAD_BYTES:
-        raise ValueError(f"上传文件过大，最大 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+def history_file_category_dir(filename: str, content_type: str, archive_dir: Path = HISTORY_ARCHIVE_DIR) -> Path:
+    file_info = {"name": filename, "content_type": content_type}
+    if is_image_history_file(file_info):
+        return archive_dir / "images"
+    if is_video_history_file(file_info):
+        return archive_dir / "videos"
+    return archive_dir / "files"
+
+
+def parse_multipart_upload(
+    body: bytes,
+    content_type: str,
+    upload_dir: Path = HISTORY_ARCHIVE_DIR,
+    categorize: bool = True,
+) -> dict:
+    return parse_multipart_upload_stream(BytesIO(body), len(body), content_type, upload_dir, categorize)
+
+
+def parse_multipart_upload_stream(
+    stream,
+    content_length: int,
+    content_type: str,
+    upload_dir: Path = HISTORY_ARCHIVE_DIR,
+    categorize: bool = True,
+) -> dict:
+    if content_length <= 0:
+        raise ValueError("empty upload")
     if "multipart/form-data" not in content_type:
         raise ValueError("invalid multipart content type")
 
-    header = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8")
-    message = BytesParser(policy=email_policy_default).parsebytes(header + body)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        import cgi
+
+    form = cgi.FieldStorage(
+        fp=stream,
+        environ={
+            "REQUEST_METHOD": "POST",
+            "CONTENT_TYPE": content_type,
+            "CONTENT_LENGTH": str(content_length),
+        },
+        keep_blank_values=True,
+    )
     fields: dict[str, str] = {}
     files: list[dict] = []
-    for part in message.iter_parts():
-        disposition = part.get_content_disposition()
-        if disposition != "form-data":
-            continue
-        name = str(part.get_param("name", header="content-disposition") or "")
-        filename = part.get_filename()
-        payload = part.get_payload(decode=True) or b""
+    for part in form.list or []:
+        name = str(part.name or "")
+        filename = part.filename
         if filename:
             if len(files) >= MAX_UPLOAD_FILES:
                 raise ValueError(f"一次最多上传 {MAX_UPLOAD_FILES} 个文件")
-            path = unique_upload_path(upload_dir, filename)
-            path.write_bytes(payload)
+            part_content_type = str(part.type or mimetypes.guess_type(filename)[0] or "application/octet-stream")
+            target_dir = history_file_category_dir(filename, part_content_type, upload_dir) if categorize else upload_dir
+            path = unique_upload_path(target_dir, filename)
+            with path.open("wb") as output:
+                shutil.copyfileobj(part.file, output, length=1024 * 1024)
+            bytes_written = path.stat().st_size
             files.append(
                 {
                     "name": path.name,
                     "path": str(path.resolve()),
-                    "bytes": len(payload),
-                    "content_type": part.get_content_type(),
+                    "bytes": bytes_written,
+                    "content_type": part_content_type,
                 }
             )
         else:
-            fields[name] = payload.decode("utf-8", errors="replace").strip()
+            fields[name] = str(part.value or "").strip()
     if not files:
         raise ValueError("没有收到文件")
     return {"key": fields.get("key", ""), "files": files}
@@ -1855,6 +2158,87 @@ def list_shared_files(share_dir: Path = MOBILE_SHARE_DIR) -> list[dict]:
     return records
 
 
+def mobile_share_feed_path(share_dir: Path = MOBILE_SHARE_DIR, feed_file: Path | None = None) -> Path:
+    if feed_file is not None:
+        return Path(feed_file)
+    if Path(share_dir).resolve() == MOBILE_SHARE_DIR.resolve():
+        return MOBILE_SHARE_FEED_FILE
+    return Path(share_dir).parent / f"{Path(share_dir).name}_feed.json"
+
+
+def read_mobile_share_feed(
+    share_dir: Path = MOBILE_SHARE_DIR,
+    feed_file: Path | None = None,
+) -> list[dict]:
+    path = mobile_share_feed_path(share_dir, feed_file)
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+
+
+def write_mobile_share_feed(
+    items: list[dict],
+    share_dir: Path = MOBILE_SHARE_DIR,
+    feed_file: Path | None = None,
+) -> list[dict]:
+    path = mobile_share_feed_path(share_dir, feed_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    kept = sorted(items, key=lambda item: int(item.get("mtime", 0)), reverse=True)[:MAX_MOBILE_SHARE_ITEMS]
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    temp.write_text(json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, path)
+    return kept
+
+
+def append_mobile_share_items(
+    items: list[dict],
+    share_dir: Path = MOBILE_SHARE_DIR,
+    feed_file: Path | None = None,
+) -> list[dict]:
+    with MOBILE_SHARE_FEED_LOCK:
+        existing = read_mobile_share_feed(share_dir, feed_file)
+        incoming_ids = {str(item.get("id", "")) for item in items}
+        merged = list(items) + [item for item in existing if str(item.get("id", "")) not in incoming_ids]
+        return write_mobile_share_feed(merged, share_dir, feed_file)
+
+
+def list_shared_items(
+    share_dir: Path = MOBILE_SHARE_DIR,
+    feed_file: Path | None = None,
+) -> list[dict]:
+    share_dir = Path(share_dir)
+    indexed = []
+    indexed_names = set()
+    for item in read_mobile_share_feed(share_dir, feed_file):
+        item_type = str(item.get("type", ""))
+        if item_type == "text" and str(item.get("text", "")).strip():
+            indexed.append(item)
+        elif item_type == "file":
+            name = sanitize_upload_filename(str(item.get("name", "")))
+            target = share_dir / name
+            if name and target.is_file():
+                indexed.append({**item, "name": name, "bytes": target.stat().st_size})
+                indexed_names.add(name)
+    for file_item in list_shared_files(share_dir):
+        if file_item["name"] in indexed_names:
+            continue
+        indexed.append(
+            {
+                "id": f"legacy-file:{file_item['name']}",
+                "type": "file",
+                "name": file_item["name"],
+                "bytes": file_item["bytes"],
+                "mtime": file_item["mtime"],
+                "content_type": mimetypes.guess_type(file_item["name"])[0] or "application/octet-stream",
+            }
+        )
+    return sorted(indexed, key=lambda item: int(item.get("mtime", 0)), reverse=True)[:MAX_MOBILE_SHARE_ITEMS]
+
+
 def resolve_shared_download(filename: str, share_dir: Path = MOBILE_SHARE_DIR) -> Path:
     original = str(filename or "").strip()
     if not original:
@@ -1869,32 +2253,54 @@ def resolve_shared_download(filename: str, share_dir: Path = MOBILE_SHARE_DIR) -
     return target
 
 
-def share_uploaded_files(files: list[dict]) -> dict:
-    return {"files": len(files), "items": list_shared_files(MOBILE_SHARE_DIR)}
+def share_uploaded_files(
+    files: list[dict],
+    share_dir: Path = MOBILE_SHARE_DIR,
+    feed_file: Path | None = None,
+) -> dict:
+    now = history_now()
+    entries = [
+        {
+            "id": f"web-file:{now}:{index}:{item['name']}",
+            "type": "file",
+            "name": str(item["name"]),
+            "bytes": int(item.get("bytes", 0) or 0),
+            "mtime": now,
+            "content_type": str(item.get("content_type", "application/octet-stream")),
+        }
+        for index, item in enumerate(files)
+    ]
+    append_mobile_share_items(entries, share_dir, feed_file)
+    return {"files": len(files), "items": list_shared_items(share_dir, feed_file)}
 
 
-def publish_text_for_mobile_download(text: str, share_dir: Path = MOBILE_SHARE_DIR) -> dict:
+def publish_text_for_mobile_download(
+    text: str,
+    share_dir: Path = MOBILE_SHARE_DIR,
+    feed_file: Path | None = None,
+) -> dict:
     content = str(text or "")
     if not content.strip():
         raise ValueError("没有输入要发布的文字")
     if len(content) > MAX_TEXT_LENGTH:
         raise ValueError(f"文字过长，最多 {MAX_TEXT_LENGTH} 字")
-    filename = f"bridge-text-{time.strftime('%Y%m%d-%H%M%S')}.txt"
-    target = unique_upload_path(share_dir, filename)
-    target.write_text(content, encoding="utf-8")
-    published = [
-        {
-            "name": target.name,
-            "path": str(target.resolve()),
-            "bytes": target.stat().st_size,
-            "content_type": "text/plain; charset=utf-8",
-        }
-    ]
-    record_file_history(published, action="share")
-    return {"files": 1, "items": list_shared_files(share_dir), "published": published}
+    record = record_text_history(content, action="share")
+    published = {
+        "id": record["id"],
+        "type": "text",
+        "text": content,
+        "chars": len(content),
+        "mtime": int(record["ts"]),
+    }
+    append_mobile_share_items([published], share_dir, feed_file)
+    return {"texts": 1, "items": list_shared_items(share_dir, feed_file), "published": [published]}
 
 
-def publish_files_for_mobile_download(paths: list[Path | str], share_dir: Path = MOBILE_SHARE_DIR) -> dict:
+def publish_files_for_mobile_download(
+    paths: list[Path | str],
+    share_dir: Path = MOBILE_SHARE_DIR,
+    feed_file: Path | None = None,
+) -> dict:
     published = []
     for item in paths:
         source = Path(item).resolve()
@@ -1912,8 +2318,21 @@ def publish_files_for_mobile_download(paths: list[Path | str], share_dir: Path =
         )
     if not published:
         raise ValueError("没有选择文件")
-    record_file_history(published, action="share")
-    return {"files": len(published), "items": list_shared_files(share_dir), "published": published}
+    record = record_file_history(published, action="share")
+    now = int(record["ts"])
+    entries = [
+        {
+            "id": f"{record['id']}:{index}",
+            "type": "file",
+            "name": item["name"],
+            "bytes": item["bytes"],
+            "mtime": now,
+            "content_type": item["content_type"],
+        }
+        for index, item in enumerate(published)
+    ]
+    append_mobile_share_items(entries, share_dir, feed_file)
+    return {"files": len(published), "items": list_shared_items(share_dir, feed_file), "published": published}
 
 
 def resolve_local_update_file(filename: str, update_dir: Path | None = None) -> Path:
@@ -1992,14 +2411,25 @@ def text_response(
     handler.wfile.write(data)
 
 
-def file_response(handler, path: Path) -> None:
+def can_inline_shared_content(content_type: str) -> bool:
+    normalized = str(content_type or "").split(";", 1)[0].strip().lower()
+    if normalized in {"application/pdf", "text/plain"}:
+        return True
+    if normalized == "image/svg+xml":
+        return False
+    return normalized.startswith(("image/", "video/", "audio/"))
+
+
+def file_response(handler, path: Path, inline: bool = False) -> None:
     data = path.read_bytes()
     content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     handler.send_response(HTTPStatus.OK)
     handler.send_header("Content-Type", content_type)
+    handler.send_header("X-Content-Type-Options", "nosniff")
     handler.send_header("Content-Length", str(len(data)))
     handler.send_header("Cache-Control", "no-store")
-    handler.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(path.name)}")
+    disposition = "inline" if inline and can_inline_shared_content(content_type) else "attachment"
+    handler.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(path.name)}")
     handler.end_headers()
     handler.wfile.write(data)
 
@@ -2012,7 +2442,7 @@ def html_page(access_key: str, server_name: str) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>豆包语音输入桥</title>
+  <title>声笺</title>
   <style>
     :root {{
       color-scheme: light;
@@ -2107,9 +2537,12 @@ def html_page(access_key: str, server_name: str) -> str:
     .editor-title span {{ color: var(--muted); font-size: 13px; line-height: 1.4; }}
     .mode-pill {{ flex: 0 0 auto; border: 1px solid rgba(15,118,110,0.16); border-radius: 999px; padding: 7px 10px; background: rgba(232, 249, 245, 0.88); color: var(--accent-strong); font-size: 12px; font-weight: 760; }}
     textarea {{
-      width: 100%; min-height: 148px; resize: vertical; border: 1px solid rgba(137, 153, 175, 0.30);
+      width: 100%; min-height: 148px; resize: none; border: 1px solid rgba(137, 153, 175, 0.30);
       border-radius: 18px; padding: 14px; color: var(--text);
-      font: 16px/1.52 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 16px; line-height: 1.68;
+      white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; text-align: left;
+      -webkit-text-fill-color: var(--text); caret-color: var(--accent-strong);
+      -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; touch-action: manipulation;
       outline: none; background: rgba(255,255,255,0.92);
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.9);
     }}
@@ -2169,19 +2602,37 @@ def html_page(access_key: str, server_name: str) -> str:
     }}
     .mobile-file-actions {{ display: none; grid-template-columns: 1fr 1fr; gap: 9px; }}
     .mobile-file-actions button {{ min-width: 0; min-height: 54px; border-radius: 16px; }}
+    .upload-progress {{ display: grid; gap: 7px; padding: 10px 12px; border: 1px solid rgba(15,118,110,0.22); border-radius: 14px; background: rgba(240,253,250,0.86); }}
+    .upload-progress[hidden] {{ display: none; }}
+    .upload-progress-head {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }}
+    .upload-progress-head strong {{ color: var(--accent-strong); font-size: 13px; font-variant-numeric: tabular-nums; }}
+    .upload-progress-track {{ height: 8px; overflow: hidden; border-radius: 999px; background: rgba(15,118,110,0.13); }}
+    .upload-progress-bar {{ display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #0f766e, #20b79d); transition: width .12s linear; }}
     .shared-files-panel {{
       display: grid; gap: 8px; border-top: 1px solid rgba(137,153,175,0.18); padding-top: 10px;
     }}
     .shared-files-head {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }}
     .shared-files-head strong {{ font-size: 14px; color: var(--text); }}
-    .shared-files-list {{ display: grid; gap: 7px; }}
-    .shared-file-link {{
-      display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center;
-      border: 1px solid rgba(137,153,175,0.20); border-radius: 14px; padding: 9px 10px;
-      color: var(--text); background: rgba(255,255,255,0.72); text-decoration: none; font-size: 13px;
+    .shared-files-list {{ display: grid; gap: 8px; }}
+    .shared-text-item, .shared-file-link {{
+      width: 100%; min-width: 0; min-height: 0; margin: 0; border: 1px solid rgba(137,153,175,0.20);
+      border-radius: 14px; padding: 10px 12px; color: var(--text); background: rgba(255,255,255,0.78);
+      box-shadow: none; text-align: left; text-decoration: none; transform: none;
     }}
-    .shared-file-link span {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-    .shared-file-link em {{ color: var(--muted); font-style: normal; font-size: 12px; }}
+    .shared-text-item {{ display: grid; gap: 7px; justify-items: stretch; }}
+    .shared-text-item:hover, .shared-file-link:hover {{
+      border-color: rgba(15,118,110,0.45); background: rgba(240,253,250,0.90); box-shadow: none; transform: none;
+    }}
+    .shared-text-content {{
+      display: block; max-height: 8.1em; overflow: hidden;
+      white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; text-align: left;
+      font-size: 15px; font-weight: 600; line-height: 1.62;
+    }}
+    .shared-item-meta {{ color: var(--muted); font-size: 12px; font-weight: 500; }}
+    .shared-file-link {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }}
+    .shared-file-copy {{ display: grid; gap: 4px; min-width: 0; }}
+    .shared-file-name {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 700; }}
+    .shared-file-link em {{ color: var(--muted); font-style: normal; font-size: 12px; white-space: nowrap; }}
     body[data-file-mode="mobile-clipboard"] .file-tools-head span {{ display: none; }}
     body[data-file-mode="mobile-clipboard"] .file-action-row {{ display: none; }}
     body[data-file-mode="mobile-clipboard"] .mobile-file-actions {{ display: grid; }}
@@ -2234,6 +2685,8 @@ def html_page(access_key: str, server_name: str) -> str:
       section {{ padding: 12px; border-radius: 20px; }}
       textarea, .compact-input {{ min-height: 128px; font-size: 17px; }}
       .input-drawer.input-expanded .compact-input {{ min-height: 238px; }}
+      .drawer-summary {{ flex-direction: column; align-items: stretch; }}
+      .drawer-summary .ghost-button {{ align-self: flex-start; flex: 0 0 auto; }}
       .editor-head, .quick-actions, .send-panel, .file-row {{ grid-template-columns: 1fr; }}
       .editor-head {{ align-items: flex-start; }}
       .option-grid, .prompt-tools, .action-row, .prompt-actions {{ width: 100%; }}
@@ -2300,7 +2753,7 @@ def html_page(access_key: str, server_name: str) -> str:
         <div class="option-grid">
           <div class="checks">
             <label><input id="clearAfterSend" type="checkbox" checked>发送后清空</label>
-            <label><input id="pressEnter" type="checkbox">发送后回车</label>
+            <label><input id="pressEnter" type="checkbox" checked>发送后回车</label>
           </div>
         </div>
         <div class="action-row">
@@ -2322,7 +2775,7 @@ def html_page(access_key: str, server_name: str) -> str:
               <span class="file-icon" aria-hidden="true">+</span>
               <div class="file-copy">
                 <strong id="fileDropzoneTitle">点按选择，或把文件拖到这里</strong>
-                <span id="fileDropzoneHint">最多 8 个文件，总大小不超过 50MB。</span>
+                <span id="fileDropzoneHint">最多 8 个文件，视频时长不限。</span>
               </div>
             </div>
             <div id="fileSummary" class="file-summary">未选择文件</div>
@@ -2338,9 +2791,13 @@ def html_page(access_key: str, server_name: str) -> str:
             <button id="uploadFiles" type="button" class="ghost-button">放入剪贴板</button>
           </div>
         </div>
+        <div id="uploadProgress" class="upload-progress" role="progressbar" aria-label="文件上传进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+          <div class="upload-progress-head"><span id="uploadProgressText">准备上传</span><strong id="uploadProgressPercent">0%</strong></div>
+          <div class="upload-progress-track"><span id="uploadProgressBar" class="upload-progress-bar"></span></div>
+        </div>
         <div id="sharedFilesPanel" class="shared-files-panel" hidden>
           <div class="shared-files-head">
-            <strong>文件缓冲区</strong>
+            <strong>来自电脑</strong>
             <button id="refreshSharedFiles" type="button" class="ghost-button">刷新</button>
           </div>
           <div id="sharedFilesList" class="shared-files-list" aria-live="polite"></div>
@@ -2387,6 +2844,10 @@ def html_page(access_key: str, server_name: str) -> str:
     const fileSummaryEl = document.getElementById("fileSummary");
     const fileListEl = document.getElementById("fileList");
     const uploadFilesBtn = document.getElementById("uploadFiles");
+    const uploadProgressEl = document.getElementById("uploadProgress");
+    const uploadProgressTextEl = document.getElementById("uploadProgressText");
+    const uploadProgressPercentEl = document.getElementById("uploadProgressPercent");
+    const uploadProgressBarEl = document.getElementById("uploadProgressBar");
     const sharedFilesPanelEl = document.getElementById("sharedFilesPanel");
     const sharedFilesListEl = document.getElementById("sharedFilesList");
     const refreshSharedFilesBtn = document.getElementById("refreshSharedFiles");
@@ -2402,6 +2863,43 @@ def html_page(access_key: str, server_name: str) -> str:
     function setMessage(text, kind = "") {{
       messageEl.textContent = text;
       messageEl.className = "message" + (kind ? " " + kind : "");
+    }}
+
+    function setUploadProgress(percent, loaded = 0, total = 0) {{
+      const value = Math.max(0, Math.min(100, Math.round(percent)));
+      uploadProgressEl.hidden = false;
+      uploadProgressEl.setAttribute("aria-valuenow", String(value));
+      uploadProgressBarEl.style.width = `${{value}}%`;
+      uploadProgressPercentEl.textContent = `${{value}}%`;
+      uploadProgressTextEl.textContent = total > 0
+        ? `已上传 ${{formatFileSize(loaded)}} / ${{formatFileSize(total)}}`
+        : "正在上传...";
+    }}
+
+    function uploadFormWithProgress(url, form) {{
+      setUploadProgress(0);
+      return new Promise((resolve, reject) => {{
+        const xhr = new XMLHttpRequest();
+        const separator = url.includes("?") ? "&" : "?";
+        xhr.open("POST", `${{url}}${{separator}}key=${{encodeURIComponent(ACCESS_KEY)}}`);
+        xhr.responseType = "json";
+        xhr.upload.addEventListener("progress", (event) => {{
+          if (event.lengthComputable) setUploadProgress((event.loaded / event.total) * 100, event.loaded, event.total);
+        }});
+        xhr.addEventListener("load", () => {{
+          const data = xhr.response || {{}};
+          if (xhr.status < 200 || xhr.status >= 300 || !data.ok) {{
+            reject(new Error(data.error || `文件上传失败（HTTP ${{xhr.status}}）`));
+            return;
+          }}
+          setUploadProgress(100, 1, 1);
+          uploadProgressTextEl.textContent = "上传完成";
+          resolve(data);
+        }});
+        xhr.addEventListener("error", () => reject(new Error("上传连接中断，请检查 Wi-Fi 后重试。")));
+        xhr.addEventListener("abort", () => reject(new Error("上传已取消。")));
+        xhr.send(form);
+      }});
     }}
 
     function toggleInputSize() {{
@@ -2486,7 +2984,7 @@ def html_page(access_key: str, server_name: str) -> str:
         fileToolsTitleEl.textContent = "传到手机";
         fileToolsHintEl.textContent = "电脑文件发布后，手机打开局域网地址可下载。";
         fileDropzoneTitleEl.textContent = "选择电脑文件，发布给手机下载";
-        fileDropzoneHintEl.textContent = "最多 8 个文件，总大小不超过 50MB。";
+        fileDropzoneHintEl.textContent = "最多 8 个文件，视频时长不限。";
         uploadFilesBtn.textContent = "发布给手机下载";
         return;
       }}
@@ -2494,7 +2992,7 @@ def html_page(access_key: str, server_name: str) -> str:
       fileToolsTitleEl.textContent = "文件剪贴板";
       fileToolsHintEl.textContent = "图片、视频、Word、PDF、小文件";
       fileDropzoneTitleEl.textContent = "点按选择，或把文件拖到这里";
-      fileDropzoneHintEl.textContent = "最多 8 个文件，总大小不超过 50MB。";
+      fileDropzoneHintEl.textContent = "最多 8 个文件，视频时长不限。";
       uploadFilesBtn.textContent = "放入剪贴板";
     }}
 
@@ -2575,31 +3073,80 @@ def html_page(access_key: str, server_name: str) -> str:
         const res = await fetch(`/files/shared?key=${{encodeURIComponent(ACCESS_KEY)}}`, {{ cache: "no-store" }});
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || "文件列表读取失败");
-        renderSharedFiles(data.files || []);
+        renderSharedItems(data.items || data.files || []);
       }} catch (err) {{
         sharedFilesPanelEl.hidden = false;
         sharedFilesListEl.textContent = String(err.message || err);
       }}
     }}
 
-    function renderSharedFiles(files) {{
+    function formatSharedTime(timestamp) {{
+      const date = new Date((Number(timestamp) || 0) * 1000);
+      if (!Number.isFinite(date.getTime()) || date.getTime() <= 0) return "";
+      return date.toLocaleString([], {{ month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }});
+    }}
+
+    async function copySharedText(text) {{
+      try {{
+        await navigator.clipboard.writeText(text);
+      }} catch (_err) {{
+        const helper = document.createElement("textarea");
+        helper.value = text;
+        helper.style.position = "fixed";
+        helper.style.opacity = "0";
+        document.body.appendChild(helper);
+        helper.select();
+        document.execCommand("copy");
+        helper.remove();
+      }}
+      setMessage("文字已复制。", "ok");
+    }}
+
+    function renderSharedItems(items) {{
       sharedFilesListEl.innerHTML = "";
-      if (!files.length) {{
+      if (!items.length) {{
         sharedFilesPanelEl.hidden = false;
-        sharedFilesListEl.textContent = "文件缓冲区为空。电脑发布文件后会显示在这里。";
+        sharedFilesListEl.textContent = "电脑发布的文字和文件会显示在这里。";
         return;
       }}
       sharedFilesPanelEl.hidden = false;
-      for (const file of files.slice(0, 12)) {{
+      for (const item of items.slice(0, 30)) {{
+        if (item.type === "text") {{
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "shared-text-item";
+          button.setAttribute("aria-label", "复制这条文字");
+          const content = document.createElement("span");
+          content.className = "shared-text-content";
+          content.textContent = item.text || "";
+          const meta = document.createElement("small");
+          meta.className = "shared-item-meta";
+          meta.textContent = `文字 · ${{Number(item.chars) || String(item.text || "").length}} 字 · ${{formatSharedTime(item.mtime)}} · 点击复制`;
+          button.appendChild(content);
+          button.appendChild(meta);
+          button.addEventListener("click", () => copySharedText(String(item.text || "")));
+          sharedFilesListEl.appendChild(button);
+          continue;
+        }}
+        const file = item;
         const link = document.createElement("a");
         link.className = "shared-file-link";
         link.href = `/files/download?key=${{encodeURIComponent(ACCESS_KEY)}}&file=${{encodeURIComponent(file.name)}}`;
-        link.download = file.name;
+        link.target = "_blank";
+        link.rel = "noopener";
+        const copy = document.createElement("span");
+        copy.className = "shared-file-copy";
         const name = document.createElement("span");
+        name.className = "shared-file-name";
         name.textContent = file.name;
+        const meta = document.createElement("small");
+        meta.className = "shared-item-meta";
+        meta.textContent = `${{file.content_type || "文件"}} · ${{formatSharedTime(file.mtime)}} · 点击打开`;
+        copy.appendChild(name);
+        copy.appendChild(meta);
         const size = document.createElement("em");
         size.textContent = formatFileSize(file.bytes);
-        link.appendChild(name);
+        link.appendChild(copy);
         link.appendChild(size);
         sharedFilesListEl.appendChild(link);
       }}
@@ -2617,12 +3164,7 @@ def html_page(access_key: str, server_name: str) -> str:
         const form = new FormData();
         form.append("key", ACCESS_KEY);
         for (const file of files) form.append("files", file, file.name);
-        const res = await fetch(currentFileEndpoint(), {{
-          method: "POST",
-          body: form
-        }});
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.error || "文件上传失败");
+        const data = await uploadFormWithProgress(currentFileEndpoint(), form);
         const count = data.result && data.result.files ? data.result.files : files.length;
         if (isLocalShareMode()) {{
           setMessage(`已发布 ${{count}} 个文件，手机可在下载区获取。`, "ok");
@@ -2650,12 +3192,7 @@ def html_page(access_key: str, server_name: str) -> str:
         const form = new FormData();
         form.append("key", ACCESS_KEY);
         for (const file of files) form.append("files", file, file.name);
-        const res = await fetch("/files/paste", {{
-          method: "POST",
-          body: form
-        }});
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.error || "文件粘贴失败");
+        const data = await uploadFormWithProgress("/files/paste", form);
         const count = data.result && data.result.files ? data.result.files : files.length;
         setMessage(`已逐个粘贴 ${{count}} 个文件到电脑。`, "ok");
         clearSelectedFiles();
@@ -2845,6 +3382,17 @@ def html_page(access_key: str, server_name: str) -> str:
     clearPromptWorkbenchBtn.addEventListener("click", clearPromptWorkbench);
     acceptPromptResultBtn.addEventListener("click", acceptPromptResult);
     sendBtn.addEventListener("click", sendText);
+    textEl.addEventListener("paste", (event) => {{
+      if (!event.clipboardData) return;
+      const pastedText = event.clipboardData.getData("text/plain");
+      if (!pastedText) return;
+      event.preventDefault();
+      const start = Number.isInteger(textEl.selectionStart) ? textEl.selectionStart : textEl.value.length;
+      const end = Number.isInteger(textEl.selectionEnd) ? textEl.selectionEnd : start;
+      textEl.setRangeText(pastedText, start, end, "end");
+      textEl.dispatchEvent(new Event("input", {{ bubbles: true }}));
+      textEl.focus();
+    }});
     textEl.addEventListener("keydown", (event) => {{
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {{
         event.preventDefault();
@@ -2854,6 +3402,7 @@ def html_page(access_key: str, server_name: str) -> str:
     applyFileMode();
     renderSelectedFiles();
     if (shouldLoadSharedFiles()) loadSharedFiles();
+    if (shouldLoadSharedFiles()) window.setInterval(loadSharedFiles, 5000);
     textEl.focus();
   </script>
 </body>
@@ -2895,6 +3444,21 @@ class BridgeServer(ThreadingHTTPServer):
 class BridgeRequestHandler(BaseHTTPRequestHandler):
     server: BridgeServer
 
+    def end_headers(self) -> None:
+        origin = str(self.headers.get("Origin", ""))
+        if origin in ("http://tauri.localhost", "https://tauri.localhost") or origin.startswith(
+            ("http://localhost:", "http://127.0.0.1:")
+        ):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        super().end_headers()
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.end_headers()
+
     def log_message(self, format, *args) -> None:
         self.server.add_log(format % args)
 
@@ -2907,6 +3471,18 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def is_authorized(self, key: str | None) -> bool:
         return bool(key and secrets.compare_digest(key, self.active_access_key()))
+
+    def is_loopback_client(self) -> bool:
+        try:
+            return ipaddress.ip_address(self.client_address[0]).is_loopback
+        except ValueError:
+            return False
+
+    def require_desktop_client(self) -> bool:
+        if self.is_loopback_client():
+            return True
+        json_response(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": "desktop API is local only"})
+        return False
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -2939,7 +3515,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             if not self.is_authorized(key):
                 json_response(self, HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid access key"})
                 return
-            json_response(self, HTTPStatus.OK, {"ok": True, "files": list_shared_files(MOBILE_SHARE_DIR)})
+            items = list_shared_items(MOBILE_SHARE_DIR)
+            json_response(self, HTTPStatus.OK, {"ok": True, "items": items, "files": items})
             return
         if parsed.path == "/files/download":
             if not self.is_authorized(key):
@@ -2947,7 +3524,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 filename = (params.get("file") or [""])[0]
-                file_response(self, resolve_shared_download(filename, MOBILE_SHARE_DIR))
+                file_response(self, resolve_shared_download(filename, MOBILE_SHARE_DIR), inline=True)
             except Exception as exc:
                 text_response(self, HTTPStatus.NOT_FOUND, str(exc))
             return
@@ -2987,7 +3564,100 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
             return
+        if parsed.path.startswith("/desktop/"):
+            if not self.require_desktop_client():
+                return
+            if not self.is_authorized(key):
+                json_response(self, HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid access key"})
+                return
+            try:
+                self.handle_desktop_get(parsed.path, params)
+            except Exception as exc:
+                json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
+            return
         text_response(self, HTTPStatus.NOT_FOUND, "not found")
+
+    def handle_desktop_get(self, path: str, params: dict) -> None:
+        port = int(self.server.server_port)
+        active_key = self.active_access_key()
+        if path == "/desktop/state":
+            host = preferred_lan_host()
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "version": APP_VERSION,
+                    "port": port,
+                    "key": active_key,
+                    "mobile_url": build_access_url(host, port, active_key),
+                    "local_url": build_local_access_url(port, active_key),
+                    "host": host,
+                    "data_dir": str(DATA_DIR),
+                },
+            )
+            return
+        if path == "/desktop/history":
+            query = str((params.get("q") or [""])[0])
+            category = str((params.get("category") or ["all"])[0])
+            offset = max(0, int((params.get("offset") or ["0"])[0]))
+            limit = max(1, min(100, int((params.get("limit") or ["30"])[0])))
+            records = search_clipboard_history(query, None, category)
+            items = []
+            for record in records[offset : offset + limit]:
+                item = dict(record)
+                item["summary"] = history_record_preview(record)
+                item["category"] = history_record_category(record)
+                item["has_thumbnail"] = first_image_history_path(record) is not None
+                items.append(item)
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "items": items,
+                    "total": len(records),
+                    "offset": offset,
+                    "has_more": offset + len(items) < len(records),
+                },
+            )
+            return
+        if path == "/desktop/history/thumbnail":
+            record_id = str((params.get("id") or [""])[0])
+            record = find_history_record(record_id)
+            image_path = first_image_history_path(record)
+            if image_path is None:
+                raise ValueError("历史记录没有可预览图片")
+            file_response(self, image_path, inline=True)
+            return
+        if path == "/desktop/update":
+            json_response(self, HTTPStatus.OK, {"ok": True, "result": check_for_update(timeout=5.0)})
+            return
+        if path == "/desktop/config":
+            minimax = read_minimax_config()
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "update_url": read_update_manifest_url(),
+                    "minimax_configured": bool(str(minimax.get("api_key", "")).strip()),
+                    "minimax_model": str(minimax.get("model", MINIMAX_DEFAULT_MODEL)),
+                },
+            )
+            return
+        if path == "/desktop/diagnostics":
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "diagnostics": build_diagnostics_report(port, True),
+                    "self_check": build_self_check_report(port, True),
+                },
+            )
+            return
+        json_response(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -2997,6 +3667,15 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/files/clipboard",
             "/files/share",
             "/files/paste",
+            "/desktop/key/regenerate",
+            "/desktop/publish",
+            "/desktop/copy",
+            "/desktop/diagnostics/copy",
+            "/desktop/open",
+            "/desktop/open-folder",
+            "/desktop/update/prepare",
+            "/desktop/config",
+            "/desktop/firewall",
         ):
             json_response(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
             return
@@ -3007,16 +3686,14 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 if content_length <= 0:
                     json_response(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "empty upload"})
                     return
-                if content_length > MAX_UPLOAD_BYTES:
-                    json_response(
-                        self,
-                        HTTPStatus.BAD_REQUEST,
-                        {"ok": False, "error": f"upload is too large; max {MAX_UPLOAD_BYTES}"},
-                    )
-                    return
-                body = self.rfile.read(content_length)
-                upload_dir = MOBILE_SHARE_DIR if parsed.path == "/files/share" else UPLOAD_DIR
-                upload = parse_multipart_upload(body, self.headers.get("Content-Type", ""), upload_dir)
+                upload_dir = MOBILE_SHARE_DIR if parsed.path == "/files/share" else HISTORY_ARCHIVE_DIR
+                upload = parse_multipart_upload_stream(
+                    self.rfile,
+                    content_length,
+                    self.headers.get("Content-Type", ""),
+                    upload_dir,
+                    categorize=parsed.path != "/files/share",
+                )
             except Exception as exc:
                 json_response(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
@@ -3064,6 +3741,15 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
         if not self.is_authorized(str(data.get("key", ""))):
             json_response(self, HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid access key"})
+            return
+
+        if parsed.path.startswith("/desktop/"):
+            if not self.require_desktop_client():
+                return
+            try:
+                self.handle_desktop_post(parsed.path, data)
+            except Exception as exc:
+                json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
             return
 
         if parsed.path == "/prompt/enrich":
@@ -3120,6 +3806,115 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 self.server.state["last_error"] = str(exc)
             self.server.add_log(f"paste failed: {exc}")
             json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": f"paste failed: {exc}"})
+
+    def handle_desktop_post(self, path: str, data: dict) -> None:
+        port = int(self.server.server_port)
+        if path == "/desktop/key/regenerate":
+            key = write_new_access_key()
+            self.server.access_key = key
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "key": key,
+                    "mobile_url": build_access_url(preferred_lan_host(), port, key),
+                },
+            )
+            return
+        if path == "/desktop/publish":
+            text = str(data.get("text", ""))
+            paths = [str(item) for item in data.get("paths", []) if str(item).strip()]
+            result = {"text": None, "files": None}
+            if text.strip():
+                result["text"] = publish_text_for_mobile_download(text)
+            if paths:
+                result["files"] = publish_files_for_mobile_download(paths)
+            if result["text"] is None and result["files"] is None:
+                raise ValueError("没有可发布的文字或文件")
+            json_response(self, HTTPStatus.OK, {"ok": True, "result": result})
+            return
+        if path == "/desktop/copy":
+            text = str(data.get("text", ""))
+            if not text:
+                raise ValueError("没有可复制的文字")
+            set_clipboard_text(text)
+            json_response(self, HTTPStatus.OK, {"ok": True})
+            return
+        if path == "/desktop/diagnostics/copy":
+            diagnostics = build_diagnostics_report(port, True)
+            set_clipboard_text(diagnostics)
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {"ok": True, "result": {"copied": True, "characters": len(diagnostics)}},
+            )
+            return
+        if path == "/desktop/open":
+            result = open_history_file_item(
+                str(data.get("id", "")),
+                str(data.get("mode", "file")),
+                int(data.get("file_index", 0)),
+            )
+            json_response(self, HTTPStatus.OK, {"ok": True, "result": result})
+            return
+        if path == "/desktop/open-folder":
+            target = str(data.get("target", "history"))
+            folder = MOBILE_SHARE_DIR if target == "shared" else ensure_history_archive_structure()
+            os.startfile(str(folder))
+            json_response(self, HTTPStatus.OK, {"ok": True, "path": str(folder)})
+            return
+        if path == "/desktop/update/prepare":
+            update = check_for_update(timeout=10.0)
+            if not update.get("configured"):
+                raise ValueError("未配置更新源")
+            if not update.get("available"):
+                raise ValueError("当前已是最新版")
+            package = download_update_package(
+                str(update.get("url", "")),
+                str(update.get("version", "")),
+                str(update.get("sha256", "")),
+                timeout=120.0,
+            )
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "version": str(update.get("version", "")),
+                    "package_path": str(package.resolve()),
+                },
+            )
+            return
+        if path == "/desktop/config":
+            if "update_url" in data:
+                value = str(data.get("update_url", "")).strip()
+                if value:
+                    write_text_config(UPDATE_URL_FILE, value)
+                else:
+                    clear_text_config(UPDATE_URL_FILE)
+            if "minimax_api_key" in data:
+                value = str(data.get("minimax_api_key", "")).strip()
+                if value:
+                    write_text_config(MINIMAX_API_KEY_FILE, value)
+                elif bool(data.get("clear_minimax_api_key", False)):
+                    clear_text_config(MINIMAX_API_KEY_FILE)
+            json_response(self, HTTPStatus.OK, {"ok": True})
+            return
+        if path == "/desktop/firewall":
+            status = firewall_rule_status(port)
+            launched = False
+            if not status.get("allowed"):
+                launch_firewall_rule_elevation(port)
+                launched = True
+                status = firewall_rule_status(port)
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {"ok": True, "result": {**status, "launched": launched, "rule": firewall_rule_name(port)}},
+            )
+            return
+        json_response(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
 
 class WindowsTrayIcon:
@@ -3469,7 +4264,7 @@ class BridgeGui:
         ).grid(row=0, column=0, sticky="w")
         tk.Label(
             preview_header,
-            text="最近 10 条文字、图片、视频和文件记录。每 5 秒自动刷新，图片会显示缩略图。",
+            text="最近 30 条文字、图片、视频和文件记录。每 5 秒自动刷新，图片会显示缩略图。",
             bg=UI_COLORS["surface"],
             fg=UI_COLORS["muted"],
             font=("", 10),
@@ -4492,6 +5287,7 @@ class BridgeGui:
 
 def run_server_only(port: int) -> None:
     access_key = read_or_create_access_key()
+    write_lan_update_manifest_url(port)
     server = BridgeServer(("0.0.0.0", port), BridgeRequestHandler, access_key)
     print(f"{APP_NAME} listening on {port}")
     for url in [build_access_url(host, port, access_key) for host in get_mobile_access_hosts()]:

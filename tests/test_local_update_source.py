@@ -14,6 +14,9 @@ def test_publish_local_update_script_generates_manifest_and_can_configure_user()
     assert "local_update_source" in script
     assert "Get-FileHash" in script
     assert "ConvertTo-Json" in script
+    assert "Set-Content -LiteralPath $ManifestPath -Encoding UTF8" in script
+    assert 'DoubaoLanInputBridge\\local_update_source' in script
+    assert "mirror_source" in script
     assert "update.json" in script
     assert "update_url.txt" in script
     assert "__updates__/update.json" in script

@@ -1,4 +1,5 @@
 import importlib.util
+from io import BytesIO
 from pathlib import Path
 
 
@@ -44,7 +45,33 @@ def test_parse_multipart_upload_saves_files_and_key(tmp_path):
     assert len(result["files"]) == 1
     saved = Path(result["files"][0]["path"])
     assert saved.name == "note.pdf"
+    assert saved.parent == tmp_path / "files"
     assert saved.read_bytes() == b"PDFDATA"
+
+
+def test_streaming_multipart_upload_has_no_configured_size_limit(tmp_path):
+    app = load_app()
+    boundary = "----bridge-stream-test"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="key"\r\n\r\n'
+        "secret\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="files"; filename="long-video.mp4"\r\n'
+        "Content-Type: video/mp4\r\n\r\n"
+    ).encode("utf-8") + (b"video-data" * 4096) + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    result = app.parse_multipart_upload_stream(
+        BytesIO(body),
+        len(body),
+        f"multipart/form-data; boundary={boundary}",
+        tmp_path,
+    )
+
+    assert not hasattr(app, "MAX_UPLOAD_BYTES")
+    assert result["key"] == "secret"
+    assert result["files"][0]["bytes"] == len(b"video-data" * 4096)
+    assert Path(result["files"][0]["path"]).read_bytes() == b"video-data" * 4096
 
 
 def test_build_file_drop_data_uses_unicode_file_list():
@@ -127,12 +154,13 @@ def test_publish_files_for_mobile_download_copies_files_and_records_history(tmp_
     assert result["published"][0]["name"] == "report.txt"
     assert (share_dir / "report.txt").read_text(encoding="utf-8") == "hello"
     assert result["items"][0]["name"] == "report.txt"
+    assert result["items"][0]["type"] == "file"
     history = app.list_clipboard_history()
     assert history[0]["action"] == "share"
     assert history[0]["files"][0]["path"] == str((share_dir / "report.txt").resolve())
 
 
-def test_publish_text_for_mobile_download_creates_txt_and_records_history(tmp_path, monkeypatch):
+def test_publish_text_for_mobile_creates_copyable_feed_item_without_txt_file(tmp_path, monkeypatch):
     app = load_app()
     share_dir = tmp_path / "share"
     history_file = tmp_path / "clipboard_history.json"
@@ -140,15 +168,59 @@ def test_publish_text_for_mobile_download_creates_txt_and_records_history(tmp_pa
 
     result = app.publish_text_for_mobile_download("手机可下载的文字", share_dir=share_dir)
 
-    assert result["files"] == 1
+    assert result["texts"] == 1
     published = result["published"][0]
-    assert published["name"].startswith("bridge-text-")
-    assert published["name"].endswith(".txt")
-    assert (share_dir / published["name"]).read_text(encoding="utf-8") == "手机可下载的文字"
-    assert result["items"][0]["name"] == published["name"]
+    assert published["type"] == "text"
+    assert published["text"] == "手机可下载的文字"
+    assert list(share_dir.glob("*.txt")) == []
+    assert result["items"][0]["text"] == "手机可下载的文字"
     history = app.list_clipboard_history()
     assert history[0]["action"] == "share"
-    assert history[0]["files"][0]["content_type"] == "text/plain; charset=utf-8"
+    assert history[0]["type"] == "text"
+
+
+def test_mobile_share_feed_lists_text_files_and_legacy_files(tmp_path):
+    app = load_app()
+    share_dir = tmp_path / "share"
+    share_dir.mkdir()
+    feed_file = tmp_path / "feed.json"
+    indexed_file = share_dir / "indexed.pdf"
+    legacy_file = share_dir / "legacy.docx"
+    indexed_file.write_bytes(b"pdf")
+    legacy_file.write_bytes(b"docx")
+    app.write_mobile_share_feed(
+        [
+            {"id": "text-1", "type": "text", "text": "复制我", "chars": 3, "mtime": 3_000_000_000},
+            {
+                "id": "file-1",
+                "type": "file",
+                "name": "indexed.pdf",
+                "bytes": 3,
+                "mtime": 2_000_000_000,
+                "content_type": "application/pdf",
+            },
+        ],
+        share_dir,
+        feed_file,
+    )
+
+    items = app.list_shared_items(share_dir, feed_file)
+
+    assert [item["type"] for item in items] == ["text", "file", "file"]
+    assert items[0]["text"] == "复制我"
+    assert {item.get("name") for item in items[1:]} == {"indexed.pdf", "legacy.docx"}
+
+
+def test_shared_file_inline_policy_blocks_executable_web_content():
+    app = load_app()
+
+    assert app.can_inline_shared_content("application/pdf") is True
+    assert app.can_inline_shared_content("image/jpeg") is True
+    assert app.can_inline_shared_content("video/mp4") is True
+    assert app.can_inline_shared_content("text/plain; charset=utf-8") is True
+    assert app.can_inline_shared_content("text/html") is False
+    assert app.can_inline_shared_content("image/svg+xml") is False
+    assert app.can_inline_shared_content("application/octet-stream") is False
 
 
 def test_clipboard_history_records_text_files_pins_and_cleans_old_items(tmp_path, monkeypatch):
@@ -311,4 +383,107 @@ def test_search_clipboard_history_matches_text_file_names_and_types(tmp_path, mo
     assert [item["id"] for item in app.search_clipboard_history("screen")] == [image_record["id"]]
     assert [item["id"] for item in app.search_clipboard_history("pdf")] == [pdf_record["id"]]
     assert [item["id"] for item in app.search_clipboard_history("文件 contract")] == [pdf_record["id"]]
+    assert [item["id"] for item in app.search_clipboard_history(category="text")] == [text_record["id"]]
+    assert [item["id"] for item in app.search_clipboard_history(category="image")] == [image_record["id"]]
+    assert [item["id"] for item in app.search_clipboard_history(category="file")] == [pdf_record["id"]]
+    assert [item["id"] for item in app.search_clipboard_history("screen", category="image")] == [image_record["id"]]
+    assert app.search_clipboard_history("screen", category="file") == []
     assert app.search_clipboard_history("不存在") == []
+
+
+def test_history_preview_pages_global_archive_thirty_records_at_a_time(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "HISTORY_FILE", tmp_path / "clipboard_history.json")
+
+    for index in range(60):
+        app.record_text_history(f"记录 {index}", now=index + 1)
+
+    records = app.search_clipboard_history()
+
+    assert app.HISTORY_WINDOW_LIMIT == 30
+    assert len(records) == 30
+    assert records[0]["text"] == "记录 59"
+    assert records[-1]["text"] == "记录 30"
+    global_results = app.search_clipboard_history("记录", limit=None)
+    assert len(global_results) == 60
+    assert global_results[-1]["text"] == "记录 0"
+
+
+def test_history_archive_writes_jsonl_and_categorizes_uploaded_media(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "HISTORY_FILE", tmp_path / "clipboard_history.json")
+    archive_dir = tmp_path / "history_archive"
+
+    text_record = app.record_text_history("归档检索文字", now=1)
+    image_dir = app.history_file_category_dir("photo.jpg", "image/jpeg", archive_dir)
+    video_dir = app.history_file_category_dir("clip.mp4", "video/mp4", archive_dir)
+    file_dir = app.history_file_category_dir("report.pdf", "application/pdf", archive_dir)
+
+    assert image_dir == archive_dir / "images"
+    assert video_dir == archive_dir / "videos"
+    assert file_dir == archive_dir / "files"
+    text_lines = (archive_dir / "texts.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(text_lines) == 1
+    assert "归档检索文字" in text_lines[0]
+
+    app.clear_clipboard_history()
+    results = app.search_clipboard_history("归档检索", limit=None)
+    assert [item["id"] for item in results] == [text_record["id"]]
+
+
+def test_history_archive_backfill_is_idempotent(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "HISTORY_FILE", tmp_path / "clipboard_history.json")
+    text_record = {
+        "id": "legacy-text",
+        "type": "text",
+        "text": "旧文字",
+        "preview": "旧文字",
+        "chars": 3,
+        "action": "send",
+        "ts": 1,
+    }
+    file_record = {
+        "id": "legacy-file",
+        "type": "file",
+        "files": [{"name": "old.pdf", "path": str(tmp_path / "old.pdf"), "bytes": 1}],
+        "action": "paste",
+        "ts": 2,
+    }
+    app.write_history_file([file_record, text_record])
+
+    assert app.backfill_history_archive() == {"text": 1, "files": 1}
+    assert app.backfill_history_archive() == {"text": 0, "files": 0}
+    assert len(app.read_history_jsonl(tmp_path / "history_archive" / "texts.jsonl")) == 1
+    assert len(app.read_history_jsonl(tmp_path / "history_archive" / "files.jsonl")) == 1
+    assert {path.name for path in (tmp_path / "history_archive").iterdir() if path.is_dir()} == {
+        "images",
+        "videos",
+        "files",
+    }
+
+
+def test_find_history_record_includes_records_only_kept_in_global_archive(tmp_path, monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, "HISTORY_FILE", tmp_path / "clipboard_history.json")
+    archive_dir = tmp_path / "history_archive"
+    image_path = archive_dir / "images" / "archived-photo.jpg"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"image")
+    archived = {
+        "id": "archived-file",
+        "type": "file",
+        "files": [
+            {
+                "name": image_path.name,
+                "path": str(image_path),
+                "bytes": image_path.stat().st_size,
+                "content_type": "image/jpeg",
+            }
+        ],
+        "ts": 1,
+    }
+    app.append_history_jsonl(archive_dir / "files.jsonl", archived)
+
+    assert app.find_history_record("archived-file")["id"] == "archived-file"
+    assert app.first_image_history_path(app.find_history_record("archived-file")) == image_path
