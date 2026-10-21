@@ -44,9 +44,11 @@ jobs:
       - name: Build Windows apps with bundled tunnel
         shell: pwsh
         run: ./scripts/build_tauri.ps1 -PythonExe (Get-Command python).Source
-      - name: Verify packaged service transfer
+      - name: Verify installed upgrade and two-way transfer
         shell: pwsh
-        run: python scripts/smoke_packaged_peers.py --service desktop/sidecar-dist/bridge-service.exe
+        run: |
+          $installer = (Get-ChildItem desktop/src-tauri/target/release/bundle/nsis/*.exe).FullName
+          python scripts/smoke_windows_installer.py --installer $installer --expected-service desktop/sidecar-dist/bridge-service.exe
       - name: Stage Windows downloads
         shell: pwsh
         run: |
