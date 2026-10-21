@@ -20,6 +20,7 @@ import warnings
 import webbrowser
 import peer_share
 import mac_tunnel
+import relay_client
 from http.client import HTTPConnection
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1852,6 +1853,9 @@ def tunnel_log_tail(name: str = "", limit: int = TUNNEL_LOG_TAIL_BYTES) -> str:
 
 def build_access_url(host: str, port: int, access_key: str) -> str:
     """对外扫码地址：公网入口可用时优先公网，不可用时回退局域网。"""
+    relay_url = relay_client.phone_url(DATA_DIR)
+    if relay_url:
+        return relay_url
     active = mac_tunnel.manager(DATA_DIR).status()
     if active["ready"]:
         return f"{active['public_url']}/?key={quote(access_key, safe='')}"
@@ -4042,8 +4046,15 @@ class BridgeServer(ThreadingHTTPServer):
             while not self.peer_stopping.wait(10):
                 self.peer_manager.advertise()
         threading.Thread(target=advertise_peers, daemon=True).start()
+        self.relay = None
+        try:
+            self.relay = relay_client.from_data_dir(DATA_DIR, self.server_port, lambda: current_access_key(self.access_key))
+        except (OSError, ValueError, KeyError):
+            self.add_log('中转配置无效，请重新导入 relay.json')
 
     def server_close(self):
+        if getattr(self, 'relay', None):
+            self.relay.close()
         if hasattr(self, "peer_stopping"):
             self.peer_stopping.set()
             if self.quick_tunnel.origin_port == self.server_port:
@@ -4215,6 +4226,10 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     "host": host,
                     "data_dir": str(DATA_DIR),
                     "accessibility": mac_platform.accessibility_enabled() if IS_MACOS else True,
+                    "relay": {**(dict(self.server.relay.status) if self.server.relay else {"phase": "off"}),
+                              "configured": bool(relay_client.phone_url(DATA_DIR, True)),
+                              "mobile_url": relay_client.phone_url(DATA_DIR, True),
+                              "enabled": bool(self.server.relay)},
                     "tunnel": mac_tunnel.manager(DATA_DIR).status() if IS_MACOS else {},
                 },
             )
@@ -4334,6 +4349,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/desktop/update/prepare",
             "/desktop/config",
             "/desktop/accessibility",
+            "/desktop/relay",
             "/desktop/peers/invite",
             "/desktop/peers/join",
             "/desktop/peers/remove",
@@ -4483,6 +4499,22 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def handle_desktop_post(self, path: str, data: dict) -> None:
         port = int(self.server.server_port)
+        if path == "/desktop/relay":
+            target = DATA_DIR / 'relay.json'
+            config = json.loads(target.read_text(encoding='utf-8'))
+            config['enabled'] = bool(data.get('enabled'))
+            temporary = target.with_suffix('.tmp')
+            descriptor = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+                json.dump(config, stream)
+            temporary.replace(target)
+            if self.server.relay:
+                self.server.relay.close()
+            self.server.relay = relay_client.from_data_dir(DATA_DIR, port, lambda: current_access_key(self.server.access_key))
+            if not config['enabled']:
+                self.server.quick_tunnel.stop()
+            json_response(self, HTTPStatus.OK, {"ok": True})
+            return
         if path.startswith("/desktop/peers/"):
             manager = self.server.peer_manager
             if path.endswith("/tunnel"):

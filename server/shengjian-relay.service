@@ -1,0 +1,25 @@
+[Unit]
+Description=Shengjian private device relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shengjian-relay
+Group=shengjian-relay
+WorkingDirectory=/opt/shengjian-relay/current
+ExecStart=/opt/shengjian-relay/venv/bin/python server/relay.py --data /var/lib/shengjian-relay --port 18766
+Environment=SHENGJIAN_ORIGIN=https://server.xjiaoai.com
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/shengjian-relay
+UMask=0077
+MemoryMax=512M
+TasksMax=80
+
+[Install]
+WantedBy=multi-user.target

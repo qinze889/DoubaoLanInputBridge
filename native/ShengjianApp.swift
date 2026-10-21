@@ -46,6 +46,7 @@ struct Transfer: Identifiable {
 @MainActor final class BridgeModel: ObservableObject {
     @Published var online = false
     @Published var publicEnabled = true
+    @Published var relayConfigured = false
     @Published var tunnelPhase = "off"
     @Published var publicURL = ""
     @Published var lanURL = ""
@@ -85,7 +86,7 @@ struct Transfer: Identifiable {
     var connectedURL: String { publicEnabled ? (tunnelPhase == "ready" ? publicURL : "") : lanURL }
     var publicHost: String { URL(string: publicURL)?.host ?? "正在准备加密连接" }
     var connectionLabel: String {
-        if publicEnabled { return tunnelPhase == "ready" ? "公网已连接" : tunnelPhase == "starting" ? "正在连接 Cloudflare" : "公网未连接" }
+        if publicEnabled { return tunnelPhase == "ready" ? "公网已连接" : tunnelPhase == "starting" ? (relayConfigured ? "正在连接服务器" : "正在连接 Cloudflare") : "公网未连接" }
         return online ? "局域网已就绪" : "服务启动中"
     }
     var connectionColor: Color { publicEnabled && tunnelPhase != "ready" ? .orange : online ? .green : .secondary }
@@ -181,6 +182,14 @@ struct Transfer: Identifiable {
             if let error = tunnel["error"] as? String, !error.isEmpty, error != lastTunnelError { lastTunnelError = error; lastError = error }
             if wasReady && tunnelPhase != "ready" { publicURL = "" }
             wasReady = tunnelPhase == "ready"
+            let relay = state["relay"] as? [String:Any] ?? [:]
+            relayConfigured = relay["configured"] as? Bool ?? false
+            if relayConfigured {
+                publicEnabled = relay["enabled"] as? Bool ?? false
+                publicURL = relay["mobile_url"] as? String ?? ""
+                let phase = relay["phase"] as? String ?? "off"
+                tunnelPhase = phase == "online" ? "ready" : phase == "off" ? "off" : "starting"
+            }
             if selected == "history" && transfers.count <= 30 { await loadHistory() }
             if selected == "machines" { await loadMachines() }
         } catch { online = false }
@@ -192,7 +201,8 @@ struct Transfer: Identifiable {
         busy = true; defer { busy = false }
         if value { tunnelPhase = "starting"; lastError = ""; lastTunnelError = "" }
         do {
-            _ = try await api(value ? "/desktop/tunnel/start" : "/desktop/tunnel/stop",body:[:])
+            if relayConfigured { _ = try await api("/desktop/relay",body:["enabled":value]) }
+            else { _ = try await api(value ? "/desktop/tunnel/start" : "/desktop/tunnel/stop",body:[:]) }
             await refresh()
         } catch { tunnelPhase = "error"; report(error.localizedDescription) }
     }
@@ -363,12 +373,12 @@ struct ConnectionView:View {
                             VStack(alignment:.leading,spacing:12) {
                                 SymbolTile(name:model.publicEnabled ? "globe.americas.fill" : "wifi",size:48)
                                 Text(model.publicEnabled ? "不在身边，也能连接。" : "同一网络，即刻相连。").font(.system(size:21,weight:.bold,design:.rounded)).tracking(-0.4)
-                                Text(model.publicEnabled ? "通过 Cloudflare 建立加密公网连接。\n手机用蜂窝网络也能发送。" : "手机与 Mac 连到同一 Wi-Fi，\n即可传送文字、照片和文件。").font(.system(size:13)).foregroundStyle(.secondary).lineSpacing(5)
+                                Text(model.publicEnabled ? (model.relayConfigured ? "通过你的 47 服务器加密连接。\n手机用蜂窝网络也能发送。" : "通过 Cloudflare 建立加密公网连接。\n手机用蜂窝网络也能发送。") : "手机与 Mac 连到同一 Wi-Fi，\n即可传送文字、照片和文件。").font(.system(size:13)).foregroundStyle(.secondary).lineSpacing(5)
                             }
                             Divider()
                             VStack(spacing:16) {
                                 HStack {
-                                    VStack(alignment:.leading,spacing:4) { Text("公网连接").font(.system(size:14,weight:.semibold)); Text("Cloudflare Tunnel").font(.system(size:11)).foregroundStyle(.secondary) }
+                                    VStack(alignment:.leading,spacing:4) { Text("公网连接").font(.system(size:14,weight:.semibold)); Text(model.relayConfigured ? "47 服务器 · 固定入口" : "Cloudflare Tunnel").font(.system(size:11)).foregroundStyle(.secondary) }
                                     Spacer()
                                     Toggle("公网连接",isOn:Binding(get:{ model.publicEnabled },set:{ value in Task { await model.setPublic(value) } })).labelsHidden().toggleStyle(.switch).tint(accent).disabled(model.busy || !model.online)
                                 }
@@ -397,7 +407,7 @@ struct ConnectionView:View {
                     miniFeature("text.bubble","说出来，发过去","手机语音输入，Mac 即刻接住",color:.blue)
                     miniFeature("photo.on.rectangle","照片、文件，随手传","拖放分享，双向传送",color:.purple)
                 }
-                HStack(spacing:6) { Image(systemName:"info.circle"); Text(model.publicEnabled ? "临时公网地址会随重新连接而变化；关闭连接后失效。" : "连接保留在这台 Mac，访问需要配对二维码。") }.font(.system(size:11)).foregroundStyle(.tertiary).frame(maxWidth:.infinity)
+                HStack(spacing:6) { Image(systemName:"info.circle"); Text(model.publicEnabled ? (model.relayConfigured ? "固定地址由你的 47 服务器中转，关闭公网连接后停止接收。" : "临时公网地址会随重新连接而变化；关闭连接后失效。") : "连接保留在这台 Mac，访问需要配对二维码。") }.font(.system(size:11)).foregroundStyle(.tertiary).frame(maxWidth:.infinity)
             }.padding(32).frame(maxWidth:1000).frame(maxWidth:.infinity)
         }
     }
@@ -448,7 +458,7 @@ struct SettingsView:View {
                 Text("设置").font(.system(size:30,weight:.bold,design:.rounded))
                 Card {
                     VStack(spacing:18) {
-                        HStack { SymbolTile(name:"globe",size:36); VStack(alignment:.leading,spacing:4) { Text("Cloudflare 公网连接").font(.system(size:14,weight:.semibold)); Text("手机不必与 Mac 在同一网络").font(.system(size:12)).foregroundStyle(.secondary) }; Spacer(); Toggle("公网",isOn:Binding(get:{model.publicEnabled},set:{ value in Task { await model.setPublic(value) } })).labelsHidden().toggleStyle(.switch).tint(accent).disabled(model.busy) }
+                        HStack { SymbolTile(name:"globe",size:36); VStack(alignment:.leading,spacing:4) { Text(model.relayConfigured ? "47 服务器公网连接" : "Cloudflare 公网连接").font(.system(size:14,weight:.semibold)); Text("手机不必与 Mac 在同一网络").font(.system(size:12)).foregroundStyle(.secondary) }; Spacer(); Toggle("公网",isOn:Binding(get:{model.publicEnabled},set:{ value in Task { await model.setPublic(value) } })).labelsHidden().toggleStyle(.switch).tint(accent).disabled(model.busy) }
                         Divider()
                         settingsRow("lock.shield","辅助功能",model.allowed ? "已授权" : "自动粘贴需要授权",color:.green) { Task { await model.requestPermission() } }
                         Divider()
