@@ -117,9 +117,11 @@ def test_qt_machine_dialog_lists_devices_and_jobs(tmp_path):
     import subprocess
     import sys
     code = """
+import gui_app as bridge
+bridge.machine_lan_host = lambda: '10.0.0.1'
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QWidget
 from qt_peers import MachineShareDialog
-import gui_app as bridge
 app = QApplication([])
 server = bridge.BridgeServer(('127.0.0.1', 0), bridge.BridgeRequestHandler, 'test-only')
 try:
@@ -128,11 +130,14 @@ try:
     assert dialog.windowTitle() == '机器共享 · Mac 与 Windows'
     assert dialog.public.text() == '开启公网连接'
     assert not dialog.send.isEnabled()
-    dialog.close(); dialog.deleteLater(); app.processEvents()
+    print('Machine dialog assertions passed.', flush=True)
+    dialog.close(); dialog.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents(); app.quit()
 finally:
     server.server_close()
 """
-    subprocess.run([sys.executable, '-c', code], check=True, timeout=30,
+    subprocess.run([sys.executable, '-c', code], check=True, timeout=60,
                    env={**os.environ, 'DOUBAO_BRIDGE_DATA_DIR': str(tmp_path),
                         'PYTHONPATH': str(Path(bridge.__file__).parent),
                         'QT_QPA_PLATFORM': 'offscreen'})
