@@ -6034,7 +6034,7 @@ def run_server_only(port: int) -> None:
     access_key = read_or_create_access_key()
     refresh_lan_update_manifest_url(port)
     server = BridgeServer(("0.0.0.0", port), BridgeRequestHandler, access_key)
-    print(f"{APP_NAME} listening on {port}")
+    print(f"{APP_ID} listening on {port}", flush=True)
     print("Pairing links are available in the desktop app; credentials are not logged.")
     try:
         server.serve_forever()
