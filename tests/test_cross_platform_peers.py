@@ -9,6 +9,27 @@ import gui_app as bridge
 import peer_share
 
 
+def test_public_transport_uses_system_proxy_but_lan_stays_direct(monkeypatch):
+    import io
+    configured = []
+    class Proxy:
+        def __init__(self, *args): configured.append(args)
+    class Response(io.BytesIO):
+        status = 200
+    class Opener:
+        def open(self, request, timeout):
+            assert timeout == 90
+            assert request.get_method() == 'POST'
+            return Response(b'{"ok":true}')
+    monkeypatch.setattr(peer_share, 'ProxyHandler', Proxy)
+    monkeypatch.setattr(peer_share, 'build_opener', lambda *handlers: Opener())
+    peer_share.transport('https://example.trycloudflare.com', '/peer/ping', b'{}', {})
+    peer_share.transport('http://10.1.2.3:8765', '/peer/ping', b'{}', {})
+    assert configured == [(), ({},)]
+    with pytest.raises(ValueError, match='跳转'):
+        peer_share.NoPeerRedirect().redirect_request(None, None, 302, '', {}, 'https://other.invalid')
+
+
 @pytest.mark.parametrize('name,expected', [
     ('CON.txt', '_CON.txt'), ('aux', '_aux'), ('LPT1.pdf', '_LPT1.pdf'),
     ('report:Q4?.pdf', 'report_Q4_.pdf'), ('../../图片 😀.png', '图片 😀.png'),

@@ -69,7 +69,8 @@ def main():
             a, b = services
             assert all(s.call('/desktop/peers')['network']['tunnel']['cloudflared_available'] for s in services)
             a.call('/desktop/peers/join', {'invitation': b.call('/desktop/peers/invite', {})['invitation']})
-            source = Path(scratch) / 'synthetic-中文.bin'; source.write_bytes(bytes(range(256)) * 1024)
+            source = Path(scratch) / 'synthetic-中文.bin'
+            source.write_bytes(bytes(range(256)) * 4096 + b'multiple-chunks')
             expected = hashlib.sha256(source.read_bytes()).digest()
             for sender, receiver in ((a, b), (b, a)):
                 receiver_id = receiver.call('/desktop/peers')['device']['id']

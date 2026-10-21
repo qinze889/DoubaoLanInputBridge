@@ -27,16 +27,19 @@ def main():
         service.write_bytes(b'outdated service must be replaced')
 
         def install_package():
+            print("Installing NSIS package", flush=True)
             # NSIS requires /D last, without quotes even when its path has spaces.
             subprocess.run(f'"{installer}" /S /D={install}', check=True, timeout=120)
-            assert hashlib.sha256(service.read_bytes()).digest() == expected
+            assert hashlib.sha256(service.read_bytes()).digest() == expected, 'Installed service does not match the built payload'
             assert (install / 'VERSION').read_text().strip() == '1.3.0'
 
         install_package()
         previous = Service(service, root / 'previous-data')
         try:
             install_package()
-            previous.process.wait(timeout=15)
+            print('Checking that the orphan service exited', flush=True)
+            # PyInstaller's bootloader can wait for its child to unwind after termination.
+            previous.process.wait(timeout=45)
         finally:
             previous.close()
         subprocess.run([sys.executable, str(Path(__file__).with_name('smoke_packaged_peers.py')),
@@ -48,4 +51,4 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        raise SystemExit(f'Installer check failed ({type(error).__name__}); credentials withheld.') from None
+        raise SystemExit(f'Installer check failed ({type(error).__name__}): {error}') from None

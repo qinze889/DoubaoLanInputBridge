@@ -6,12 +6,14 @@ $executables = @((Join-Path $root 'doubao-lan-input-bridge.exe'), (Join-Path $ro
 
 # An abruptly closed older Tauri app can leave both PyInstaller processes alive.
 # Match full paths so another application's similarly named service is untouched.
-$processes = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -in $executables })
+$processes = @(Get-Process | Where-Object { $_.Path -in $executables })
 foreach ($process in $processes) {
-    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    if (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) {
+        Start-Process -FilePath "$env:SystemRoot\System32\taskkill.exe" -ArgumentList @('/PID', [string]$process.Id, '/T', '/F') -NoNewWindow -Wait
+    }
 }
 for ($attempt = 0; $attempt -lt 50; $attempt++) {
-    $remaining = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -in $executables })
+    $remaining = @(Get-Process | Where-Object { $_.Path -in $executables })
     if (-not $remaining.Count) { break }
     Start-Sleep -Milliseconds 100
 }

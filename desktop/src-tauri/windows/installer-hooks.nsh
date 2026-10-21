@@ -8,7 +8,7 @@
   ${EndIf}
   InitPluginsDir
   File "/oname=$PLUGINSDIR\prepare-upgrade.ps1" "${SHENGJIAN_HOOK_DIR}\prepare-upgrade.ps1"
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\prepare-upgrade.ps1" -InstallDir "$INSTDIR"'
+  nsExec::ExecToStack '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\prepare-upgrade.ps1" -InstallDir "$INSTDIR"'
   Pop $0
   Pop $1
   ${If} $0 != 0
