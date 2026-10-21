@@ -1,4 +1,11 @@
-﻿# 声笺
+# 声笺
+
+## macOS 与 iOS（源码适配）
+
+- [macOS 安装、构建与 Cloudflare 公网二维码](docs/README-macOS.md)：SwiftUI 原生界面、菜单栏、交互动效与多台 Mac 经各自隧道互传文件。
+- [iOS 原生客户端与 Xcode 工程](ios/README.md)：扫码、文字发送、照片/文件上传、下载分享及多 Mac 连接。
+- [多机器共享说明](docs/MACHINE-SHARING.md)与[验证记录](docs/MAC-VALIDATION.md)。
+
 
 声笺是一款用于手机与 Windows 电脑互传文字、图片、视频和文件的本地工具。项目内部标识继续使用 `DoubaoLanInputBridge`，以兼容既有数据和升级路径。
 

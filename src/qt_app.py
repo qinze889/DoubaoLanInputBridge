@@ -474,7 +474,7 @@ class QrDialog(QDialog):
         self.health = QLabel()
         self.health.setObjectName("muted")
         self.health.setWordWrap(True)
-        check_hint = QLabel("能看到 ok=true 说明网络通；打不开通常是不同 Wi-Fi、路由器 AP 隔离或 Windows 防火墙拦截。Wi-Fi 自动连接二维码需要明文 Wi-Fi 密码，当前不自动生成。")
+        check_hint = QLabel("能看到 ok=true 说明网络通；打不开通常是不同 Wi-Fi、路由器 AP 隔离或系统本地网络权限、防火墙拦截。Wi-Fi 自动连接二维码需要明文 Wi-Fi 密码，当前不自动生成。")
         check_hint.setObjectName("muted")
         check_hint.setWordWrap(True)
         check_layout.addWidget(check_title)
@@ -544,8 +544,8 @@ class ManageDialog(QDialog):
         quick_grid.setSpacing(8)
         self.update_button = None
         actions = [
-            ("检查更新", "读取本地更新源", self.start_update_check, False),
-            ("配置", "MiniMax / 更新源", parent.show_config, False),
+            ("检查更新", "Mac 版更新说明" if bridge.IS_MACOS else "读取本地更新源", self.start_update_check, False),
+            ("配置", "MiniMax / 访问 IP" if bridge.IS_MACOS else "MiniMax / 更新源", parent.show_config, False),
             ("共享目录", "电脑发给手机下载", parent.open_mobile_share_folder, False),
             ("完整历史", "查看运行数据", parent.open_history_folder, False),
         ]
@@ -557,8 +557,8 @@ class ManageDialog(QDialog):
         layout.addWidget(quick)
 
         firewall = self._action_tile(
-            "放行防火墙",
-            "手机同 Wi-Fi 仍连不上时使用",
+            "网络权限" if bridge.IS_MACOS else "放行防火墙",
+            "检查本地网络权限与防火墙" if bridge.IS_MACOS else "手机同 Wi-Fi 仍连不上时使用",
             parent.allow_firewall,
             primary=True,
         )
@@ -677,7 +677,8 @@ class BridgeQtWindow(QMainWindow):
         self.preview_timer.timeout.connect(self.refresh_preview)
         self.preview_timer.start(PREVIEW_AUTO_REFRESH_MS)
         QTimer.singleShot(120, self.start_server)
-        QTimer.singleShot(1500, lambda: self.check_update(silent=True))
+        if not bridge.IS_MACOS:
+            QTimer.singleShot(1500, lambda: self.check_update(silent=True))
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -716,6 +717,21 @@ class BridgeQtWindow(QMainWindow):
         for widget in (scan_btn, publish_btn, self.service_button, manage_btn):
             topbar_layout.addWidget(widget)
         shell.addWidget(topbar)
+        if bridge.IS_MACOS:
+            self.permission_bar = QFrame()
+            permission_layout = QHBoxLayout(self.permission_bar)
+            permission_layout.setContentsMargins(22, 8, 22, 8)
+            self.permission_hint = QLabel()
+            self.permission_hint.setWordWrap(True)
+            permission_layout.addWidget(self.permission_hint, 1)
+            self.permission_button = QPushButton("开启辅助功能")
+            self.permission_button.clicked.connect(bridge.mac_platform.request_accessibility)
+            permission_layout.addWidget(self.permission_button)
+            shell.addWidget(self.permission_bar)
+            self.permission_timer = QTimer(self)
+            self.permission_timer.timeout.connect(self.refresh_permissions)
+            self.permission_timer.start(2000)
+            self.refresh_permissions()
 
         center = QFrame()
         center.setObjectName("workspace")
@@ -804,6 +820,18 @@ class BridgeQtWindow(QMainWindow):
 
     def _button_row(self, title: str, button_text: str, callback) -> QFrame:
         return self._row(title, "", button_text, callback)
+
+    def refresh_permissions(self) -> None:
+        enabled = bridge.mac_platform.accessibility_enabled()
+        hosts = bridge.get_mobile_access_hosts()
+        if hosts == ["127.0.0.1"]:
+            self.permission_hint.setText("未检测到局域网，请连接 Wi-Fi 或网线；当前仅可在本机访问。")
+            self.permission_bar.show()
+            self.permission_button.setVisible(not enabled)
+        else:
+            self.permission_bar.setVisible(not enabled)
+            self.permission_button.setVisible(not enabled)
+            self.permission_hint.setText("自动粘贴需要辅助功能权限。授权后，把光标放进目标输入框，再从手机发送。")
 
     def _build_tray(self) -> None:
         self.tray = None
@@ -1042,7 +1070,7 @@ class BridgeQtWindow(QMainWindow):
         self.open_record_folder(self.selected_preview_card.record)
 
     def open_history_archive_folder(self) -> None:
-        os.startfile(str(bridge.ensure_history_archive_structure()))
+        bridge.open_local_path(str(bridge.ensure_history_archive_structure()))
 
     def activate_record(self, record: dict) -> None:
         try:
@@ -1107,6 +1135,11 @@ class BridgeQtWindow(QMainWindow):
         QMessageBox.information(self, APP_NAME, "自检报告已复制，内容已脱敏。")
 
     def allow_firewall(self) -> None:
+        if bridge.IS_MACOS:
+            bridge.mac_platform.open_settings("network")
+            QMessageBox.information(self, APP_NAME,
+                "请允许声笺访问本地网络。若仍无法连接，在系统设置中搜索“防火墙”，允许声笺的传入连接。手机与 Mac 需连接同一 Wi-Fi。")
+            return
         rule_name = bridge.firewall_rule_name(self.port)
         message = (
             f"将创建或更新 Windows 防火墙持久入站规则：\n\n{rule_name}\n\n"
@@ -1131,6 +1164,15 @@ class BridgeQtWindow(QMainWindow):
                 bridge.clear_text_config(bridge.MINIMAX_API_KEY_FILE)
             elif value:
                 bridge.write_text_config(bridge.MINIMAX_API_KEY_FILE, value)
+        if bridge.IS_MACOS:
+            host, ok = QInputDialog.getText(self, APP_NAME, "手机访问 IP：留空自动检测（仅限局域网 IPv4）。", text=bridge.read_mobile_host_override())
+            if ok:
+                host = bridge.normalize_mobile_host(host)
+                if host and not bridge.is_allowed_mobile_lan_host(host):
+                    QMessageBox.warning(self, APP_NAME, "请输入 10.*、172.16–31.* 或 192.168.* 局域网 IP。")
+                else:
+                    bridge.write_text_config(bridge.MOBILE_HOST_FILE, host)
+            return
         url, ok = QInputDialog.getText(self, APP_NAME, "更新源 URL：留空不修改，输入 clear 清除。", text=bridge.read_update_manifest_url())
         if ok:
             value = url.strip()
@@ -1146,6 +1188,10 @@ class BridgeQtWindow(QMainWindow):
         source_button: QPushButton | None = None,
     ) -> None:
         owner = dialog_parent if dialog_parent is not None else self
+        if bridge.IS_MACOS:
+            if not silent:
+                QMessageBox.information(owner, APP_NAME, "当前为 macOS 本地构建版。更新请重新构建或安装新的 Mac 安装包。")
+            return
         if self.update_check_in_progress:
             if not silent:
                 self._update_check_silent = False
@@ -1231,11 +1277,11 @@ class BridgeQtWindow(QMainWindow):
 
     def open_history_folder(self) -> None:
         bridge.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(bridge.DATA_DIR))
+        bridge.open_local_path(str(bridge.DATA_DIR))
 
     def open_mobile_share_folder(self) -> None:
         bridge.MOBILE_SHARE_DIR.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(bridge.MOBILE_SHARE_DIR))
+        bridge.open_local_path(str(bridge.MOBILE_SHARE_DIR))
 
     def show_publish_dialog(self) -> None:
         dialog = PublishToMobileDialog(self)
@@ -1290,7 +1336,7 @@ class BridgeQtWindow(QMainWindow):
 
 
 STYLE = """
-QMainWindow, QWidget { background: #f5f7f7; color: #17211f; font-family: "Microsoft YaHei UI"; font-size: 13px; }
+QMainWindow, QWidget { background: #f5f7f7; color: #17211f; font-family: "PingFang SC", "Helvetica Neue", "Microsoft YaHei UI"; font-size: 13px; }
 QLabel { background: transparent; }
 #topbar { background: #ffffff; border-bottom: 1px solid #dfe6e4; }
 #workspace { background: #f5f7f7; }
@@ -1376,11 +1422,13 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: t
 
 
 def main() -> int:
-    if os.name != "nt":
-        print("当前程序仅支持 Windows 粘贴控制。")
+    if os.name != "nt" and sys.platform != "darwin":
+        print("当前程序仅支持 Windows 和 macOS。")
         return 1
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    app.setOrganizationName("DoubaoLanInputBridge")
+    app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(app_icon())
     single_instance = SingleInstanceGuard(SINGLE_INSTANCE_NAME)
     if single_instance.is_secondary:
@@ -1388,6 +1436,21 @@ def main() -> int:
     app.aboutToQuit.connect(single_instance.close)
     window = BridgeQtWindow()
     single_instance.set_activate_callback(window.show_normal)
+    app.aboutToQuit.connect(window.stop_server)
+    if bridge.IS_MACOS:
+        def on_application_state(state):
+            if state == Qt.ApplicationState.ApplicationActive and not window.isVisible():
+                window.show_normal()
+        app.applicationStateChanged.connect(on_application_state)
+    menu = window.menuBar().addMenu(APP_NAME)
+    preferences = QAction("设置…", window)
+    preferences.setShortcut("Ctrl+,")
+    preferences.triggered.connect(window.show_manage)
+    menu.addAction(preferences)
+    quit_action = QAction("退出声笺", window)
+    quit_action.setShortcut("Ctrl+Q")
+    quit_action.triggered.connect(app.quit)
+    menu.addAction(quit_action)
     window.show()
     return app.exec()
 

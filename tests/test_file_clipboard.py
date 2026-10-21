@@ -357,7 +357,7 @@ def test_connection_self_check_includes_health_url_without_access_key():
     assert "电脑局域网入口：192.168.1.63:8765" in report
     assert "手机健康检查：http://192.168.1.63:8765/health" in report
     assert "AP 隔离" in report
-    assert "Windows 防火墙" in report
+    assert ("本地网络权限" if app.IS_MACOS else "防火墙") in report
     assert "key=" not in report
 
 

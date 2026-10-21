@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import base64
 import ctypes
 import hashlib
@@ -18,6 +18,7 @@ import threading
 import time
 import warnings
 import webbrowser
+import peer_share
 from http.client import HTTPConnection
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,7 +53,9 @@ from qrcode.constants import ERROR_CORRECT_M
 APP_NAME = "声笺"
 APP_ID = "DoubaoLanInputBridge"
 APP_VERSION = "1.0.0"
-APP_ICON_RELATIVE_PATH = "assets/app.ico"
+if sys.platform == "darwin":
+    APP_VERSION = "1.2.0"
+APP_ICON_RELATIVE_PATH = "assets/app-icon-master.png" if sys.platform == "darwin" else "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20
 FIXED_LAN_UPDATE_HOST = "192.168.1.63"
@@ -80,6 +83,13 @@ MINIMAX_DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
 MINIMAX_DEFAULT_MODEL = "MiniMax-M3"
 MINIMAX_TIMEOUT_SECONDS = 45.0
 IS_WINDOWS = os.name == "nt"
+IS_MACOS = sys.platform == "darwin"
+if IS_MACOS:
+    import mac_platform
+    import mac_tunnel
+
+# Serialize clipboard + paste + optional return as one operation across requests.
+PASTE_LOCK = mac_platform.PASTE_LOCK if IS_MACOS else threading.RLock()
 
 if IS_WINDOWS:
     from ctypes import wintypes
@@ -223,7 +233,21 @@ if IS_WINDOWS:
     shell32.Shell_NotifyIconW.restype = wintypes.BOOL
 
 
+def open_local_path(path) -> None:
+    if IS_MACOS:
+        mac_platform.open_path(Path(path))
+    elif IS_WINDOWS:
+        os.startfile(str(path))
+    else:
+        webbrowser.open(Path(path).resolve().as_uri())
+
+
 def app_data_dir() -> Path:
+    override = os.environ.get("DOUBAO_BRIDGE_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    if IS_MACOS:
+        return Path.home() / "Library" / "Application Support" / APP_ID
     if IS_WINDOWS:
         root = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return Path(root) / APP_ID
@@ -231,7 +255,7 @@ def app_data_dir() -> Path:
 
 
 DATA_DIR = app_data_dir()
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
 KEY_FILE = DATA_DIR / "access_key.txt"
 LOG_FILE = DATA_DIR / "service.log"
 UPDATE_URL_FILE = DATA_DIR / "update_url.txt"
@@ -405,6 +429,8 @@ def write_access_key(key: str) -> None:
     KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
     temp_file = KEY_FILE.with_name(f".{KEY_FILE.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     temp_file.write_text(key, encoding="utf-8")
+    if IS_MACOS:
+        temp_file.chmod(0o600)
     os.replace(temp_file, KEY_FILE)
 
 
@@ -521,7 +547,8 @@ def normalize_github_release(release: dict, current_version: str = APP_VERSION) 
 
 def default_update_manifest_url() -> str:
     """未显式配置时的更新源：GitHub 发行版。"""
-    return f"https://github.com/{GITHUB_REPO_DEFAULT}"
+    # Upstream only publishes Windows installers. macOS uses manual releases.
+    return "" if IS_MACOS else f"https://github.com/{GITHUB_REPO_DEFAULT}"
 
 
 def fetch_update_source(url: str, timeout: float = 8.0) -> dict:
@@ -552,6 +579,8 @@ def read_update_manifest_url() -> str:
     优先级：环境变量 DOUBAO_BRIDGE_UPDATE_URL > data_dir/update_url.txt > GitHub 默认源。
     没有任何显式配置时直接走 GitHub 发行版，装完即可检查更新。
     """
+    if IS_MACOS:
+        return ""  # This local port has no macOS release/update feed yet.
     env_url = os.environ.get(UPDATE_MANIFEST_ENV, "").strip()
     if env_url:
         return env_url.lstrip("\ufeff")
@@ -565,6 +594,8 @@ def read_update_manifest_url() -> str:
 def write_text_config(path: Path, value: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(value.strip() + "\n", encoding="utf-8")
+    if IS_MACOS:
+        path.chmod(0o600)
 
 
 def clear_text_config(path: Path) -> None:
@@ -947,6 +978,8 @@ def launch_firewall_rule_elevation(
     exe_path: str | None = None,
     popen_factory=subprocess.Popen,
 ) -> None:
+    if IS_MACOS:
+        return mac_platform.open_settings("firewall")
     if not IS_WINDOWS:
         raise RuntimeError("防火墙自动放行目前仅支持 Windows")
     script = build_firewall_rule_script(port, exe_path)
@@ -1055,7 +1088,7 @@ def build_self_check_report(port: int = DEFAULT_PORT, service_running: bool = Fa
         ("服务状态", service_running, f"port={port}" if service_running else "服务未启动"),
         ("访问密钥", file_has_text(KEY_FILE), "已配置" if file_has_text(KEY_FILE) else "未生成"),
         ("局域网主机", bool(get_mobile_access_hosts()), ", ".join(get_mobile_access_hosts())),
-        ("防火墙放行", True, f"如手机无法访问，请在管理页执行：{firewall_rule_name(port)}"),
+        ("网络权限", True, "如手机无法访问，请检查本地网络权限和防火墙"),
         ("更新源配置", bool(update_url), "已配置" if update_url else "未配置"),
         ("本地更新包", (update_dir / "update.json").is_file(), str(update_dir)),
         ("MiniMax 配置", minimax_configured, "已配置" if minimax_configured else "未配置，可暂不影响互传"),
@@ -1335,6 +1368,8 @@ def enrich_prompt(
 
 
 def is_allowed_mobile_lan_host(host: str) -> bool:
+    if IS_MACOS:
+        return mac_platform.is_lan_ipv4(host)
     return host.startswith("192.168.")
 
 
@@ -1349,6 +1384,8 @@ def sorted_lan_ipv4_addresses(addresses: list[str]) -> list[str]:
 
 
 def get_lan_ipv4_addresses() -> list[str]:
+    if IS_MACOS:
+        return mac_platform.lan_ipv4_addresses()
     addresses = ["127.0.0.1"]
     try:
         hostname = socket.gethostname()
@@ -1400,7 +1437,7 @@ def get_mobile_access_hosts() -> list[str]:
     if override:
         return [override]
     hosts = get_lan_ipv4_addresses()
-    return hosts if hosts else [FIXED_LAN_UPDATE_HOST]
+    return hosts if hosts else (["127.0.0.1"] if IS_MACOS else [FIXED_LAN_UPDATE_HOST])
 
 
 def read_public_url_override() -> str:
@@ -1676,6 +1713,8 @@ def wait_for_tunnel_ready(
 
 
 def tunnel_status(config: dict | None = None, timeout: float = 2.0) -> dict:
+    if IS_MACOS and not IS_WINDOWS:
+        return mac_tunnel.manager(DATA_DIR).status()
     cfg = normalize_tunnel_config(config if config is not None else read_tunnel_config())
     probe_url = tunnel_probe_url(cfg)
     ready = fetch_public_entry_status(probe_url, timeout=timeout)
@@ -1739,8 +1778,13 @@ def start_tunnel(
     已由外部（例如计划任务）拉起且健康时不再重复拉起，避免同一隧道出现
     多个本地连接器；这种情况返回 managed=False，由界面如实标注。
     """
+    if IS_MACOS and not IS_WINDOWS:
+        manager = mac_tunnel.manager(DATA_DIR)
+        if not manager.origin_port:
+            raise RuntimeError("请先启动本机服务")
+        return manager.start(manager.origin_port)
     if not IS_WINDOWS:
-        raise RuntimeError("隧道托管目前仅支持 Windows")
+        raise RuntimeError("当前系统不支持隧道托管")
     cfg = normalize_tunnel_config(config if config is not None else read_tunnel_config())
     cloudflared = find_cloudflared(cfg.get("cloudflared_path", ""))
     if not cloudflared:
@@ -1771,6 +1815,8 @@ def start_tunnel(
 
 def stop_tunnel(runner=subprocess.run) -> dict:
     """停止托管隧道；只作用于本进程拉起的进程，外部托管的不动。"""
+    if IS_MACOS and not IS_WINDOWS:
+        return mac_tunnel.manager(DATA_DIR).stop()
     pid = tunnel_owned_pid()
     if not pid:
         return {"stopped": False, "reason": "external"}
@@ -1808,6 +1854,10 @@ def tunnel_log_tail(name: str = "", limit: int = TUNNEL_LOG_TAIL_BYTES) -> str:
 
 def build_access_url(host: str, port: int, access_key: str) -> str:
     """对外扫码地址：公网入口可用时优先公网，不可用时回退局域网。"""
+    if IS_MACOS and not IS_WINDOWS:
+        active = mac_tunnel.manager(DATA_DIR).status()
+        if active["ready"]:
+            return f"{active['public_url']}/?key={quote(access_key, safe='')}"
     public_base = read_public_url_override()
     if public_base:
         probe_url = read_public_probe_override()
@@ -1846,7 +1896,7 @@ def build_connection_self_check(port: int, service_running: bool, host: str | No
             "判断方法：",
             "1. 手机先打开健康检查地址。",
             "2. 能看到 ok=true，说明网络通，重新扫码或复制完整扫码链接。",
-            f"3. 打不开或超时，说明手机到电脑被拦截：确认同一 Wi-Fi、关闭路由器 AP 隔离，或用管理员权限放行 Windows 防火墙 TCP {firewall_port_scope(port)}。",
+            f"3. 打不开或超时，说明手机到电脑被拦截：确认同一 Wi-Fi、关闭路由器 AP 隔离，或检查系统的本地网络权限及防火墙 TCP {firewall_port_scope(port)}。",
             "4. 能打开 health 但页面无权限，说明链接缺少访问 key，请重新扫二维码。",
             "注意：Wi-Fi 自动连接二维码需要明文 Wi-Fi 密码，当前不自动生成。",
         ]
@@ -1858,7 +1908,7 @@ def preferred_lan_host() -> str:
     for host in hosts:
         if is_allowed_mobile_lan_host(host):
             return host
-    return FIXED_LAN_UPDATE_HOST
+    return "127.0.0.1" if IS_MACOS else FIXED_LAN_UPDATE_HOST
 
 
 def bridge_probe_hosts() -> list[str]:
@@ -1966,6 +2016,8 @@ def qr_photo_image(text: str, scale: int = 6, border: int = 4) -> tk.PhotoImage:
 
 
 def set_clipboard_text(text: str, retries: int = 10) -> None:
+    if IS_MACOS:
+        return mac_platform.set_clipboard_text(text)
     if not IS_WINDOWS:
         raise RuntimeError("Keyboard paste is only available on Windows.")
 
@@ -2001,6 +2053,8 @@ def set_clipboard_text(text: str, retries: int = 10) -> None:
 
 
 def send_ctrl_v() -> None:
+    if IS_MACOS:
+        return mac_platform.send_command_v()
     if not IS_WINDOWS:
         raise RuntimeError("Keyboard paste is only available on Windows.")
     user32.keybd_event(VK_CONTROL, 0, 0, 0)
@@ -2010,6 +2064,8 @@ def send_ctrl_v() -> None:
 
 
 def send_enter() -> None:
+    if IS_MACOS:
+        return mac_platform.send_enter()
     if not IS_WINDOWS:
         raise RuntimeError("Keyboard paste is only available on Windows.")
     user32.keybd_event(VK_RETURN, 0, 0, 0)
@@ -2022,16 +2078,19 @@ def paste_text(
     press_enter: bool = False,
     enter_delay_sec: float = 0.5,
 ) -> dict:
-    payload = text + ("\n" if add_newline else "")
-    set_clipboard_text(payload)
-    time.sleep(0.08)
-    send_ctrl_v()
-    enter_pressed = False
-    if press_enter:
-        time.sleep(max(0.0, min(5.0, float(enter_delay_sec))))
-        send_enter()
-        enter_pressed = True
-    return {"chars": len(payload), "enter_pressed": enter_pressed}
+    with PASTE_LOCK:
+        if IS_MACOS:
+            mac_platform.require_accessibility()
+        payload = text + ("\n" if add_newline else "")
+        set_clipboard_text(payload)
+        time.sleep(0.08)
+        send_ctrl_v()
+        enter_pressed = False
+        if press_enter:
+            time.sleep(max(0.0, min(5.0, float(enter_delay_sec))))
+            send_enter()
+            enter_pressed = True
+        return {"chars": len(payload), "enter_pressed": enter_pressed}
 
 
 def history_now(now: int | float | None = None) -> int:
@@ -2456,7 +2515,9 @@ def open_history_file_item(record_id: str, mode: str = "file", file_index: int =
     open_target = target.parent if mode == "folder" else target
     if opener is None:
         if IS_WINDOWS:
-            os.startfile(str(open_target))
+            open_local_path(str(open_target))
+        elif IS_MACOS:
+            mac_platform.open_path(open_target)
         else:
             webbrowser.open(open_target.as_uri())
     else:
@@ -2571,6 +2632,8 @@ def build_file_drop_data(paths: list[Path]) -> bytes:
 
 
 def set_clipboard_files(paths: list[Path]) -> None:
+    if IS_MACOS:
+        return mac_platform.set_clipboard_files(paths)
     if not IS_WINDOWS:
         raise RuntimeError("File clipboard is only available on Windows.")
     resolved = [Path(path).resolve() for path in paths]
@@ -2620,26 +2683,29 @@ def paste_uploaded_files(
     enter=send_enter,
     sleeper=time.sleep,
 ) -> dict:
-    paths = [Path(item["path"]) for item in files]
-    pasted_names = []
-    for index, path in enumerate(paths):
-        set_files([path])
-        sleeper(0.08)
-        paste()
-        pasted_names.append(path.name)
-        if index < len(paths) - 1:
-            sleeper(0.35)
-    enter_pressed = False
-    if press_enter:
-        sleeper(max(0.0, min(5.0, float(enter_delay_sec))))
-        enter()
-        enter_pressed = True
-    return {
-        "files": len(paths),
-        "pastes": len(paths),
-        "names": pasted_names,
-        "enter_pressed": enter_pressed,
-    }
+    with PASTE_LOCK:
+        if IS_MACOS and paste is send_ctrl_v:
+            mac_platform.require_accessibility()
+        paths = [Path(item["path"]) for item in files]
+        pasted_names = []
+        for index, path in enumerate(paths):
+            set_files([path])
+            sleeper(0.08)
+            paste()
+            pasted_names.append(path.name)
+            if index < len(paths) - 1:
+                sleeper(0.35)
+        enter_pressed = False
+        if press_enter:
+            sleeper(max(0.0, min(5.0, float(enter_delay_sec))))
+            enter()
+            enter_pressed = True
+        return {
+            "files": len(paths),
+            "pastes": len(paths),
+            "names": pasted_names,
+            "enter_pressed": enter_pressed,
+        }
 
 
 def list_shared_files(share_dir: Path = MOBILE_SHARE_DIR) -> list[dict]:
@@ -2940,7 +3006,7 @@ def file_response(handler, path: Path, inline: bool = False) -> None:
 def html_page(access_key: str, server_name: str) -> str:
     safe_key = html.escape(access_key, quote=True)
     paper_bg = html.escape(paper_background_data_url(), quote=True)
-    return f'''<!doctype html>
+    page = f'''<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -3910,6 +3976,10 @@ def html_page(access_key: str, server_name: str) -> str:
   </script>
 </body>
 </html>'''
+    if IS_MACOS:
+        from ios_mobile import apply
+        return apply(page)
+    return page
 
 
 def invalid_access_key_page() -> str:
@@ -3937,6 +4007,15 @@ class BridgeServer(ThreadingHTTPServer):
         self.log_queue = log_queue
         self.state = {"last_paste_ms": None, "last_error": None, "paste_count": 0}
         self.state_lock = threading.Lock()
+        def share_endpoint():
+            if IS_MACOS:
+                public = mac_tunnel.manager(DATA_DIR).status().get("public_url", "")
+                if public:
+                    return public
+            return f"http://{preferred_lan_host()}:{self.server_port}"
+        self.peer_manager = peer_share.PeerManager(DATA_DIR, share_endpoint)
+        if IS_MACOS:
+            mac_tunnel.manager(DATA_DIR).origin_port = self.server_port
 
     def add_log(self, message: str) -> None:
         line = append_service_log(message)
@@ -3963,7 +4042,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args) -> None:
-        self.server.add_log(format % args)
+        # HTTP request lines contain pairing keys; never persist them.
+        line = re.sub(r"([?&]key=)[^&\s\"]+", r"\1[redacted]", format % args)
+        self.server.add_log(line)
 
     def active_access_key(self) -> str:
         key = current_access_key(self.server.access_key)
@@ -3976,6 +4057,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         return bool(key and secrets.compare_digest(key, self.active_access_key()))
 
     def is_loopback_client(self) -> bool:
+        headers = getattr(self, "headers", {})
+        if headers.get("CF-Connecting-IP") or headers.get("CF-Ray") or headers.get("X-Bridge-Public"):
+            return False
         try:
             return ipaddress.ip_address(self.client_address[0]).is_loopback
         except ValueError:
@@ -4097,8 +4181,13 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     "local_url": build_local_access_url(port, active_key),
                     "host": host,
                     "data_dir": str(DATA_DIR),
+                    "accessibility": mac_platform.accessibility_enabled() if IS_MACOS else True,
+                    "tunnel": mac_tunnel.manager(DATA_DIR).status() if IS_MACOS else {},
                 },
             )
+            return
+        if path == "/desktop/peers":
+            json_response(self, HTTPStatus.OK, {"ok": True, **self.server.peer_manager.snapshot()})
             return
         if path == "/desktop/history":
             query = str((params.get("q") or [""])[0])
@@ -4169,7 +4258,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "update_url": update_url,
-                    "update_source": "github" if github_repo_from_url(update_url) else "manifest",
+                    "update_source": "manual" if IS_MACOS else ("github" if github_repo_from_url(update_url) else "manifest"),
                     "minimax_configured": bool(str(minimax.get("api_key", "")).strip()),
                     "minimax_model": str(minimax.get("model", MINIMAX_DEFAULT_MODEL)),
                     "tunnel": tunnel,
@@ -4192,6 +4281,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path in ("/peer/pair", "/peer/ping", "/peer/endpoint", "/peer/files/start", "/peer/files/chunk", "/peer/files/finish"):
+            peer_share.handle_public(self, self.server.peer_manager, json_response)
+            return
         if parsed.path not in (
             "/send",
             "/prompt/enrich",
@@ -4206,6 +4298,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/desktop/open-folder",
             "/desktop/update/prepare",
             "/desktop/config",
+            "/desktop/accessibility",
+            "/desktop/peers/invite",
+            "/desktop/peers/join",
+            "/desktop/peers/remove",
+            "/desktop/peers/send",
             "/desktop/firewall",
             "/desktop/tunnel/config",
             "/desktop/tunnel/start",
@@ -4215,6 +4312,13 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path in ("/files/clipboard", "/files/share", "/files/paste"):
+            # The bundled phone page already sends the key in the query string.
+            # Reject before multipart parsing can create files on disk.
+            if IS_MACOS:
+                upload_key = (parse_qs(parsed.query).get("key") or [""])[0]
+                if not self.is_authorized(upload_key):
+                    json_response(self, HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid access key"})
+                    return
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
                 if content_length <= 0:
@@ -4343,6 +4447,25 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def handle_desktop_post(self, path: str, data: dict) -> None:
         port = int(self.server.server_port)
+        if path.startswith("/desktop/peers/"):
+            manager = self.server.peer_manager
+            if path.endswith("/invite"):
+                result = manager.invite()
+            elif path.endswith("/join"):
+                result = manager.join(str(data.get("invitation", "")))
+            elif path.endswith("/remove"):
+                result = manager.remove(str(data.get("id", "")))
+            elif path.endswith("/send"):
+                result = manager.send(str(data.get("id", "")), list(data.get("paths", [])))
+            else:
+                raise ValueError("未知机器共享操作")
+            json_response(self, HTTPStatus.OK, {"ok": True, **result})
+            return
+        if path == "/desktop/accessibility":
+            if IS_MACOS:
+                mac_platform.request_accessibility()
+            json_response(self, HTTPStatus.OK, {"ok": True})
+            return
         if path == "/desktop/key/regenerate":
             key = write_new_access_key()
             self.server.access_key = key
@@ -4395,7 +4518,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if path == "/desktop/open-folder":
             target = str(data.get("target", "history"))
             folder = MOBILE_SHARE_DIR if target == "shared" else ensure_history_archive_structure()
-            os.startfile(str(folder))
+            open_local_path(str(folder))
             json_response(self, HTTPStatus.OK, {"ok": True, "path": str(folder)})
             return
         if path == "/desktop/update/prepare":
@@ -5728,7 +5851,7 @@ class BridgeGui:
         try:
             ensure_prompt_library()
             if IS_WINDOWS:
-                os.startfile(str(DATA_DIR))
+                open_local_path(str(DATA_DIR))
             else:
                 webbrowser.open(DATA_DIR.as_uri())
             self.log(f"prompt library opened: {PROMPT_LIBRARY_FILE}")
@@ -5869,8 +5992,7 @@ def run_server_only(port: int) -> None:
     refresh_lan_update_manifest_url(port)
     server = BridgeServer(("0.0.0.0", port), BridgeRequestHandler, access_key)
     print(f"{APP_NAME} listening on {port}")
-    for url in [build_access_url(host, port, access_key) for host in get_mobile_access_hosts()]:
-        print(url)
+    print("Pairing links are available in the desktop app; credentials are not logged.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -5887,8 +6009,11 @@ def main() -> None:
     if args.server_only:
         run_server_only(args.port)
         return
+    if IS_MACOS:
+        from qt_app import main as qt_main
+        return qt_main()
     if not IS_WINDOWS:
-        messagebox.showerror(APP_NAME, "当前程序仅支持 Windows 粘贴控制。")
+        messagebox.showerror(APP_NAME, "当前程序仅支持 Windows 和 macOS。")
         return
     BridgeGui().run()
 

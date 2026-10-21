@@ -16,6 +16,10 @@ def load_app():
     spec = importlib.util.spec_from_file_location("gui_app_under_test", APP_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # This retained upstream suite covers the Windows update/firewall policy.
+    # macOS behavior is covered separately in test_macos.py.
+    module.IS_MACOS = False
+    module.IS_WINDOWS = True
     return module
 
 
@@ -174,9 +178,10 @@ def test_launch_update_script_hides_powershell_window(tmp_path):
 
     assert captured["args"][:4] == ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden"]
     assert "-ExecutionPolicy" in captured["args"]
-    assert captured["kwargs"]["creationflags"] == app.subprocess.CREATE_NO_WINDOW
-    assert captured["kwargs"]["startupinfo"] is not None
-    assert captured["kwargs"]["startupinfo"].wShowWindow == 0
+    assert captured["kwargs"]["creationflags"] == getattr(app.subprocess, "CREATE_NO_WINDOW", 0)
+    if hasattr(app.subprocess, "STARTUPINFO"):
+        assert captured["kwargs"]["startupinfo"] is not None
+        assert captured["kwargs"]["startupinfo"].wShowWindow == 0
 
 
 def test_firewall_rule_script_creates_persistent_private_public_rule(tmp_path):
@@ -234,8 +239,9 @@ def test_launch_firewall_rule_elevation_uses_uac_and_hidden_launcher(tmp_path):
     assert "-Command" in captured["args"]
     assert "Start-Process -FilePath powershell.exe -Verb RunAs" in captured["args"][-1]
     assert "-EncodedCommand" in captured["args"][-1]
-    assert captured["kwargs"]["creationflags"] == app.subprocess.CREATE_NO_WINDOW
-    assert captured["kwargs"]["startupinfo"] is not None
+    assert captured["kwargs"]["creationflags"] == getattr(app.subprocess, "CREATE_NO_WINDOW", 0)
+    if hasattr(app.subprocess, "STARTUPINFO"):
+        assert captured["kwargs"]["startupinfo"] is not None
 
 
 def test_gui_confirmed_update_starts_one_click_install(monkeypatch):
@@ -749,7 +755,7 @@ def test_gui_start_server_auto_increments_busy_port(monkeypatch):
 def test_gui_registers_windows_tray_icon_and_hides_on_close():
     source = APP_PATH.read_text(encoding="utf-8")
 
-    assert 'APP_ICON_RELATIVE_PATH = "assets/app.ico"' in source
+    assert '"assets/app.ico"' in source
     assert "class WindowsTrayIcon" in source
     assert "app_icon_path()" in source
     assert "LoadImageW" in source

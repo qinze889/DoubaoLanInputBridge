@@ -1,0 +1,29 @@
+name: Apple clients
+on:
+  pull_request:
+  push:
+    branches: [main, 'feat/macos-ios-machine-sharing']
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-macos.txt
+      - name: Regression tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: DOUBAO_BRIDGE_DATA_DIR="$(mktemp -d)" python -m pytest -q tests
+      - name: Compile native macOS UI
+        run: xcrun swiftc -parse-as-library native/ShengjianApp.swift -target arm64-apple-macos14.4 -o /tmp/Shengjian -framework SwiftUI -framework AppKit -framework CoreImage
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test --package-path ios
+      - name: Build iOS simulator app
+        run: xcodebuild -project ios/ShengjianIOS.xcodeproj -scheme ShengjianIOS -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ios/DerivedData CODE_SIGNING_ALLOWED=NO build
