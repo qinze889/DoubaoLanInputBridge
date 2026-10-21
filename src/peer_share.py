@@ -124,6 +124,8 @@ class PeerManager:
         code = (fields.get('code') or [''])[0]
         if not code: raise ValueError('邀请缺少配对码')
         own_endpoint = endpoint(self.endpoint_provider())
+        if urlsplit(base).scheme == 'https' and urlsplit(own_endpoint).scheme != 'https':
+            raise ValueError('对方使用公网邀请，请先开启本机公网连接再配对。')
         shared = secrets.token_urlsafe(32)
         payload = {'code':code,'device':dict(self.device),'endpoint':own_endpoint,'secret':shared}
         result = transport(base,'/peer/pair',json.dumps(payload).encode(),{'Content-Type':'application/json'})

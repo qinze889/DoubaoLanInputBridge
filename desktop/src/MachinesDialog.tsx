@@ -77,7 +77,7 @@ export default function MachinesDialog({ apiGet, apiPost, notify, onClose }: {
       {error && <p className="machine-error" role="alert">{error}</p>}
       <div className="machine-pair-grid">
         <section className="machine-panel"><h3>邀请一台电脑</h3><p>邀请仅使用一次，5 分钟内有效。跨网络时请在两端开启公网连接。</p>
-          <button className="button secondary" disabled={busy || tunnel?.phase === 'starting'} onClick={() => void run(async () => { const result = await apiPost<{ invitation: string; expires_in: number }>('/desktop/peers/invite'); setInvitation(result.invitation); setExpiresAt(Date.now() + result.expires_in * 1000) })}><Link size={16} />生成邀请</button>
+          <button className="button secondary" disabled={busy || !snapshot || endpoint.includes('127.0.0.1') || tunnel?.phase === 'starting'} onClick={() => void run(async () => { const result = await apiPost<{ invitation: string; expires_in: number }>('/desktop/peers/invite'); setInvitation(result.invitation); setExpiresAt(Date.now() + result.expires_in * 1000) })}><Link size={16} />生成邀请</button>
           {validInvitation && <div className="machine-invitation"><QRCodeSVG value={invitation} size={128} /><button className="button secondary" onClick={() => void run(async () => { await navigator.clipboard.writeText(invitation); notify('邀请已复制') })}><ClipboardCopy size={16} />复制邀请 · {Math.ceil((expiresAt - now) / 1000)} 秒</button></div>}
           {invitation && !validInvitation && <p>邀请已过期，请重新生成。</p>}
         </section>

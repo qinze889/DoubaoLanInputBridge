@@ -82,6 +82,13 @@ def test_mac_120_protocol_remains_compatible(tmp_path, monkeypatch):
         assert targets_on_disk and targets_on_disk[-1].read_bytes() == data
 
 
+def test_public_pairing_requires_reachable_return_address(tmp_path):
+    sender = peer_share.PeerManager(tmp_path / 'sender', lambda: 'http://10.0.0.2:8765')
+    other = peer_share.PeerManager(tmp_path / 'other', lambda: 'https://other.trycloudflare.com')
+    with pytest.raises(ValueError, match='开启本机公网连接'):
+        sender.join(other.invite()['invitation'])
+
+
 def test_qt_machine_dialog_lists_devices_and_jobs(monkeypatch, tmp_path):
     from PySide6.QtWidgets import QApplication
     from qt_peers import MachineShareDialog

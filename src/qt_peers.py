@@ -137,11 +137,11 @@ class MachineShareDialog(QDialog):
         try:
             server = self.service(); snapshot = server.peer_manager.snapshot(); tunnel = server.quick_tunnel.status()
             endpoint = server.peer_manager.endpoint_provider()
-            label = '公网已连接' if tunnel['ready'] else '正在连接 Cloudflare…' if tunnel['phase'] == 'starting' else '已配置公网地址' if endpoint.startswith('https:') else '局域网连接 · 需同一网络'
+            label = '公网已连接' if tunnel['ready'] else '正在连接 Cloudflare…' if tunnel['phase'] == 'starting' else '已配置公网地址' if endpoint.startswith('https:') else '请开启公网连接，或连接局域网' if '127.0.0.1' in endpoint else '局域网连接 · 需同一网络'
             self.network.setText(label)
             self.public.setText('关闭公网连接' if tunnel['phase'] in ('starting', 'ready') else '开启公网连接')
             self.public.setEnabled(not self.busy)
-            self.create.setEnabled(not self.busy and tunnel['phase'] != 'starting')
+            self.create.setEnabled(not self.busy and tunnel['phase'] != 'starting' and '127.0.0.1' not in endpoint)
             self.join.setEnabled(not self.busy)
             self.copy.setEnabled(bool(self.invitation and time.time() < self.expires))
             if self.invitation:
