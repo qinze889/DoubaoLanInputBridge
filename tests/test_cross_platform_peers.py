@@ -110,19 +110,29 @@ def test_public_pairing_requires_reachable_return_address(tmp_path):
         sender.join(other.invite()['invitation'])
 
 
-def test_qt_machine_dialog_lists_devices_and_jobs(monkeypatch, tmp_path):
-    from PySide6.QtWidgets import QApplication
-    from qt_peers import MachineShareDialog
-    app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(bridge, 'DATA_DIR', tmp_path)
-    server = bridge.BridgeServer(('127.0.0.1', 0), bridge.BridgeRequestHandler, 'test-only')
-    try:
-        from PySide6.QtWidgets import QWidget
-        parent = QWidget(); parent.server = server
-        dialog = MachineShareDialog(parent)
-        assert dialog.windowTitle() == '机器共享 · Mac 与 Windows'
-        assert dialog.public.text() == '开启公网连接'
-        assert not dialog.send.isEnabled()
-        dialog.close(); dialog.deleteLater(); app.processEvents()
-    finally:
-        server.server_close()
+def test_qt_machine_dialog_lists_devices_and_jobs(tmp_path):
+    # Cocoa/Qt owns a process-wide application and cannot share its lifetime
+    # with the service/network regression tests running in this process.
+    import os
+    import subprocess
+    import sys
+    code = """
+from PySide6.QtWidgets import QApplication, QWidget
+from qt_peers import MachineShareDialog
+import gui_app as bridge
+app = QApplication([])
+server = bridge.BridgeServer(('127.0.0.1', 0), bridge.BridgeRequestHandler, 'test-only')
+try:
+    parent = QWidget(); parent.server = server
+    dialog = MachineShareDialog(parent)
+    assert dialog.windowTitle() == '机器共享 · Mac 与 Windows'
+    assert dialog.public.text() == '开启公网连接'
+    assert not dialog.send.isEnabled()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+finally:
+    server.server_close()
+"""
+    subprocess.run([sys.executable, '-c', code], check=True, timeout=30,
+                   env={**os.environ, 'DOUBAO_BRIDGE_DATA_DIR': str(tmp_path),
+                        'PYTHONPATH': str(Path(bridge.__file__).parent),
+                        'QT_QPA_PLATFORM': 'offscreen'})
