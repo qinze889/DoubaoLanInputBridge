@@ -12,15 +12,12 @@ if str(SRC) not in sys.path:
 
 TOOLS_ROOT = ROOT / "tools"
 if not (TOOLS_ROOT / "pyside6" / "PySide6").is_dir():
-    git_common = Path(
-        subprocess.check_output(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            cwd=ROOT,
-            text=True,
-            encoding="utf-8",
-        ).strip()
+    git_result = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=ROOT, text=True, encoding="utf-8", capture_output=True,
     )
-    TOOLS_ROOT = git_common.parent / "tools"
+    if git_result.returncode == 0:
+        TOOLS_ROOT = Path(git_result.stdout.strip()).parent / "tools"
 for tool_name in ("pyside6", "qrcode"):
     tool_path = TOOLS_ROOT / tool_name
     if tool_path.is_dir() and str(tool_path) not in sys.path:
@@ -159,4 +156,4 @@ def test_qt_update_flow_uses_manifest_available_field():
     assert 'result.get("update_available")' not in source
     assert 'button.setText("检查中..." if checking else "检查更新")' in source
     assert "if self.update_check_in_progress:" in source
-    assert "bridge.write_lan_update_manifest_url(self.port)" in source
+    assert "bridge.refresh_lan_update_manifest_url(self.port)" in source

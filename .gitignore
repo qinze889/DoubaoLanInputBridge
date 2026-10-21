@@ -1,4 +1,10 @@
 __pycache__/
+.venv/
+ios/.build/
+ios/DerivedData/
+**/xcuserdata/
+.DS_Store
+dist/
 *.py[cod]
 .pytest_cache/
 build/
@@ -6,6 +12,7 @@ tools/
 run_data*/
 local_update_source/
 *.spec
+!packaging/*.spec
 backups/
 dist/*_update.exe
 docs/git-version-report.html

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>Shengjian</string>
+<key>CFBundleIdentifier</key><string>com.doubaolaninputbridge.mac</string>
+<key>CFBundleName</key><string>声笺</string>
+<key>CFBundleDisplayName</key><string>声笺</string>
+<key>CFBundleIconFile</key><string>Shengjian.icns</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>1.2.0</string>
+<key>CFBundleVersion</key><string>3</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>LSMinimumSystemVersion</key><string>14.4</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSLocalNetworkUsageDescription</key><string>与手机互传文字、图片和文件。</string>
+<key>NSAccessibilityUsageDescription</key><string>将手机发送的内容粘贴到当前输入框。</string>
+<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+</dict></plist>

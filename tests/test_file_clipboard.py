@@ -1,4 +1,5 @@
 import importlib.util
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -344,7 +345,8 @@ def test_history_record_preview_describes_text_images_and_files(tmp_path, monkey
 def test_format_history_timestamp_includes_full_date_and_minute():
     app = load_app()
 
-    assert app.format_history_timestamp(1783388400) == "2026年07月07日 09:40"
+    local_timestamp = datetime(2026, 7, 7, 9, 40).timestamp()
+    assert app.format_history_timestamp(local_timestamp) == "2026年07月07日 09:40"
     assert app.format_history_timestamp(None) == "时间未知"
 
 
@@ -357,7 +359,7 @@ def test_connection_self_check_includes_health_url_without_access_key():
     assert "电脑局域网入口：192.168.1.63:8765" in report
     assert "手机健康检查：http://192.168.1.63:8765/health" in report
     assert "AP 隔离" in report
-    assert "Windows 防火墙" in report
+    assert ("本地网络权限" if app.IS_MACOS else "防火墙") in report
     assert "key=" not in report
 
 

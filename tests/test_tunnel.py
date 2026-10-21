@@ -11,6 +11,7 @@ def load_app():
     spec = importlib.util.spec_from_file_location("gui_app_under_test", APP_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.IS_MACOS = False  # Retained Windows named-tunnel tests.
     return module
 
 

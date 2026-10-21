@@ -234,6 +234,7 @@ def test_desktop_tunnel_requires_key(monkeypatch, tmp_path):
 
 
 def test_desktop_tunnel_config_post_persists_and_switches_access_url(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_app, "IS_MACOS", False)  # Legacy named-tunnel configuration.
     tunnel_file = tmp_path / "tunnel.json"
     monkeypatch.setattr(gui_app, "TUNNEL_CONFIG_FILE", tunnel_file)
     monkeypatch.setattr(gui_app, "fetch_public_entry_status", lambda probe_url, timeout=2.0: True)
@@ -316,8 +317,8 @@ def test_desktop_config_reports_github_update_source(monkeypatch, tmp_path):
         status, payload, _ = request(port, "GET", "/desktop/config?key=test-key")
 
     assert status == 200
-    assert payload["update_source"] == "github"
-    assert payload["update_url"].startswith("https://github.com/")
+    assert payload["update_source"] == ("manual" if gui_app.IS_MACOS else "github")
+    assert payload["update_url"] == "" if gui_app.IS_MACOS else payload["update_url"].startswith("https://github.com/")
     assert payload["tunnel"]["enabled"] is False
 
 
