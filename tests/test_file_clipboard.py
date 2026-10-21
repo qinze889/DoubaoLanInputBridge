@@ -1,4 +1,5 @@
 import importlib.util
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -344,7 +345,8 @@ def test_history_record_preview_describes_text_images_and_files(tmp_path, monkey
 def test_format_history_timestamp_includes_full_date_and_minute():
     app = load_app()
 
-    assert app.format_history_timestamp(1783388400) == "2026年07月07日 09:40"
+    local_timestamp = datetime(2026, 7, 7, 9, 40).timestamp()
+    assert app.format_history_timestamp(local_timestamp) == "2026年07月07日 09:40"
     assert app.format_history_timestamp(None) == "时间未知"
 
 
