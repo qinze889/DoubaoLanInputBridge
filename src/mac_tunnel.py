@@ -84,7 +84,11 @@ class PublicHandler(BaseHTTPRequestHandler):
 
 
 def find_binary(configured=''):
-    candidates = [configured, str(Path(sys.executable).parent / 'cloudflared'),
+    filename = 'cloudflared.exe' if os.name == 'nt' else 'cloudflared'
+    candidates = [configured, str(Path(sys.executable).parent / filename),
+                  str(Path(getattr(sys, '_MEIPASS', Path(__file__).parent)) / filename),
+                  str(Path(sys.executable).parent / '_internal' / filename),
+                  str(Path.home()/'.local/bin'/filename),
                   str(Path.home()/'.local/bin/cloudflared'), '/opt/homebrew/bin/cloudflared',
                   '/usr/local/bin/cloudflared', shutil.which('cloudflared') or '']
     return next((item for item in candidates if item and Path(item).is_file() and os.access(item, os.X_OK)), '')
@@ -120,14 +124,14 @@ class TunnelManager:
                     'public_url': self.url if ready else '', 'error': self.error,
                     'cloudflared_available': bool(find_binary()), 'mode': 'quick'}
 
-    def start(self, origin_port):
+    def start(self, origin_port, configured=''):
         with self.lock:
             if self.phase in {'starting','ready'} and self.process is not None and self.process.poll() is None:
                 return self.status()
             self.stop()
-            binary = find_binary()
+            binary = find_binary(configured)
             if not binary:
-                raise RuntimeError('未找到 cloudflared，请使用包含 Cloudflare 的完整 Mac 安装包。')
+                raise RuntimeError('未找到 cloudflared，请使用包含 Cloudflare 的完整安装包。')
             self.origin_port = int(origin_port)
             self.gateway = PublicGateway(self.origin_port)
             threading.Thread(target=self.gateway.serve_forever, daemon=True).start()
@@ -140,7 +144,8 @@ class TunnelManager:
                        '--metrics', '127.0.0.1:0', '--protocol', 'http2', '--loglevel', 'info']
             try:
                 self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1, close_fds=True, cwd=str(self.data_dir))
+                    text=True, encoding='utf-8', errors='replace', bufsize=1, close_fds=True,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), cwd=str(self.data_dir))
             except Exception:
                 self.gateway.shutdown()
                 self.gateway.server_close()

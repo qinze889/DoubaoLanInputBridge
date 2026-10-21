@@ -704,6 +704,8 @@ class BridgeQtWindow(QMainWindow):
         scan_btn.clicked.connect(self.show_qr)
         publish_btn = QPushButton("发布给手机")
         publish_btn.clicked.connect(self.show_publish_dialog)
+        machines_btn = QPushButton("机器共享")
+        machines_btn.clicked.connect(self.show_machines)
         self.service_button = QPushButton("启动服务")
         self.service_button.setObjectName("secondaryButton")
         self.service_button.clicked.connect(self.toggle_server)
@@ -714,7 +716,7 @@ class BridgeQtWindow(QMainWindow):
         topbar_layout.addWidget(version)
         topbar_layout.addWidget(self.status_card)
         topbar_layout.addStretch(1)
-        for widget in (scan_btn, publish_btn, self.service_button, manage_btn):
+        for widget in (scan_btn, publish_btn, machines_btn, self.service_button, manage_btn):
             topbar_layout.addWidget(widget)
         shell.addWidget(topbar)
         if bridge.IS_MACOS:
@@ -996,6 +998,15 @@ class BridgeQtWindow(QMainWindow):
         self.log("server stopped")
         self.update_service_controls("stopped")
         self.apply_status("stopped", "已停止", "服务已停止", "点击启动重新开启手机互传。")
+
+    def show_machines(self) -> None:
+        if not self.server:
+            self.start_server()
+        if self.server:
+            from qt_peers import MachineShareDialog
+            dialog = MachineShareDialog(self)
+            dialog.exec()
+            dialog.deleteLater()
 
     def refresh_preview(self) -> None:
         selected_id = str(self.selected_preview_card.record.get("id", "")) if self.selected_preview_card else ""

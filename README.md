@@ -5,13 +5,14 @@
 - [macOS 安装、构建与 Cloudflare 公网二维码](docs/README-macOS.md)：SwiftUI 原生界面、菜单栏、交互动效与多台 Mac 经各自隧道互传文件。
 - [iOS 原生客户端与 Xcode 工程](ios/README.md)：扫码、文字发送、照片/文件上传、下载分享及多 Mac 连接。
 - [多机器共享说明](docs/MACHINE-SHARING.md)与[验证记录](docs/MAC-VALIDATION.md)。
+- Windows 1.3.0 新增“机器共享”，可与 Mac 1.2.0 及以上版本双向传文件；Tauri 安装版和 Qt 便携版均支持，完整安装包内置 Cloudflare 临时隧道。
 
 
 声笺是一款用于手机与 Windows 电脑互传文字、图片、视频和文件的本地工具。项目内部标识继续使用 `DoubaoLanInputBridge`，以兼容既有数据和升级路径。
 
 ## 当前版本
 
-- 版本：`1.0.0`
+- Windows 版本：`1.3.0`
 - 新增：桌面端「管理」内新增「公网隧道」区，可直接配置并启停 Cloudflare 隧道。自动探测本机 `~/.cloudflared/*/config.yml` 里的隧道名与公网域名，点一下即可填入；隧道连通时二维码使用公网地址，断开时自动回落局域网。不再依赖手写 `public_url.txt` / `public_probe.txt` 或额外的计划任务脚本。
 - 新增：隧道由声笺托管时记录自身进程号，停止只作用于自己拉起的进程；检测到外部已在运行的隧道时显示为「外部托管」，不重复拉起第二个连接器。
 - 调整：更新源默认改为 GitHub 发行版（`releases/latest`），并用发行版资产自带的 SHA256 摘要校验，不必再手工维护 `update.json`。启动时不再无条件把更新源覆写回局域网地址。

@@ -182,3 +182,25 @@ nav { display: grid; gap: 6px; }
 .tunnel-candidates button:disabled { opacity: .55; cursor: not-allowed; }
 .tunnel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .tunnel-hint { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+
+.machines-dialog { border-radius: 20px; }
+.machine-network, .machine-peer, .machine-job { display: flex; gap: 14px; align-items: center; padding: 16px; margin-block: 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-muted); }
+.machine-network > div, .machine-peer > div, .machine-job > div { flex: 1; min-width: 0; }
+.machine-network p, .machine-panel p { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 6px 0 12px; }
+.machine-network label { display: flex; align-items: center; gap: 7px; font-size: 13px; white-space: nowrap; }
+.machine-pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-block: 16px; }
+.machine-panel { padding: 18px; border: 1px solid var(--line); border-radius: 14px; }
+.machine-panel h3, .machine-peers h3, .machine-jobs h3 { margin: 0 0 12px; font-size: 15px; }
+.machine-panel textarea { width: 100%; min-height: 90px; resize: vertical; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font: inherit; }
+.machine-invitation { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; padding-top: 16px; }
+.machine-invitation svg { background: white; padding: 8px; box-sizing: content-box; border-radius: 12px; }
+.machine-peer { transition: transform .18s ease, box-shadow .18s ease; }
+.machine-peer:hover { transform: translateY(-1px); box-shadow: 0 6px 20px #1749390a; }
+.machine-peer small, .machine-job small { display: block; color: var(--muted); margin-top: 5px; font-size: 11px; }
+.machine-peer strong, .machine-job strong { overflow-wrap: anywhere; }
+.machine-job { flex-wrap: wrap; }
+.machine-job progress { width: 100%; height: 7px; accent-color: var(--green); }
+.machine-complete { display: flex; align-items: center; gap: 5px; color: var(--green-strong); font-size: 12px; }
+.machine-error { color: #a32e35; padding: 8px 0; font-size: 12px; line-height: 1.5; }
+.machine-empty { color: var(--muted); padding: 14px 0; font-size: 13px; }
+@media (max-width: 700px) { .machine-pair-grid { grid-template-columns: 1fr; } }

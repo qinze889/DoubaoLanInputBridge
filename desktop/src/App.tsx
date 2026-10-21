@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react'
 import './App.css'
+import MachinesDialog from './MachinesDialog'
 
 type RuntimeInfo = { running: boolean; port: number | null; key: string }
 type BridgeState = {
@@ -144,7 +145,7 @@ function App() {
   const [category, setCategory] = useState('all')
   const [loading, setLoading] = useState(true)
   const loadingMoreRef = useRef(false)
-  const [modal, setModal] = useState<'qr' | 'publish' | 'manage' | null>(null)
+  const [modal, setModal] = useState<'qr' | 'publish' | 'manage' | 'machines' | null>(null)
   const [notice, setNotice] = useState('')
   const [availableUpdate, setAvailableUpdate] = useState<UpdateResult | null>(null)
   const [autoUpdating, setAutoUpdating] = useState(false)
@@ -376,6 +377,7 @@ function App() {
           <button className="nav-item active" onClick={() => void loadHistory(false)}><Archive size={19} /><span>史记</span><RefreshCw className="nav-trailing" size={15} /></button>
           <button className="nav-item" onClick={() => void openQrDialog()}><QrCode size={19} /><span>连接手机</span></button>
           <button className="nav-item" onClick={() => setModal('publish')}><Send size={19} /><span>发布给手机</span></button>
+          <button className="nav-item" onClick={() => setModal('machines')}><MonitorSmartphone size={19} /><span>机器共享</span></button>
           <button className="nav-item" onClick={() => setModal('manage')}><Settings size={19} /><span>管理</span></button>
         </nav>
         {availableUpdate && (
@@ -443,6 +445,7 @@ function App() {
       {modal === 'qr' && bridge && <QrDialog bridge={bridge} onClose={() => setModal(null)} onRefresh={async () => { const result = await apiPost<{ key: string; mobile_url: string }>('/desktop/key/regenerate'); setRuntime((current) => ({ ...current, key: result.key })); await loadBridgeState(); notify('二维码和访问密钥已刷新') }} onOpen={() => void openUrl(bridge.local_url)} />}
       {modal === 'publish' && <PublishDialog onClose={() => setModal(null)} onPublish={async (text, paths) => { await apiPost('/desktop/publish', { text, paths }); notify('内容已发布到手机缓冲区'); setModal(null); await loadHistory(false) }} />}
       {modal === 'manage' && <ManageDialog apiGet={apiGet} apiPost={apiPost} currentVersion={bridge?.version || '0.12.2'} onClose={() => setModal(null)} notify={notify} />}
+      {modal === 'machines' && <MachinesDialog apiGet={apiGet} apiPost={apiPost} notify={notify} onClose={() => setModal(null)} />}
       {availableUpdate && <UpdateDialog update={availableUpdate} installing={autoUpdating} onClose={() => { dismissedUpdateVersionRef.current = availableUpdate.version; setAvailableUpdate(null) }} onInstall={installAvailableUpdate} />}
       {notice && <div className="toast"><Check size={17} />{notice}</div>}
     </div>

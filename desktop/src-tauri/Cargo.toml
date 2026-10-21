@@ -1,6 +1,6 @@
 [package]
 name = "doubao-lan-input-bridge"
-version = "1.0.0"
+version = "1.3.0"
 description = "手机与 Windows 电脑之间的文字、图片和文件传输桥"
 authors = ["qinze889"]
 license = ""

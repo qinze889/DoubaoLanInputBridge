@@ -40,10 +40,6 @@ def main():
     signal.signal(signal.SIGINT, lambda *args: stopping.set())
     print(json.dumps({'port': server.server_port, 'pid': os.getpid()}), flush=True)
     parent = os.getppid()
-    def advertise():
-        while not stopping.wait(10):
-            server.peer_manager.advertise()
-    threading.Thread(target=advertise, daemon=True).start()
     try:
         while not stopping.wait(1):
             if os.getppid() != parent:

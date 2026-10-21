@@ -469,7 +469,7 @@ struct SettingsView:View {
                     Divider()
                     settingsRow("arrow.clockwise","重新配对","刷新二维码，让旧连接失效",color:.blue) { Task { await model.regenerate() } }
                 } }
-                HStack { Spacer(); VStack(spacing:6) { Image(systemName:"waveform.bubble.fill").font(.system(size:24)).foregroundStyle(accent.opacity(0.7)); Text("声笺 1.2.0").font(.system(size:12,weight:.medium)); Text("想法，自在流动。").font(.system(size:11)).foregroundStyle(.tertiary) }; Spacer() }.padding(.top,8)
+                HStack { Spacer(); VStack(spacing:6) { Image(systemName:"waveform.bubble.fill").font(.system(size:24)).foregroundStyle(accent.opacity(0.7)); Text("声笺 1.3.0").font(.system(size:12,weight:.medium)); Text("想法，自在流动。").font(.system(size:11)).foregroundStyle(.tertiary) }; Spacer() }.padding(.top,8)
             }.padding(32).frame(maxWidth:780).frame(maxWidth:.infinity)
         }
     }
@@ -611,7 +611,7 @@ struct MachinesView: View {
                     Button { model.showAddMachine = true } label: { Label("添加机器", systemImage: "plus") }.buttonStyle(.borderedProminent).tint(accent)
                 }
                 if model.machines.isEmpty {
-                    Card { VStack(spacing: 18) { Image(systemName: "laptopcomputer.and.arrow.down").font(.system(size: 44, weight: .light)).foregroundStyle(accent); Text("让另一台 Mac 加入").font(.system(size: 19, weight: .semibold)); Text("两台机器分别开启公网连接，\n复制配对邀请到另一台机器即可。").font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center); Button("生成一次性邀请") { Task { await model.createInvitation() } }.buttonStyle(.borderedProminent) }.frame(maxWidth: .infinity).padding(.vertical, 28) }
+                    Card { VStack(spacing: 18) { Image(systemName: "laptopcomputer.and.arrow.down").font(.system(size: 44, weight: .light)).foregroundStyle(accent); Text("让 Mac 或 Windows 加入").font(.system(size: 19, weight: .semibold)); Text("两台机器分别开启公网连接，\n复制配对邀请到另一台机器即可。").font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center); Button("生成一次性邀请") { Task { await model.createInvitation() } }.buttonStyle(.borderedProminent) }.frame(maxWidth: .infinity).padding(.vertical, 28) }
                 }
                 ForEach(model.machines) { machine in
                     Card(padding: 22) {

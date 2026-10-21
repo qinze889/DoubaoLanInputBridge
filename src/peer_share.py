@@ -18,6 +18,22 @@ CHUNK_BYTES = 8 * 1024 * 1024
 JSON_BYTES = 64 * 1024
 
 
+def safe_filename(value):
+    name = str(value).replace('\\', '/').split('/')[-1]
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).strip('. ')
+    if name.split('.')[0].upper() in {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$',
+                                    *('COM'+str(i) for i in range(1, 10)),
+                                    *('LPT'+str(i) for i in range(1, 10))}:
+        name = '_' + name
+    # Keep a component below both NTFS and UTF-8 filesystem limits.
+    stem, suffix = os.path.splitext(name)
+    if len(suffix.encode('utf-8')) > 30:
+        stem, suffix = name, ''
+    while len((stem + suffix).encode('utf-8')) > 120:
+        stem = stem[:-1]
+    return (stem.rstrip('. ') + suffix).rstrip('. ')
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -186,8 +202,7 @@ class PeerManager:
             meta_file = folder/'state.json'
             meta = load_json(meta_file,None)
             if route.path == '/peer/files/start':
-                filename = str(data.get('name','')).replace('\\','/').split('/')[-1]
-                filename = re.sub(r'[\x00-\x1f/:]','_',filename)[:180].strip('. ')
+                filename = safe_filename(data.get('name',''))
                 size = int(data.get('size',-1)); checksum = str(data.get('sha256',''))
                 if not filename or size < 0 or not re.fullmatch('[a-f0-9]{64}',checksum): raise ValueError('无效文件信息')
                 if meta:

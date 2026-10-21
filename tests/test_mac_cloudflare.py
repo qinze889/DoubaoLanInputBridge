@@ -45,7 +45,7 @@ def test_public_phone_page_still_requires_pairing_key(public_service):
     assert fetch(gateway.server_port,'/')[0]==401
     status,page=fetch(gateway.server_port,'/?key=gateway-test-key')
     assert status==200
-    assert b'ios-appearance' in page
+    assert (b'ios-appearance' in page) if bridge.IS_MACOS else (b'<!doctype html>' in page.lower())
 
 
 def test_public_health_does_not_leak_local_paths_or_pid(public_service):
