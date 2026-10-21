@@ -198,7 +198,7 @@ function App() {
   }, [])
 
   const loadBridgeState = useCallback(async () => {
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+    for (let attempt = 0; attempt < 240; attempt += 1) {
       const info = await syncRuntime()
       if (info.running && info.port && info.key) {
         try {

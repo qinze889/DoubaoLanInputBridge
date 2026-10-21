@@ -30,6 +30,9 @@ New-Item -ItemType Directory -Path (Split-Path -Parent $SidecarTarget) -Force | 
     --clean `
     --onefile `
     --console `
+    --exclude-module qt_app `
+    --exclude-module qt_peers `
+    --exclude-module PySide6 `
     --name $SidecarName `
     --distpath $SidecarDist `
     --workpath $SidecarBuild `
