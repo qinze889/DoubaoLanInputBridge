@@ -2,7 +2,7 @@ name: Apple clients
 on:
   pull_request:
   push:
-    branches: [main, 'feat/macos-ios-machine-sharing']
+    branches: [main]
 permissions:
   contents: read
 jobs:
