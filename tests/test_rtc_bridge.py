@@ -56,3 +56,24 @@ def test_reassembly_limits_close_malformed_channel():
     framed.on_message(json.dumps({'type': 'start', 'id': 'a'*32, 'bytes': MAX_MESSAGE}))
     framed.on_message(json.dumps({'type': 'start', 'id': 'b'*32, 'bytes': 1}))
     assert channel.closed and not framed.buffers
+
+
+def test_completed_message_flood_is_bounded_before_async_execution():
+    import asyncio
+    class Channel:
+        closed = False
+        def on(self, *args): pass
+        def close(self): self.closed = True
+    async def scenario():
+        gate = asyncio.Event()
+        async def receive(job): await gate.wait()
+        channel = Channel(); framed = FramedChannel(channel, receive)
+        for i in range(3):
+            ident = f'{i:032x}'; body = json.dumps({'id':ident}).encode()
+            framed.on_message(json.dumps({'type':'start','id':ident,'bytes':len(body)}))
+            framed.on_message(b'D'+ident.encode()+body)
+            framed.on_message(json.dumps({'type':'end','id':ident}))
+        assert channel.closed and framed.inflight == 2
+        gate.set(); await asyncio.sleep(0)
+        assert framed.inflight == 0
+    asyncio.run(scenario())

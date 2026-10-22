@@ -27,6 +27,7 @@ class FramedChannel:
     def __init__(self, channel, receive):
         self.channel, self.receive = channel, receive
         self.buffers = {}
+        self.inflight = 0
         self.send_lock = asyncio.Lock()
         channel.on('message', self.on_message)
 
@@ -63,12 +64,21 @@ class FramedChannel:
                 result = json.loads(body)
                 if result.get('id') != ident:
                     raise ValueError('mismatch')
-                asyncio.create_task(self.receive(result))
+                if self.inflight >= 2:
+                    raise ValueError('too many requests')
+                self.inflight += 1
+                asyncio.create_task(self.deliver(result))
             else:
                 raise ValueError('control')
         except (ValueError, KeyError, TypeError, UnicodeError):
             self.buffers.clear()
             self.channel.close()
+
+    async def deliver(self, result):
+        try:
+            await self.receive(result)
+        finally:
+            self.inflight -= 1
 
     async def send(self, value):
         data = json.dumps(value, ensure_ascii=True, separators=(',', ':')).encode()
@@ -147,11 +157,14 @@ class RTCBridge:
             raise ValueError('P2P 仅支持文件和文字数据通道')
         pc = self.connection()
         executor = execute or self.execute
+        accepted = False
         @pc.on('datachannel')
         def channel_open(channel):
-            if channel.label != 'shengjian' or not channel.ordered:
+            nonlocal accepted
+            if accepted or channel.label != 'shengjian' or not channel.ordered or channel.maxRetransmits is not None or channel.maxPacketLifeTime is not None:
                 channel.close()
                 return
+            accepted = True
             async def receive(job):
                 if not executor:
                     channel.close()
