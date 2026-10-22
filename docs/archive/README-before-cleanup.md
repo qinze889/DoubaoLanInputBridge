@@ -355,4 +355,3 @@ C:\Users\0\AppData\Local\Programs\Python\Python312\python.exe scripts\import_pro
 - 如果网络不可用、接口限流或被防火墙拦截，翻译会失败；原“发送”功能不依赖该翻译接口。
 - “润色提示词”会把文本发送到 MiniMax；未配置 API Key、网络不可用、账户限流或余额不足时会失败。
 - 程序会将文字写入剪贴板并触发 `Ctrl+V`，使用前需要先让电脑目标输入框获得焦点。
-
