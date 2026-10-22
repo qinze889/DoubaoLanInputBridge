@@ -26,7 +26,7 @@ def verify_app(app, version):
     service = app/'Contents/Resources/bridge-service/bridge-service'
     cloudflared = service.parent/'cloudflared'
     for binary in (native, service, cloudflared):
-        subprocess.run(['lipo', '-verify_arch', 'arm64', str(binary)], check=True)
+        subprocess.run(['lipo', str(binary), '-verify_arch', 'arm64'], check=True)
     subprocess.run([str(cloudflared), '--version'], check=True)
     private_names = {'relay.json', 'access_key.txt', 'paired-devices.json', 'device.json',
                      'minimax_api_key.txt', 'service.log'}
