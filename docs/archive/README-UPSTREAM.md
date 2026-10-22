@@ -1,3 +1,5 @@
+> 历史归档：内容保留自整理前的仓库，版本和操作步骤以[当前项目首页](../../README.md)为准。
+
 ﻿# 声笺
 
 声笺是一款用于手机与 Windows 电脑互传文字、图片、视频和文件的本地工具。项目内部标识继续使用 `DoubaoLanInputBridge`，以兼容既有数据和升级路径。
@@ -327,7 +329,7 @@ $env:MINIMAX_MODEL = "MiniMax-M3"
 - 代码提示词
 - 写作提示词
 
-库结构见 [docs/prompt_library_schema.md](docs/prompt_library_schema.md)。
+库结构见 [docs/prompt_library_schema.md](../prompt_library_schema.md)。
 
 可选导入 GitHub `prompts.chat` 种子库：
 

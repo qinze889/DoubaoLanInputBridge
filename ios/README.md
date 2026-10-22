@@ -1,5 +1,7 @@
 # 声笺 iOS 原生客户端
 
+[项目首页](../README.md) · [开发与构建](../docs/DEVELOPMENT.md) · [CI 说明](../docs/CI.md)
+
 iOS 17+、SwiftUI。原生 `TabView`、`NavigationStack`、`Form`、`TextEditor`、`PhotosPicker`、系统文件选择器与分享面板；成功触感反馈、弹簧提示动效遵循“减弱动态效果”设置。通过 Mac 连接二维码配对，可发送文字（可选回车）、照片、视频和文件，也可下载 Mac 分享的内容。多个 Mac 连接分别保存于本机 Keychain，使用 `WhenUnlockedThisDeviceOnly`。
 
 ## 构建
@@ -26,6 +28,8 @@ swift run --package-path ios ClientChecks
 3. 连接验证成功后输入文字发送，或从照片和文件选择器上传；“来自 Mac”页下拉刷新下载内容。
 4. “设备”页切换 Mac。Mac 的 Quick Tunnel 域名变化后需重新扫码；旧连接可滑动删除。
 
-手机连接二维码与 `shengjian://pair` 机器共享邀请用途不同；后者用于 Mac 与 Mac 配对。HTTP 仅接受本机或 RFC1918 局域网地址，公网需要 HTTPS。跳转限制为原始协议、主机与端口。
+手机连接二维码与 `shengjian://pair` 机器共享邀请用途不同；后者用于 Mac / Windows 电脑之间配对。HTTP 仅接受本机或 RFC1918 局域网地址，公网需要 HTTPS。跳转限制为原始协议、主机与端口。
 
-本机仅有 Command Line Tools，已验证 Swift 语法、工程/plist 格式及 6 项客户端行为自检；未执行 iOS SDK 完整构建、模拟器或真机测试。仓库 CI 配置了完整 Xcode 构建与 XCTest，结果以 Actions 为准。相机、权限、照片/文件选择和设备互传仍需真机联调。
+当前原生客户端只接受根路径带 `?key=` 的局域网 / CF 连接链接；固定中转的 `/shengjian/d/.../#...` 页面与 1.4.0 的 P2P 请使用手机浏览器。
+
+仓库 CI 执行 Swift 单元测试和完整 Xcode 模拟器构建，结果见 [Apple clients](https://github.com/qinze889/DoubaoLanInputBridge/actions/workflows/apple-clients.yml)。相机、权限、照片/文件选择和设备互传仍需真机联调。
