@@ -7,3 +7,5 @@ pyobjc-framework-Quartz==12.2.2
 pyobjc-framework-ApplicationServices==12.2.2
 pyinstaller==6.22.3
 pytest==9.1.1
+
+aiortc==1.15.0

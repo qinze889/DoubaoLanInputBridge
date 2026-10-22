@@ -57,7 +57,8 @@ def load_json(path, default):
 
 def endpoint(value):
     parsed = urlsplit(str(value).strip())
-    if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
+    relay_path = re.fullmatch(r'/[A-Za-z0-9_-]+/(?:bridge|p2p)/[a-f0-9]{24}', parsed.path)
+    if parsed.username or parsed.password or parsed.query or parsed.fragment or (parsed.path not in ('','/') and not relay_path):
         raise ValueError('连接地址只能包含主机和端口')
     if parsed.scheme not in ('https','http') or not parsed.hostname:
         raise ValueError('请输入完整的 HTTPS 连接地址')
@@ -115,6 +116,7 @@ class PeerManager:
         self.jobs = {}
         self.upload_locks = {}
         self.advertised = ''
+        self.rtc_outgoing = None
 
     def snapshot(self):
         with self.lock:
@@ -191,11 +193,31 @@ class PeerManager:
         return ident,digest
 
     def request(self, peer, path, data):
+        if '/p2p/' in urlsplit(self.endpoint_provider()).path and '/p2p/' not in urlsplit(peer['endpoint']).path and path not in ('/peer/ping', '/peer/endpoint'):
+            raise ValueError('P2P 需接收方也选择 P2P 直连；不会通过服务器中转文件')
         stamp,nonce = str(int(time.time())),uuid.uuid4().hex
         digest = hashlib.sha256(data).hexdigest()
         headers = {'Content-Type':'application/octet-stream','X-Shengjian-Peer':self.device['id'],
                    'X-Shengjian-Time':stamp,'X-Shengjian-Nonce':nonce,'X-Shengjian-SHA256':digest,
                    'X-Shengjian-Signature':signature(peer['secret'],'POST',path,stamp,nonce,digest)}
+        if '/p2p/' in urlsplit(peer['endpoint']).path:
+            from rtc_bridge import RTCBridge
+            with self.lock:
+                if self.rtc_outgoing is None: self.rtc_outgoing = RTCBridge()
+            def signal(offer):
+                body = json.dumps(offer).encode()
+                stamp, nonce = str(int(time.time())), uuid.uuid4().hex
+                digest = hashlib.sha256(body).hexdigest()
+                auth = {'Content-Type': 'application/json', 'X-Shengjian-Peer': self.device['id'],
+                        'X-Shengjian-Time': stamp, 'X-Shengjian-Nonce': nonce, 'X-Shengjian-SHA256': digest,
+                        'X-Shengjian-Signature': signature(peer['secret'], 'POST', '/peer/p2p/offer', stamp, nonce, digest)}
+                return transport(peer['endpoint'], '/peer/p2p/offer', body, auth)['answer']
+            import base64
+            result = self.rtc_outgoing.request(peer['endpoint'], signal, {'id': uuid.uuid4().hex, 'method': 'POST',
+                'path': path, 'body': base64.b64encode(data).decode(), 'headers': headers, 'content_type': 'application/octet-stream'})
+            payload = json.loads(base64.b64decode(result['body']))
+            if result['status'] != 200 or not payload.get('ok'): raise ValueError(payload.get('error', 'P2P 请求未完成'))
+            return payload
         return transport(peer['endpoint'],path,data,headers)
 
     def receive(self, peer_id, path, body):

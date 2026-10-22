@@ -2,13 +2,15 @@
 
 ## 入口与边界
 
-固定入口：`https://server.xjiaoai.com/shengjian/`。这里是独立的设备管理后台，手机扫描每台电脑自己的二维码。
+当前后台部署在 **47.96.180.28（32 核、64GB）**，使用独立 `shengjian-relay` 用户、systemd 服务和数据目录。2026-10-22 从 47.114.61.223 迁出，保留原设备身份；旧生产机器已停用声笺服务，旧入口返回迁移提示。
+
+固定入口：`https://test.xjiaoai.com/shengjian/`。这里是独立的设备管理后台，手机扫描每台电脑自己的二维码。
 
 电脑通过 HTTPS 长轮询主动连接服务器，不要求电脑有公网 IP、端口映射或 Cloudflare 临时域名。手机请求由服务器临时转给电脑，实际粘贴由电脑执行后返回结果。设备离线会提示离线，超过等待时间会提示结果未知，连接恢复不会自动重放键盘输入。电脑后台需要一直运行。
 
 手机页面支持文字、图片、文件上传和电脑分享的下载。单文件建议小于 15 MiB，服务端请求/响应硬上限 16 MiB；更大文件仍使用已有的机器共享。手机发送前需要先在电脑上选中目标输入框。Mac 原生版由声笺主程序检查授权并执行键盘操作，Python 服务通过随机口令和 0600 私有 Unix socket 请求粘贴/回车，不需要独立服务的权限。Mac 仍须为声笺开启系统的设备控制和数据访问（辅助功能），服务器无法代替系统授权。本地临时签名更新后旧条目可能失效，需移除旧条目再添加当前应用。
 
-公网只开放手机所需路由；`/desktop/*`、任意目标 URL 和机器文件系统路径不可通过中转调用。原有 Mac/Windows 机器共享仍兼容，并保留其独立配对和 Cloudflare 通道。
+公网只开放手机所需路由；`/desktop/*`、任意目标 URL 和机器文件系统路径不可通过中转调用。机器共享有独立的单次邀请及每对设备 HMAC 验证；仅允许配对、状态和分块文件路由。P2P 使用经过身份验证的 SDP 握手，文件数据走 WebRTC DTLS/SCTP 通道。P2P 模式在服务器拒绝文件中转，不自动回退。
 
 ## 后台管理
 
@@ -19,7 +21,7 @@
 - Mac：`~/Library/Application Support/DoubaoLanInputBridge/relay.json`
 - Windows：`%LOCALAPPDATA%\DoubaoLanInputBridge\relay.json`
 
-配置包含敏感连接凭据，只保存在设备本地，不要提交到仓库或发送到聊天。新版桌面二维码会自动优先使用固定中转入口。Mac 的公网开关可以启停连接。
+配置包含敏感连接凭据，只保存在设备本地，不要提交到仓库或发送到聊天。1.4.0 起可在“连接方式”导入配置，并在固定公网、CF 隧道、P2P、局域网中明确选择一种。公网和 P2P 共用同一份设备配置。
 
 ## 独立部署
 
@@ -29,7 +31,7 @@
 python server/relay.py --data /var/lib/shengjian-relay --port 18766
 ```
 
-后端仅监听 `127.0.0.1:18766`。`server/shengjian-relay.service` 为独立低权限 systemd 服务，代码放 `/opt/shengjian-relay/current`，私有状态放 `/var/lib/shengjian-relay`。`server/nginx-location.conf` 仅添加到 `server.xjiaoai.com` 的现有 HTTPS server 中，检查 `nginx -t` 后平滑 reload。
+后端仅监听 `127.0.0.1:18766`。`server/shengjian-relay.service` 为独立低权限 systemd 服务，代码放 `/opt/shengjian-relay/current`，私有状态放 `/var/lib/shengjian-relay`。`server/nginx-location.conf` 仅添加到 `test.xjiaoai.com` 的现有 HTTPS server 中，检查 `nginx -t` 后平滑 reload。
 
 凭据文件权限为 0600、目录为 0700。手机文本和文件仅留在有上限的内存请求中，请求完成/超时后释放，不写入服务器数据库；桌面原有历史归档保持不变。服务重启会清除会话和未完成请求，不能将未知结果视作发送成功。备份仅需私有凭据文件，恢复后需重新登录后台。
 
@@ -37,7 +39,7 @@ python server/relay.py --data /var/lib/shengjian-relay --port 18766
 
 ## 验证与参考
 
-`tests/test_relay.py` 通过真实 HTTP 服务验证中文发送、超过 1 MiB 的文件及 SHA256、身份隔离、立即撤销、私有 API 阻断、离线/超时反馈和连接器重复请求不重复执行。Windows CI 继续构建真实 NSIS 安装包，验证全新安装/旧进程升级和双向多分块文件传输。CI 无法验证用户手机的蜂窝网络及 Mac 的系统授权，必须另做现场验证。
+`tests/test_rtc_bridge.py`、`tests/test_p2p_relay.py` 通过真实 ICE/DTLS/SCTP 通道验证大文件、中文、机器权限隔离，以及服务器仅参与握手。`tests/test_relay.py` 通过真实 HTTP 服务验证中文发送、超过 1 MiB 的文件及 SHA256、身份隔离、立即撤销、私有 API 阻断、离线/超时反馈和连接器重复请求不重复执行。Windows CI 继续构建真实 NSIS 安装包，验证全新安装/旧进程升级和双向多分块文件传输。CI 无法验证用户手机的蜂窝网络及 Mac 的系统授权，必须另做现场验证。
 
 参考 nanoMuse v1.0.5 的自托管 relay、设备主动连接和明确回执思路，独立实现本项目的 HTTP 合同，没有复制其业务源码：
 

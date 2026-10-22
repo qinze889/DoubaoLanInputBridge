@@ -1,3 +1,4 @@
+import ConnectionPanel from './ConnectionPanel'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { QRCodeSVG } from 'qrcode.react'
@@ -63,20 +64,17 @@ export default function MachinesDialog({ apiGet, apiPost, notify, onClose }: {
     })
   }
   const tunnel = snapshot?.network.tunnel
-  const publicOn = tunnel?.phase === 'starting' || tunnel?.phase === 'ready'
   const validInvitation = invitation && now < expiresAt
   const endpoint = snapshot?.network.endpoint || ''
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="dialog dialog-wide machines-dialog" role="dialog" aria-modal="true" aria-labelledby="machines-title">
       <header><div><h2 id="machines-title">机器共享</h2><p>Mac 与 Windows 配对后，直接互传文件。</p></div><button className="icon-button" title="关闭" onClick={onClose}><X size={19} /></button></header>
-      <div className="machine-network">
-        <div><strong>{snapshot?.device.name || '本机'}</strong><p>{tunnel?.ready ? '公网已连接' : tunnel?.phase === 'starting' ? '正在连接 Cloudflare…' : endpoint.startsWith('https:') ? '使用已配置的公网地址' : endpoint.includes('127.0.0.1') ? '请开启公网连接，或连接局域网' : '局域网连接 · 两台电脑需在同一网络'}</p></div>
-        <label><input type="checkbox" checked={publicOn} disabled={busy} onChange={(event) => { const enabled = event.target.checked; void run(async () => { await apiPost('/desktop/peers/tunnel', { enabled }) }) }} />公网连接</label>
-      </div>
+      <ConnectionPanel apiGet={apiGet} apiPost={apiPost} />
+      <div className="machine-network"><strong>{snapshot?.device.name || '本机'}</strong><span>文件使用接收方当前的连接方式</span></div>
       {tunnel?.error && <p className="machine-error" role="status">{tunnel.error}</p>}
       {error && <p className="machine-error" role="alert">{error}</p>}
       <div className="machine-pair-grid">
-        <section className="machine-panel"><h3>邀请一台电脑</h3><p>邀请仅使用一次，5 分钟内有效。跨网络时请在两端开启公网连接。</p>
+        <section className="machine-panel"><h3>邀请一台电脑</h3><p>邀请仅使用一次，5 分钟内有效。跨网络请用固定公网、CF 或 P2P；P2P 需两端都选择直连。</p>
           <button className="button secondary" disabled={busy || !snapshot || endpoint.includes('127.0.0.1') || tunnel?.phase === 'starting'} onClick={() => void run(async () => { const result = await apiPost<{ invitation: string; expires_in: number }>('/desktop/peers/invite'); setInvitation(result.invitation); setExpiresAt(Date.now() + result.expires_in * 1000) })}><Link size={16} />生成邀请</button>
           {validInvitation && <div className="machine-invitation"><QRCodeSVG value={invitation} size={128} /><button className="button secondary" onClick={() => void run(async () => { await navigator.clipboard.writeText(invitation); notify('邀请已复制') })}><ClipboardCopy size={16} />复制邀请 · {Math.ceil((expiresAt - now) / 1000)} 秒</button></div>}
           {invitation && !validInvitation && <p>邀请已过期，请重新生成。</p>}

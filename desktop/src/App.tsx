@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import './App.css'
 import MachinesDialog from './MachinesDialog'
+import ConnectionPanel, { type ConnectionState } from './ConnectionPanel'
 
 type RuntimeInfo = { running: boolean; port: number | null; key: string }
 type BridgeState = {
@@ -442,7 +443,7 @@ function App() {
         </section>
       </main>
 
-      {modal === 'qr' && bridge && <QrDialog bridge={bridge} onClose={() => setModal(null)} onRefresh={async () => { const result = await apiPost<{ key: string; mobile_url: string }>('/desktop/key/regenerate'); setRuntime((current) => ({ ...current, key: result.key })); await loadBridgeState(); notify('二维码和访问密钥已刷新') }} onOpen={() => void openUrl(bridge.local_url)} />}
+      {modal === 'qr' && bridge && <QrDialog apiGet={apiGet} apiPost={apiPost} bridge={bridge} onClose={() => setModal(null)} onRefresh={async () => { const result = await apiPost<{ key: string; mobile_url: string }>('/desktop/key/regenerate'); setRuntime((current) => ({ ...current, key: result.key })); await loadBridgeState(); notify('二维码和访问密钥已刷新') }} onOpen={() => void openUrl(bridge.local_url)} />}
       {modal === 'publish' && <PublishDialog onClose={() => setModal(null)} onPublish={async (text, paths) => { await apiPost('/desktop/publish', { text, paths }); notify('内容已发布到手机缓冲区'); setModal(null); await loadHistory(false) }} />}
       {modal === 'manage' && <ManageDialog apiGet={apiGet} apiPost={apiPost} currentVersion={bridge?.version || '0.12.2'} onClose={() => setModal(null)} notify={notify} />}
       {modal === 'machines' && <MachinesDialog apiGet={apiGet} apiPost={apiPost} notify={notify} onClose={() => setModal(null)} />}
@@ -461,9 +462,11 @@ function DialogFrame({ title, subtitle, onClose, children, wide = false }: { tit
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className={`dialog ${wide ? 'dialog-wide' : ''}`} role="dialog" aria-modal="true"><header><div><h2>{title}</h2><p>{subtitle}</p></div><button className="icon-button" title="关闭" onClick={onClose}><X size={19} /></button></header>{children}</section></div>
 }
 
-function QrDialog({ bridge, onClose, onRefresh, onOpen }: { bridge: BridgeState; onClose: () => void; onRefresh: () => Promise<void>; onOpen: () => void }) {
+function QrDialog({ bridge, apiGet, apiPost, onClose, onRefresh, onOpen }: { bridge: BridgeState; apiGet: <T>(path: string, params?: Record<string, string | number>) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; onClose: () => void; onRefresh: () => Promise<void>; onOpen: () => void }) {
   const [refreshing, setRefreshing] = useState(false)
-  return <DialogFrame title="扫码连接手机" subtitle="手机和电脑连接同一 Wi-Fi 后扫码。" onClose={onClose}><div className="qr-layout"><div className="qr-code"><QRCodeSVG value={bridge.mobile_url} size={256} level="M" /></div><div className="qr-status"><span className="status-dot" /><strong>连接码可用</strong><p>访问密钥不会显示在界面中。二维码刷新后，旧二维码立即失效。</p></div></div><footer className="dialog-actions"><button className="button secondary" onClick={onOpen}><MonitorSmartphone size={17} />打开本机页面</button><button className="button primary" disabled={refreshing} onClick={async () => { setRefreshing(true); await onRefresh(); setRefreshing(false) }}><RefreshCw className={refreshing ? 'spin' : ''} size={17} />刷新二维码</button></footer></DialogFrame>
+  const [connection, setConnection] = useState<ConnectionState | null>(null)
+  const url = connection?.ready ? connection.url : ''
+  return <DialogFrame title="扫码连接手机" subtitle="选择连接方式，待就绪后使用手机扫码。" onClose={onClose} wide><ConnectionPanel apiGet={apiGet} apiPost={apiPost} onState={setConnection} /><div className="qr-layout"><div className="qr-code">{url ? <QRCodeSVG value={url} size={232} level="M" /> : <span>连接就绪后显示二维码</span>}</div><div className="qr-status"><strong>{connection?.ready ? '连接码可用' : '等待连接'}</strong><p>每台机器使用独立连接码。同一域名按设备编号连接。</p><p>当前版本 {bridge.version} · 刷新后旧连接码失效。</p></div></div><footer className="dialog-actions"><button className="button secondary" onClick={onOpen}><MonitorSmartphone size={17} />打开本机页面</button><button className="button primary" disabled={refreshing} onClick={async () => { setRefreshing(true); try { await onRefresh() } finally { setRefreshing(false) } }}><RefreshCw className={refreshing ? 'spin' : ''} size={17} />刷新二维码</button></footer></DialogFrame>
 }
 
 function UpdateDialog({ update, installing, onClose, onInstall }: { update: UpdateResult; installing: boolean; onClose: () => void; onInstall: () => Promise<void> }) {
@@ -671,7 +674,8 @@ function ManageDialog({ apiGet, apiPost, currentVersion, onClose, notify }: { ap
   }
   return <DialogFrame title="管理" subtitle="低频配置集中在这里，日常使用无需进入。" onClose={onClose} wide>
     <div className="manage-sections">
-      <TunnelPanel apiGet={apiGet} apiPost={apiPost} notify={notify} />
+      <ConnectionPanel apiGet={apiGet} apiPost={apiPost} />
+      <details><summary>已有 Cloudflare 命名隧道（高级）</summary><TunnelPanel apiGet={apiGet} apiPost={apiPost} notify={notify} /></details>
       <section>
         <h3>更新与模型</h3>
         <div className="settings-row">

@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from relay_client import valid_route, MAX_BYTES
+from relay_client import valid_route, valid_peer_route, PEER_HEADERS, MAX_BYTES
 
 ROOT = Path(__file__).resolve().parent
 
@@ -51,6 +51,8 @@ class Relay(ThreadingHTTPServer):
         self.jobs = {}
         self.seen = {}
         self.capabilities = {}
+        self.modes = {}
+        self.pollers = {}
         self.sessions = {}
         self.failures = {}
         self.total = {'delivered': 0, 'failed': 0}
@@ -142,6 +144,35 @@ class Handler(BaseHTTPRequestHandler):
                 return hmac.compare_digest(digest(auth), row['token_hash'])
             return hmac.compare_digest(self.cookies().get('sj_phone_' + ident, ''), row['mobile_token'])
 
+    def forward_device(self, ident, route, method, body):
+        with self.server.changed:
+            if time.monotonic() - self.server.seen.get(ident, 0) >= 35:
+                self.error(503, '电脑离线，请打开声笺并检查网络')
+                return
+            if len(self.server.jobs) >= 16 or sum(len(j['request']['body']) for j in self.server.jobs.values()) + len(body) * 1.34 > 64 * 1024 * 1024:
+                self.error(429, '服务繁忙，请稍后重试')
+                return
+            job_id = secrets.token_hex(16)
+            job = {'device': ident, 'taken': False, 'event': threading.Event(), 'result': None,
+                   'request': {'id': job_id, 'method': method, 'path': route, 'body': base64.b64encode(body).decode(), 'content_type': self.headers.get('Content-Type', 'application/json'), 'headers': {k: self.headers[k] for k in PEER_HEADERS if self.headers.get(k)}}}
+            self.server.jobs[job_id] = job
+            self.server.changed.notify_all()
+        job['event'].wait(self.server.timeout)
+        with self.server.lock:
+            self.server.jobs.pop(job_id, None)
+            result = job['result']
+            self.server.total['delivered' if result and result[0] < 400 else 'failed'] += 1
+        if result:
+            if route.split('?')[0] == '/files/download':
+                from urllib.parse import parse_qs
+                name = (parse_qs(urlsplit(route).query).get('file') or ['download'])[0]
+                self.send(*result, download=name)
+            else:
+                self.send(*result)
+        else:
+            self.error(504, '电脑未返回结果，请在电脑确认后再发送；本次不会自动重发。')
+        return
+
     def do_GET(self):
         self.dispatch('GET')
 
@@ -164,7 +195,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = path[len(prefix):]
         if path == '/health' and method == 'GET':
-            self.send(200, {'ok': True, 'service': 'Shengjian relay', 'version': '1.3.0'})
+            self.send(200, {'ok': True, 'service': 'Shengjian relay', 'version': '1.4.0'})
             return
         if path == '/' and method == 'GET':
             self.send(200, (ROOT / 'console.html').read_bytes(), 'text/html; charset=utf-8')
@@ -205,7 +236,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.error(403, '设备已停用')
                     return
                 # The public origin is pinned by deployment, never taken from Host.
-                origin = os.environ.get('SHENGJIAN_ORIGIN', 'https://server.xjiaoai.com')
+                origin = os.environ.get('SHENGJIAN_ORIGIN', 'https://test.xjiaoai.com')
                 url = origin + prefix + '/d/' + ident + '/#' + row['mobile_token']
                 output = BytesIO()
                 qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage).save(output)
@@ -233,6 +264,25 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.changed.notify_all()
                 self.send(200, {'ok': True})
                 return
+        bridge = re.fullmatch(r'/(bridge|p2p)/([a-f0-9]{24})(/peer/.*)', path)
+        if bridge:
+            kind, ident, route = bridge.groups()
+            row = self.server.config['devices'].get(ident, {})
+            if not row.get('enabled'):
+                self.error(403, '目标设备未授权')
+                return
+            control = route in ('/peer/pair', '/peer/ping', '/peer/endpoint', '/peer/p2p/offer')
+            if method != 'POST' or (not valid_peer_route(method, route) and route != '/peer/p2p/offer'):
+                self.error(403, '此操作不能通过机器通道调用')
+                return
+            if not control and (kind == 'p2p' or self.server.modes.get(ident) == 'p2p'):
+                self.error(409, 'P2P 文件只通过直连传送，请刷新机器端点')
+                return
+            query = urlsplit(self.path).query
+            if query: route += '?' + query
+            body = self.read_body(65536 if control else MAX_BYTES)
+            self.forward_device(ident, route, method, body)
+            return
         match = re.fullmatch(r'/connector/([a-f0-9]{24})/(poll|result)', path)
         if match:
             ident, action = match.groups()
@@ -242,11 +292,21 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'poll' and method == 'GET':
                 from urllib.parse import parse_qs
                 can_paste = (parse_qs(urlsplit(self.path).query).get('can_paste') or ['0'])[0] == '1'
+                mode = (parse_qs(urlsplit(self.path).query).get('mode') or ['public'])[0]
+                session = (parse_qs(urlsplit(self.path).query).get('session') or [''])[0]
+                if session and not re.fullmatch(r'[a-f0-9]{32}', session): raise ValueError('session')
+                if mode not in ('public', 'p2p'): raise ValueError('mode')
                 deadline = time.monotonic() + 20
                 with self.server.changed:
+                    self.server.pollers[ident] = session
+                    self.server.changed.notify_all()
                     self.server.capabilities[ident] = can_paste
+                    self.server.modes[ident] = mode
                     self.server.seen[ident] = time.monotonic()
                     while True:
+                        if self.server.pollers.get(ident) != session:
+                            self.send(200, {'ok': True, 'requests': []})
+                            return
                         jobs = [j for j in self.server.jobs.values() if j['device'] == ident and not j['taken']]
                         if jobs or time.monotonic() >= deadline:
                             break
@@ -279,6 +339,9 @@ class Handler(BaseHTTPRequestHandler):
         match = re.fullmatch(r'/d/([a-f0-9]{24})(/.*)', path)
         if match:
             ident, subpath = match.groups()
+            if subpath == '/p2p.js' and method == 'GET':
+                self.send(200, (ROOT / 'p2p.js').read_bytes(), 'text/javascript; charset=utf-8')
+                return
             if subpath == '/' and method == 'GET':
                 self.send(200, (ROOT / 'phone.html').read_bytes(), 'text/html; charset=utf-8')
                 return
@@ -297,7 +360,14 @@ class Handler(BaseHTTPRequestHandler):
                 with self.server.lock:
                     row = self.server.config['devices'][ident]
                     self.send(200, {'ok': True, 'name': row['name'], 'online': time.monotonic() - self.server.seen.get(ident, 0) < 35,
-                                    'can_paste': self.server.capabilities.get(ident, False)})
+                                    'can_paste': self.server.capabilities.get(ident, False),
+                                    'connection_mode': self.server.modes.get(ident, 'public')})
+                return
+            if subpath == '/p2p/offer' and method == 'POST':
+                if self.server.modes.get(ident) != 'p2p':
+                    self.error(409, '电脑未选择 P2P 模式')
+                    return
+                self.forward_device(ident, '/p2p/offer', method, self.read_body(65536))
                 return
             if subpath.startswith('/r/'):
                 route = subpath[2:]
@@ -307,36 +377,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not valid_route(method, route):
                     self.error(403, '此操作不允许通过公网调用')
                     return
+                if self.server.modes.get(ident) == 'p2p':
+                    self.error(409, 'P2P 模式仅允许设备直连传送内容')
+                    return
                 if route.split('?')[0] == '/health':
                     self.error(403, '请使用设备状态接口')
                     return
                 body = self.read_body() if method == 'POST' else b''
-                with self.server.changed:
-                    if time.monotonic() - self.server.seen.get(ident, 0) >= 35:
-                        self.error(503, '电脑离线，请打开声笺并检查网络')
-                        return
-                    if len(self.server.jobs) >= 16 or sum(len(j['request']['body']) for j in self.server.jobs.values()) + len(body) * 1.34 > 64 * 1024 * 1024:
-                        self.error(429, '服务繁忙，请稍后重试')
-                        return
-                    job_id = secrets.token_hex(16)
-                    job = {'device': ident, 'taken': False, 'event': threading.Event(), 'result': None,
-                           'request': {'id': job_id, 'method': method, 'path': route, 'body': base64.b64encode(body).decode(), 'content_type': self.headers.get('Content-Type', 'application/json')}}
-                    self.server.jobs[job_id] = job
-                    self.server.changed.notify_all()
-                job['event'].wait(self.server.timeout)
-                with self.server.lock:
-                    self.server.jobs.pop(job_id, None)
-                    result = job['result']
-                    self.server.total['delivered' if result and result[0] < 400 else 'failed'] += 1
-                if result:
-                    if route.split('?')[0] == '/files/download':
-                        from urllib.parse import parse_qs
-                        name = (parse_qs(urlsplit(route).query).get('file') or ['download'])[0]
-                        self.send(*result, download=name)
-                    else:
-                        self.send(*result)
-                else:
-                    self.error(504, '电脑未返回结果，请在电脑确认后再发送；本次不会自动重发。')
+                self.forward_device(ident, route, method, body)
                 return
         self.error(404, '不存在的入口')
 

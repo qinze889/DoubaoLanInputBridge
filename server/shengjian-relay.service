@@ -9,7 +9,7 @@ User=shengjian-relay
 Group=shengjian-relay
 WorkingDirectory=/opt/shengjian-relay/current
 ExecStart=/opt/shengjian-relay/venv/bin/python server/relay.py --data /var/lib/shengjian-relay --port 18766
-Environment=SHENGJIAN_ORIGIN=https://server.xjiaoai.com
+Environment=SHENGJIAN_ORIGIN=https://test.xjiaoai.com
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
@@ -19,6 +19,7 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/shengjian-relay
 UMask=0077
 MemoryMax=512M
+CPUQuota=100%
 TasksMax=80
 
 [Install]

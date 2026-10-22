@@ -31,7 +31,7 @@ def main():
             # NSIS requires /D last, without quotes even when its path has spaces.
             subprocess.run(f'"{installer}" /S /D={install}', check=True, timeout=120)
             assert hashlib.sha256(service.read_bytes()).digest() == expected, 'Installed service does not match the built payload'
-            assert (install / 'VERSION').read_text().strip() == '1.3.0'
+            assert (install / 'VERSION').read_text().strip() == '1.4.0'
 
         install_package()
         previous = Service(service, root / 'previous-data')
