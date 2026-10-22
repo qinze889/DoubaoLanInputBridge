@@ -1,10 +1,20 @@
-﻿# 声笺
+> 历史归档：内容保留自整理前的仓库，版本和操作步骤以[当前项目首页](../../README.md)为准。
+
+# 声笺
+
+## macOS 与 iOS（源码适配）
+
+- [macOS 安装、构建与 Cloudflare 公网二维码](../README-macOS.md)：SwiftUI 原生界面、菜单栏、交互动效与多台 Mac 经各自隧道互传文件。
+- [iOS 原生客户端与 Xcode 工程](../../ios/README.md)：扫码、文字发送、照片/文件上传、下载分享及多 Mac 连接。
+- [多机器共享说明](../MACHINE-SHARING.md)与[验证记录](validation/MAC-VALIDATION-1.2.md)。
+- Windows 1.3.0 新增“机器共享”，可与 Mac 1.2.0 及以上版本双向传文件；Tauri 安装版和 Qt 便携版均支持，完整安装包内置 Cloudflare 临时隧道。
+
 
 声笺是一款用于手机与 Windows 电脑互传文字、图片、视频和文件的本地工具。项目内部标识继续使用 `DoubaoLanInputBridge`，以兼容既有数据和升级路径。
 
 ## 当前版本
 
-- 版本：`1.0.0`
+- Windows 版本：`1.3.0`
 - 新增：桌面端「管理」内新增「公网隧道」区，可直接配置并启停 Cloudflare 隧道。自动探测本机 `~/.cloudflared/*/config.yml` 里的隧道名与公网域名，点一下即可填入；隧道连通时二维码使用公网地址，断开时自动回落局域网。不再依赖手写 `public_url.txt` / `public_probe.txt` 或额外的计划任务脚本。
 - 新增：隧道由声笺托管时记录自身进程号，停止只作用于自己拉起的进程；检测到外部已在运行的隧道时显示为「外部托管」，不重复拉起第二个连接器。
 - 调整：更新源默认改为 GitHub 发行版（`releases/latest`），并用发行版资产自带的 SHA256 摘要校验，不必再手工维护 `update.json`。启动时不再无条件把更新源覆写回局域网地址。
@@ -104,6 +114,10 @@
 - 调整：健康检查增加版本、进程号和 exe 路径，APP 启动/隐藏/退出写入日志；托盘不可用时关闭窗口会最小化而不是直接退出。
 - 修复：关闭窗口后程序消失的问题；关闭按钮改为最小化保活，托盘点击事件改由 Tk 主循环安全处理。
 - 调整：Web 页背景使用 `assets/paper000.jpg` 纸纹图片，并加入轻微漂移和光影动效。
+
+## 固定公网入口与后台
+
+参考 nanoMuse 的设备中转方式，新增可自托管的 [47 服务器后台](../SERVER-RELAY.md)：电脑主动连接、固定 HTTPS 手机入口、设备在线状态、二维码、停用设备以及真实发送结果。
 
 ## 地址含义
 
@@ -327,7 +341,7 @@ $env:MINIMAX_MODEL = "MiniMax-M3"
 - 代码提示词
 - 写作提示词
 
-库结构见 [docs/prompt_library_schema.md](docs/prompt_library_schema.md)。
+库结构见 [docs/prompt_library_schema.md](../prompt_library_schema.md)。
 
 可选导入 GitHub `prompts.chat` 种子库：
 
@@ -341,3 +355,4 @@ C:\Users\0\AppData\Local\Programs\Python\Python312\python.exe scripts\import_pro
 - 如果网络不可用、接口限流或被防火墙拦截，翻译会失败；原“发送”功能不依赖该翻译接口。
 - “润色提示词”会把文本发送到 MiniMax；未配置 API Key、网络不可用、账户限流或余额不足时会失败。
 - 程序会将文字写入剪贴板并触发 `Ctrl+V`，使用前需要先让电脑目标输入框获得焦点。
+

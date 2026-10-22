@@ -1,4 +1,8 @@
-# 声笺 macOS 版 1.3.0
+# 声笺 macOS 版
+
+[项目首页](../README.md) · [文档导航](README.md) · [CI 说明](CI.md)
+
+本页安装步骤以已发布的 1.3.0 为准；1.4.0 的四种连接方式统一选择入口见 [PR #3](https://github.com/qinze889/DoubaoLanInputBridge/pull/3)。
 
 基于 [qinze889/DoubaoLanInputBridge](https://github.com/qinze889/DoubaoLanInputBridge) 1.0.0 的 macOS 适配。通过 Cloudflare 公网或同一 Wi-Fi 扫码，在手机输入（包括使用手机的豆包语音输入法）后发送，Mac 将内容粘贴到当前输入框。手机无需安装配套 App。
 
@@ -21,7 +25,7 @@
 
 - 中文、Emoji、多行文字剪贴板与原生 ⌘V、可选回车。
 - 图片、视频、PDF、Word 和普通文件传输。图片同时写入文件 URL 和位图剪贴板类型，兼容 Finder 与常见聊天输入框；具体粘贴效果取决于目标应用。
-- 二维码配对、刷新密钥、旧二维码失效、端口冲突自动顺延。
+- 二维码配对、局域网 / CF 访问密钥刷新、端口冲突自动顺延。固定公网手机凭据由后台管理，撤销请停用相应设备。
 - 电脑向手机分享文字和多个文件，手机端下载。
 - 历史归档、搜索、分类、分页，Finder 打开目录。
 - 原生 SwiftUI、SF Symbols、分组卡片、系统开关、菜单栏、设置和退出快捷键。
@@ -29,11 +33,11 @@
 - 手机页面 iOS 风格与深色模式。
 - 识别活动网卡，支持 10.*、172.16–31.*、192.168.*；无局域网时明确提示。
 - 请求日志隐藏配对密钥；运行数据与凭据不打入应用安装包。
-- 保留原手机页面的翻译和 MiniMax 润色功能。翻译会调用 MyMemory；润色需在「设置 → 智能润色」设置自己的 MiniMax API Key。
+- 局域网 / CF 手机页面保留翻译和 MiniMax 润色功能。翻译会调用 MyMemory；润色需在「设置 → 智能润色」设置自己的 MiniMax API Key。
 
 ## 多机器共享与 iOS 客户端
 
-“机器共享”可以添加多台 Mac，经各自的 Cloudflare 隧道互传文件，支持进度、短暂断线重试、SHA256 校验和撤销配对。详见 [机器共享说明](MACHINE-SHARING.md)。
+“机器共享”可以添加多台 Mac 或 Windows，经各自的 Cloudflare 隧道互传文件，支持进度、短暂断线重试、SHA256 校验和撤销配对。详见 [机器共享说明](MACHINE-SHARING.md)。
 
 原生 iOS 客户端与 Xcode 工程在 [ios/](../ios/README.md)，支持扫码、多 Mac 连接、文字、照片、文件与下载分享。交互采用原生 SwiftUI 控件，并为卡片、二维码切换、状态提示与进度加入遵循系统减弱动态效果设置的动效。
 
@@ -83,8 +87,8 @@ DOUBAO_BRIDGE_DATA_DIR="$(mktemp -d)" QT_QPA_PLATFORM=offscreen \
 - `src/ios_mobile.py`：手机网页 iOS 风格与深色模式。
 - `src/qt_app.py`：保留的旧 Qt 界面参考。
 - `scripts/build_macos.sh`、`packaging/mac-service.spec`、`packaging/Info-native.plist`：Mac 构建与应用声明。
-- `docs/README-UPSTREAM.md`：原项目说明，包含 Windows 历史内容，不作为本 Mac 版运行指南。
-- `docs/MAC-VALIDATION.md`：构建验证记录。
+- `docs/archive/README-UPSTREAM.md`：原项目说明，包含 Windows 历史内容，不作为本 Mac 版运行指南。
+- `docs/archive/validation/MAC-VALIDATION-1.2.md`：构建验证记录。
 
 上游源码通过公开的 main 分支归档获取，获取日期 2026-10-21。上游提供的品牌、图标和源代码保留原作者归属；快照未附带 LICENSE 文件。本分支提供 macOS 与 iOS 适配。
 
