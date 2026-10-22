@@ -59,9 +59,11 @@ jobs:
           Copy-Item dist/Shengjian-windows-x64.exe dist/windows/
           Copy-Item docs/cloudflared-LICENSE dist/windows/cloudflared-LICENSE.txt
           Copy-Item docs/INSTALL-Windows.txt dist/windows/
+          @{version=(Get-Content VERSION).Trim(); source_commit=(git rev-parse HEAD); workflow_run=$env:GITHUB_RUN_ID; architecture='x64'; installed_upgrade_and_transfer_verified=$true; frozen_p2p_verified=$true} | ConvertTo-Json | Set-Content dist/windows/Windows-build.json -Encoding utf8
           Get-ChildItem dist/windows -File | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content dist/windows/SHA256SUMS.txt -Encoding utf8
       - uses: actions/upload-artifact@v4
         with:
           name: Shengjian-windows-x64
           path: dist/windows/
+          if-no-files-found: error
           retention-days: 30

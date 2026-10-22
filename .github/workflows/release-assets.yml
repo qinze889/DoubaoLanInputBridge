@@ -1,98 +1,78 @@
-name: Publish verified Windows assets
+name: Publish verified release assets
 on:
   workflow_dispatch:
     inputs:
       tag:
         description: Existing draft release tag
         required: true
-        default: v1.3.0
+        default: v1.4.0
         type: string
       windows_run_id:
-        description: Successful Windows client workflow run
+        description: Successful Windows client run of the tagged commit
+        required: true
+        type: string
+      apple_run_id:
+        description: Successful Apple clients run of the tagged commit
         required: true
         type: string
 permissions:
   contents: write
   actions: read
+concurrency:
+  group: release-assets-${{ inputs.tag }}
+  cancel-in-progress: false
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
       REL_TAG: ${{ inputs.tag }}
       WIN_RUN_ID: ${{ inputs.windows_run_id }}
+      APPLE_RUN_ID: ${{ inputs.apple_run_id }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - name: Validate release inputs
+      - name: Validate draft and run inputs
         shell: bash
         run: |
           [[ "$REL_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$WIN_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$APPLE_RUN_ID" =~ ^[0-9]+$ ]]
           test "$(gh release view "$REL_TAG" --json isDraft --jq .isDraft)" = true
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify tested source matches release
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Read source workflow results
         shell: bash
         run: |
           gh api "repos/$GH_REPO/actions/runs/$WIN_RUN_ID" > /tmp/windows-run.json
-          python - <<'PY'
-          import json, os, re, subprocess
-          from pathlib import Path
-          run = json.loads(Path('/tmp/windows-run.json').read_text())
-          assert run['status'] == 'completed' and run['conclusion'] == 'success'
-          assert run['path'] == '.github/workflows/windows-client.yml'
-          source = run['head_sha']
-          assert re.fullmatch(r'[a-f0-9]{40}', source)
-          subprocess.run(['git', 'fetch', 'origin', source], check=True)
-          paths = ['src', 'assets', 'desktop', 'scripts', 'packaging', 'VERSION',
-                   'requirements-windows.txt', '.github/workflows/windows-client.yml']
-          for path in paths:
-              actual = subprocess.check_output(['git','rev-parse',f'{source}:{path}']).strip()
-              expected = subprocess.check_output(['git','rev-parse',f'HEAD:{path}']).strip()
-              assert actual == expected, 'Untested release input: ' + path
-          Path('/tmp/source-commit').write_text(source)
-          PY
+          gh api "repos/$GH_REPO/actions/runs/$APPLE_RUN_ID" > /tmp/apple-run.json
       - uses: actions/download-artifact@v4
         with:
           name: Shengjian-windows-x64
           path: verified-windows
           run-id: ${{ inputs.windows_run_id }}
           github-token: ${{ github.token }}
-      - name: Verify checksums and stage recommended installer
+      - uses: actions/download-artifact@v4
+        with:
+          name: Shengjian-macos-arm64
+          path: verified-macos
+          run-id: ${{ inputs.apple_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify exact source, checksums and stage all release assets
         shell: bash
         run: |
-          python - <<'PY'
-          import hashlib, json, os, shutil, subprocess
-          from pathlib import Path
-          root, output = Path('verified-windows'), Path('release-assets')
-          output.mkdir()
-          for line in (root/'SHA256SUMS.txt').read_text(encoding='utf-8-sig').splitlines():
-              digest, name = line.split(None, 1)
-              name = name.strip()
-              assert Path(name).name == name
-              assert hashlib.sha256((root/name).read_bytes()).hexdigest() == digest.lower()
-          version = os.environ['REL_TAG'][1:]
-          installer = root/'Shengjian-windows-x64-setup.exe'
-          assert installer.stat().st_size > 1_000_000
-          shutil.copy2(installer, output/f'Shengjian-{version}-windows-x64-setup.exe')
-          for name in ['cloudflared-LICENSE.txt', 'INSTALL-Windows.txt']:
-              shutil.copy2(root/name, output/name)
-          sums = []
-          for path in sorted(output.iterdir()):
-              sums.append(hashlib.sha256(path.read_bytes()).hexdigest()+'  '+path.name)
-          (output/'SHA256SUMS-Windows.txt').write_text('\n'.join(sums)+'\n')
-          metadata = {'version':version, 'tested_source_commit':Path('/tmp/source-commit').read_text(),
-                      'release_commit':subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(),
-                      'windows_workflow_run':int(os.environ['WIN_RUN_ID']),
-                      'installer_sha256':hashlib.sha256(installer.read_bytes()).hexdigest(),
-                      'installer_bytes':installer.stat().st_size,
-                      'installed_upgrade_and_transfer_verified':True}
-          (output/'Windows-build.json').write_text(json.dumps(metadata,indent=2)+'\n')
-          PY
-      - name: Upload to draft release
+          python scripts/release_assets.py --tag "$REL_TAG" --repository "$GH_REPO" \
+            --windows-run /tmp/windows-run.json --apple-run /tmp/apple-run.json \
+            --windows-run-id "$WIN_RUN_ID" --apple-run-id "$APPLE_RUN_ID" \
+            --windows verified-windows --macos verified-macos --output release-assets
+      - name: Upload verified assets to draft release
         shell: bash
-        run: gh release upload "$REL_TAG" release-assets/* --clobber
+        run: |
+          test "$(gh release view "$REL_TAG" --json isDraft --jq .isDraft)" = true
+          gh release upload "$REL_TAG" release-assets/* --clobber

@@ -2,7 +2,7 @@
 
 [文档导航](README.md) · [当前版本](../CHANGELOG.md)
 
-本文包含 1.4.0 / [PR #3](https://github.com/qinze889/DoubaoLanInputBridge/pull/3) 的四种连接方式；正式 Release 仍为 1.3.0。1.3.0 可使用 Cloudflare 和局域网共享，固定公网机器端点与 P2P 需使用新版。
+本文面向 1.4.0 的四种连接方式。1.3.0 可使用 Cloudflare 和局域网共享，固定公网机器端点与 P2P 需使用新版。
 
 每台 Mac 或 Windows 运行声笺。1.4.0 提供固定公网、CF 隧道、P2P 直连和局域网四种连接方式。可以同时配对多台机器，逐台选择目标发送文件。支持 Mac↔Windows、Windows↔Windows 和 Mac↔Mac。
 

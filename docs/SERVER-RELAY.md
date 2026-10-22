@@ -6,7 +6,7 @@
 
 当前后台部署在 **47.96.180.28（32 核、64GB）**，使用独立 `shengjian-relay` 用户、systemd 服务和数据目录。2026-10-22 从 47.114.61.223 迁出，保留原设备身份；旧生产机器已停用声笺服务，旧入口返回迁移提示。
 
-四方式统一入口仍在 1.4.0 / [PR #3](https://github.com/qinze889/DoubaoLanInputBridge/pull/3)，既有 1.3.0 固定公网连接器可继续使用新域名。自行部署时，将 systemd 中的 `SHENGJIAN_ORIGIN` 与 Nginx server_name 设置为自己的有效 HTTPS 域名。
+1.4.0 提供四方式统一入口，既有 1.3.0 固定公网连接器可继续使用新域名。自行部署时，将 systemd 中的 `SHENGJIAN_ORIGIN` 与 Nginx server_name 设置为自己的有效 HTTPS 域名。
 
 固定入口：`https://test.xjiaoai.com/shengjian/`。这里是独立的设备管理后台，手机扫描每台电脑自己的二维码。
 
