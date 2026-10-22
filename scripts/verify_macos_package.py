@@ -22,6 +22,8 @@ def verify_app(app, version):
     info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
     assert info['CFBundleShortVersionString'] == version, 'Bundle version mismatch'
     assert info['CFBundleIdentifier'] == 'com.doubaolaninputbridge.mac'
+    assert any('public.item' in item.get('LSItemContentTypes', []) and item.get('LSHandlerRank') == 'Alternate'
+               for item in info.get('CFBundleDocumentTypes', [])), 'Open-file receiver is missing'
     native = app/'Contents/MacOS/Shengjian'
     service = app/'Contents/Resources/bridge-service/bridge-service'
     cloudflared = service.parent/'cloudflared'
