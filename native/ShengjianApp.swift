@@ -2,6 +2,89 @@ import SwiftUI
 import AppKit
 import CoreImage.CIFilterBuiltins
 import UniformTypeIdentifiers
+import ApplicationServices
+import Darwin
+
+// Keyboard events belong to the app the user authorizes, not its Python helper.
+// The private socket only accepts permission checks and the two supported keys.
+final class NativeInputBroker: @unchecked Sendable {
+    let path = "/tmp/shengjian-input-\(UUID().uuidString).sock"
+    let token = UUID().uuidString + UUID().uuidString
+    private var descriptor: Int32 = -1
+    var environment: [String:String] { ["SHENGJIAN_NATIVE_INPUT_SOCKET":path, "SHENGJIAN_NATIVE_INPUT_TOKEN":token] }
+
+    init() throws {
+        descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw POSIXError(.EIO) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        let bytes = Array(path.utf8CString)
+        guard bytes.count <= MemoryLayout.size(ofValue:address.sun_path) else { stop(); throw POSIXError(.ENAMETOOLONG) }
+        withUnsafeMutableBytes(of:&address.sun_path) { target in bytes.withUnsafeBytes { target.copyBytes(from:$0) } }
+        let result = withUnsafePointer(to:&address) { pointer in
+            pointer.withMemoryRebound(to:sockaddr.self,capacity:1) { Darwin.bind(descriptor,$0,socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard result == 0, Darwin.chmod(path,0o600) == 0, Darwin.listen(descriptor,8) == 0 else { stop(); throw POSIXError(.EIO) }
+        DispatchQueue.global(qos:.userInitiated).async { [weak self] in self?.serve() }
+    }
+    func stop() {
+        if descriptor >= 0 { Darwin.shutdown(descriptor,SHUT_RDWR); Darwin.close(descriptor); descriptor = -1 }
+        Darwin.unlink(path)
+    }
+    deinit { stop() }
+
+    private func serve() {
+        while descriptor >= 0 {
+            let client = Darwin.accept(descriptor,nil,nil)
+            if client < 0 { return }
+            var timeout = timeval(tv_sec:2,tv_usec:0)
+            setsockopt(client,SOL_SOCKET,SO_RCVTIMEO,&timeout,socklen_t(MemoryLayout<timeval>.size))
+            var noSignal: Int32 = 1
+            setsockopt(client,SOL_SOCKET,SO_NOSIGPIPE,&noSignal,socklen_t(MemoryLayout<Int32>.size))
+            var input = Data(), buffer = [UInt8](repeating:0,count:1024)
+            while input.count < 8192 && !input.contains(10) {
+                let size = Darwin.read(client,&buffer,buffer.count)
+                if size <= 0 { break }
+                input.append(contentsOf:buffer.prefix(size))
+            }
+            var reply: [String:Any] = ["ok":false,"error":"本机输入请求被拒绝"]
+            if let request = try? JSONSerialization.jsonObject(with:input) as? [String:Any],
+               request["token"] as? String == token {
+                reply = DispatchQueue.main.sync { self.perform(request) }
+            }
+            if var output = try? JSONSerialization.data(withJSONObject:reply) {
+                output.append(10)
+                output.withUnsafeBytes { buffer in
+                    var sent = 0
+                    while sent < buffer.count {
+                        let size = Darwin.write(client,buffer.baseAddress!.advanced(by:sent),buffer.count-sent)
+                        if size <= 0 { break }
+                        sent += size
+                    }
+                }
+            }
+            Darwin.close(client)
+        }
+    }
+    private func perform(_ request:[String:Any]) -> [String:Any] {
+        let operation = request["operation"] as? String ?? ""
+        if operation == "permission" { return ["ok":true,"allowed":AXIsProcessTrusted()] }
+        if operation == "request-permission" {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String:true] as CFDictionary
+            AXIsProcessTrustedWithOptions(options)
+            return ["ok":true]
+        }
+        guard operation == "paste" || operation == "enter" else { return ["ok":false,"error":"不支持的输入操作"] }
+        guard AXIsProcessTrusted() else { return ["ok":false,"error":"请在系统设置的设备控制和数据访问（辅助功能）中重新开启声笺。"] }
+        let key:CGKeyCode = operation == "paste" ? 9 : 36
+        guard let down = CGEvent(keyboardEventSource:nil,virtualKey:key,keyDown:true),
+              let up = CGEvent(keyboardEventSource:nil,virtualKey:key,keyDown:false) else { return ["ok":false,"error":"无法创建键盘事件"] }
+        if operation == "paste" { down.flags = .maskCommand; up.flags = .maskCommand }
+        down.post(tap:.cghidEventTap); up.post(tap:.cghidEventTap)
+        return ["ok":true]
+    }
+}
 
 private typealias ViewState<Value> = SwiftUI.State<Value>
 
@@ -71,6 +154,7 @@ struct Transfer: Identifiable {
     @Published var showInvitation = false
     private var retryFiles: [String: (String, [URL])] = [:]
     private var process: Process?
+    private var nativeInput: NativeInputBroker?
     private var timer: Timer?
     private var port = 0
     private var key = ""
@@ -106,10 +190,13 @@ struct Transfer: Identifiable {
     }
 
     func launchService() {
+        do { nativeInput = try NativeInputBroker() }
+        catch { report("无法启动本机输入服务，请重新打开声笺。"); return }
         let executable = Bundle.main.resourceURL!.appendingPathComponent("bridge-service/bridge-service")
         let child = Process(); let output = Pipe()
         child.executableURL = executable
         child.environment = ProcessInfo.processInfo.environment
+        child.environment?.merge(nativeInput!.environment) { _, new in new }
         child.standardOutput = output
         child.standardError = FileHandle.nullDevice
         child.terminationHandler = { [weak self] _ in Task { @MainActor in self?.online = false; self?.lastError = "本机服务已停止，请重新打开应用。" } }
@@ -304,7 +391,7 @@ struct Transfer: Identifiable {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         NSWorkspace.shared.open(folder)
     }
-    func shutdown() { timer?.invalidate(); if let process, process.isRunning { process.terminate(); process.waitUntilExit() } }
+    func shutdown() { timer?.invalidate(); nativeInput?.stop(); if let process, process.isRunning { process.terminate(); process.waitUntilExit() } }
 }
 
 struct Card<Content:View>:View {

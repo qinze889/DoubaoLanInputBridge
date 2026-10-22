@@ -4,7 +4,10 @@ All pasteboard operations finish synchronously, including on HTTP worker threads
 No AppleScript, shell interpolation or Automation permission is needed.
 """
 import ipaddress
+import json
+import os
 import re
+import socket
 import subprocess
 import threading
 from pathlib import Path
@@ -24,12 +27,44 @@ PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
 ))
 
 
+def native_input(request):
+    path = os.environ.get('SHENGJIAN_NATIVE_INPUT_SOCKET', '')
+    if not path:
+        return None
+    request = {**request, 'token': os.environ.get('SHENGJIAN_NATIVE_INPUT_TOKEN', '')}
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(3)
+            connection.connect(path)
+            connection.sendall(json.dumps(request).encode() + b'\n')
+            response = bytearray()
+            while b'\n' not in response and len(response) < 8192:
+                part = connection.recv(1024)
+                if not part:
+                    break
+                response.extend(part)
+            result = json.loads(response)
+            if not result.get('ok'):
+                raise RuntimeError(result.get('error', '本机输入服务拒绝了请求'))
+            return result
+    except (OSError, ValueError) as exc:
+        raise RuntimeError('声笺原生输入服务未响应，请退出后重新打开应用。') from exc
+
+
 def accessibility_enabled() -> bool:
+    if os.environ.get('SHENGJIAN_NATIVE_INPUT_SOCKET'):
+        try:
+            return bool(native_input({'operation':'permission'}).get('allowed'))
+        except RuntimeError:
+            return False
     return bool(AXIsProcessTrusted())
 
 
 def request_accessibility() -> None:
-    AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+    if os.environ.get('SHENGJIAN_NATIVE_INPUT_SOCKET'):
+        native_input({'operation':'request-permission'})
+    else:
+        AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
     open_settings("accessibility")
 
 
@@ -68,6 +103,12 @@ def set_clipboard_files(paths: list[Path]) -> None:
 
 def _key_press(keycode: int, flags: int = 0) -> None:
     require_accessibility()
+    if os.environ.get('SHENGJIAN_NATIVE_INPUT_SOCKET'):
+        operation = 'paste' if keycode == 9 and flags == kCGEventFlagMaskCommand else 'enter' if keycode == 36 and flags == 0 else ''
+        if not operation:
+            raise RuntimeError('不支持的输入操作')
+        native_input({'operation': operation})
+        return
     down = CGEventCreateKeyboardEvent(None, keycode, True)
     up = CGEventCreateKeyboardEvent(None, keycode, False)
     if down is None or up is None:
