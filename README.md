@@ -15,7 +15,7 @@
 | Windows | [Release 中的 `windows-x64-setup.exe`](https://github.com/qinze889/DoubaoLanInputBridge/releases/latest) | Tauri 安装版；Qt 便携版按需二选一 |
 | iPhone / iPad | 手机浏览器扫码，或查看 [iOS 源码](ios/README.md) | 原生客户端需要自行用 Xcode 签名构建 |
 
-当前已发布版本为 [1.3.0](https://github.com/qinze889/DoubaoLanInputBridge/releases/tag/v1.3.0)。四种连接方式等 **1.4.0 改动在 [PR #3](https://github.com/qinze889/DoubaoLanInputBridge/pull/3)**，尚未发布为 Release；不要把 Actions 测试附件当作正式发行版。
+当前版本为 **1.4.0**，Mac / Windows 提供四种连接方式的统一入口。安装包与源码包见 [1.4.0 发行页](https://github.com/qinze889/DoubaoLanInputBridge/releases/tag/v1.4.0)；正式发行状态以 Releases 为准，Actions 附件用于测试。
 
 ## 开始使用
 
@@ -35,7 +35,7 @@
 | 局域网 | 同一 Wi-Fi / 内网 | 已支持 |
 | Cloudflare 隧道 | 跨网络，使用临时 HTTPS 域名 | 已支持，桌面安装包内置 cloudflared |
 | 固定公网 | 自托管服务器、固定域名、每台机器独立连接码 | 已支持，需导入本机设备配置 |
-| P2P 直连 | 服务器只参与握手，内容走 WebRTC 数据通道 | 1.4.0 / PR #3；取决于 NAT 和 UDP 网络条件 |
+| P2P 直连 | 服务器只参与握手，内容走 WebRTC 数据通道 | 1.4.0；取决于 NAT 和 UDP 网络条件 |
 
 1.4.0 为四种方式提供统一选择入口。当前 Mac / Windows 实机之间的 P2P 握手成功、直连超时，默认使用已验证的固定公网；P2P 不会自动回退为服务器中转。
 
@@ -61,8 +61,8 @@
 CI 在 **GitHub Actions 的托管 runner** 上运行，结果见 [Actions 页面](https://github.com/qinze889/DoubaoLanInputBridge/actions)。47 服务器运行的是设备后台。
 
 - [Windows workflow](.github/workflows/windows-client.yml)：回归测试、构建安装版和便携版、实际安装 / 升级、双向文件 SHA256 校验，并上传构建附件。
-- [Apple workflow](.github/workflows/apple-clients.yml)：Mac 回归测试与 SwiftUI 编译，iOS 单元测试与模拟器构建。
-- [发行附件 workflow](.github/workflows/release-assets.yml)：手动验证成功的 Windows 构建与发行标签的源码一致，校验摘要后上传到已有草稿 Release。
+- [Apple workflow](.github/workflows/apple-clients.yml)：Mac 回归、原生应用和 DMG / ZIP 构建、安装包完整性与冻结 P2P 验证；iOS 单元测试与模拟器构建。
+- [发行附件 workflow](.github/workflows/release-assets.yml)：手动核对成功的 Mac / Windows 构建与发行标签为同一提交，校验摘要，生成源码包并上传到草稿 Release。
 
 触发条件、附件下载和发布流程见 [CI 说明](docs/CI.md)。
 

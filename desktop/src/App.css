@@ -204,3 +204,16 @@ nav { display: grid; gap: 6px; }
 .machine-error { color: #a32e35; padding: 8px 0; font-size: 12px; line-height: 1.5; }
 .machine-empty { color: var(--muted); padding: 14px 0; font-size: 13px; }
 @media (max-width: 700px) { .machine-pair-grid { grid-template-columns: 1fr; } }
+
+.connection-panel { margin-bottom: 20px; padding: 20px; border-radius: 20px; background: var(--surface, #f7f8fb); border: 1px solid #dfe4eb; }
+.connection-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; }
+.connection-heading h3 { margin:0; font-size:16px; }
+.connection-heading span { display:flex; align-items:center; gap:6px; }
+.connection-options { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0; }
+.connection-option { display:flex; align-items:center; flex-wrap:wrap; gap:9px; padding:16px 12px; min-height:74px; border:1px solid #dce2ed; border-radius:15px; background:#fff; color:#48556a; cursor:pointer; transition:transform .18s, background .18s, border-color .18s; }
+.connection-option:hover { transform:translateY(-2px); border-color:#8ca8d8; }
+.connection-option.selected { background:#edf3ff; border-color:#789cde; color:#3259a3; }
+.connection-option:disabled { opacity:.55; cursor:wait; }
+.connection-panel p { font-size:12px; color:#66748b; line-height:1.6; }
+.connection-import { color:#3259a3; cursor:pointer; }
+@media (prefers-reduced-motion:reduce) { .connection-option { transition:none } .connection-option:hover { transform:none } }

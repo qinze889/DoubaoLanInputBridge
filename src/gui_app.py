@@ -21,6 +21,7 @@ import webbrowser
 import peer_share
 import mac_tunnel
 import relay_client
+import connection_modes
 from http.client import HTTPConnection
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -54,7 +55,7 @@ from qrcode.constants import ERROR_CORRECT_M
 
 APP_NAME = "声笺"
 APP_ID = "DoubaoLanInputBridge"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 APP_ICON_RELATIVE_PATH = "assets/app-icon-master.png" if sys.platform == "darwin" else "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20
@@ -1853,6 +1854,15 @@ def tunnel_log_tail(name: str = "", limit: int = TUNNEL_LOG_TAIL_BYTES) -> str:
 
 def build_access_url(host: str, port: int, access_key: str) -> str:
     """对外扫码地址：公网入口可用时优先公网，不可用时回退局域网。"""
+    config = peer_share.load_json(DATA_DIR/'connections.json', {})
+    if config:
+        if not config.get('enabled', True): return ''
+        mode = config.get('mode')
+        if mode in ('public', 'p2p'): return relay_client.phone_url(DATA_DIR)
+        if mode == 'lan': return f"http://{machine_lan_host()}:{port}/?key={quote(access_key, safe='')}"
+        if mode == 'cloudflare':
+            status = mac_tunnel.manager(DATA_DIR).status()
+            return f"{status['public_url']}/?key={quote(access_key, safe='')}" if status['ready'] else ''
     relay_url = relay_client.phone_url(DATA_DIR)
     if relay_url:
         return relay_url
@@ -4030,6 +4040,8 @@ class BridgeServer(ThreadingHTTPServer):
         self.state = {"last_paste_ms": None, "last_error": None, "paste_count": 0}
         self.state_lock = threading.Lock()
         def share_endpoint():
+            modes = getattr(self, 'connections', None)
+            if modes and (modes.path.exists() or relay_client.phone_url(DATA_DIR, True)): return modes.peer_endpoint()
             quick = mac_tunnel.manager(DATA_DIR).status()
             if quick.get("ready") and quick.get("public_url"):
                 return quick["public_url"]
@@ -4048,13 +4060,19 @@ class BridgeServer(ThreadingHTTPServer):
         threading.Thread(target=advertise_peers, daemon=True).start()
         self.relay = None
         try:
-            self.relay = relay_client.from_data_dir(DATA_DIR, self.server_port, lambda: current_access_key(self.access_key))
+            self.relay = relay_client.from_data_dir(DATA_DIR, self.server_port, lambda: current_access_key(self.access_key), self.peer_manager)
         except (OSError, ValueError, KeyError):
             self.add_log('中转配置无效，请重新导入 relay.json')
+        self.connections = connection_modes.ConnectionModes(self, DATA_DIR, lambda: current_access_key(self.access_key), machine_lan_host)
+        if self.connections.path.exists():
+            try: self.connections.select(self.connections.config['mode'], self.connections.config['enabled'])
+            except (OSError, ValueError): self.add_log('连接模式未能恢复，请重新选择连接方式')
 
     def server_close(self):
         if getattr(self, 'relay', None):
             self.relay.close()
+        if getattr(self, 'peer_manager', None) and self.peer_manager.rtc_outgoing:
+            self.peer_manager.rtc_outgoing.close()
         if hasattr(self, "peer_stopping"):
             self.peer_stopping.set()
             if self.quick_tunnel.origin_port == self.server_port:
@@ -4211,6 +4229,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
     def handle_desktop_get(self, path: str, params: dict) -> None:
         port = int(self.server.server_port)
         active_key = self.active_access_key()
+        if path == '/desktop/connections':
+            json_response(self, HTTPStatus.OK, {'ok': True, **self.server.connections.snapshot()})
+            return
         if path == "/desktop/state":
             host = preferred_lan_host()
             json_response(
@@ -4230,6 +4251,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                               "configured": bool(relay_client.phone_url(DATA_DIR, True)),
                               "mobile_url": relay_client.phone_url(DATA_DIR, True),
                               "enabled": bool(self.server.relay)},
+                    "connections": self.server.connections.snapshot(),
                     "tunnel": mac_tunnel.manager(DATA_DIR).status() if IS_MACOS else {},
                 },
             )
@@ -4350,6 +4372,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/desktop/config",
             "/desktop/accessibility",
             "/desktop/relay",
+            "/desktop/connections",
+            "/desktop/connections/config",
             "/desktop/peers/invite",
             "/desktop/peers/join",
             "/desktop/peers/remove",
@@ -4499,30 +4523,22 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def handle_desktop_post(self, path: str, data: dict) -> None:
         port = int(self.server.server_port)
+        if path == '/desktop/connections':
+            result = self.server.connections.select(str(data.get('mode', '')), bool(data.get('enabled', True)))
+            json_response(self, HTTPStatus.OK, {'ok': True, **result})
+            return
+        if path == '/desktop/connections/config':
+            result = self.server.connections.import_config(data.get('config'))
+            json_response(self, HTTPStatus.OK, {'ok': True, **result})
+            return
         if path == "/desktop/relay":
-            target = DATA_DIR / 'relay.json'
-            config = json.loads(target.read_text(encoding='utf-8'))
-            config['enabled'] = bool(data.get('enabled'))
-            temporary = target.with_suffix('.tmp')
-            descriptor = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-            with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
-                json.dump(config, stream)
-            temporary.replace(target)
-            if self.server.relay:
-                self.server.relay.close()
-            self.server.relay = relay_client.from_data_dir(DATA_DIR, port, lambda: current_access_key(self.server.access_key))
-            if not config['enabled']:
-                self.server.quick_tunnel.stop()
+            self.server.connections.select('public', bool(data.get('enabled')))
             json_response(self, HTTPStatus.OK, {"ok": True})
             return
         if path.startswith("/desktop/peers/"):
             manager = self.server.peer_manager
             if path.endswith("/tunnel"):
-                if data.get("enabled"):
-                    binary = find_cloudflared(read_tunnel_config().get("cloudflared_path", "")) if not IS_MACOS else ""
-                    result = self.server.quick_tunnel.start(port, binary)
-                else:
-                    result = self.server.quick_tunnel.stop()
+                result = self.server.connections.select('cloudflare', bool(data.get('enabled')))
             elif path.endswith("/invite"):
                 result = manager.invite()
             elif path.endswith("/join"):

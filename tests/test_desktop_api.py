@@ -19,6 +19,7 @@ import gui_app
 def running_server(monkeypatch):
     monkeypatch.setattr(gui_app, "current_access_key", lambda fallback="": "test-key")
     monkeypatch.setattr(gui_app, "preferred_lan_host", lambda: "192.168.1.88")
+    monkeypatch.setattr(gui_app, "machine_lan_host", lambda: "192.168.1.88")
     monkeypatch.setattr(gui_app, "PUBLIC_URL_FILE", ROOT / "__missing_public_url__.txt")
     monkeypatch.setattr(gui_app, "PUBLIC_PROBE_FILE", ROOT / "__missing_public_probe__.txt")
     monkeypatch.delenv(gui_app.PUBLIC_URL_ENV, raising=False)

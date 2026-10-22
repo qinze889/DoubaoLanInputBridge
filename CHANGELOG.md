@@ -2,13 +2,15 @@
 
 发行包与完整说明以 [GitHub Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases) 为准。`VERSION` 表示当前分支源码版本。
 
-## 1.4.0 — 未发布 / PR #3
+## 1.4.0 — 2026-10-22
 
-[查看改动](https://github.com/qinze889/DoubaoLanInputBridge/pull/3)
+[发行说明与下载](https://github.com/qinze889/DoubaoLanInputBridge/releases/tag/v1.4.0) · [查看改动](https://github.com/qinze889/DoubaoLanInputBridge/pull/3)
 
 - Mac / Windows 增加固定公网、CF 隧道、WebRTC P2P、局域网四种连接方式的统一入口和配置保存。
 - 机器共享支持固定域名下的独立设备端点；P2P 使用认证握手和加密数据通道，不自动回退中转。
 - Windows CI 增加冻结安装包的 P2P 双向传输与 SHA256 验证。
+- Mac CI 构建原生 DMG / ZIP，挂载校验签名、版本与架构，验证包内服务的双向 P2P 文件摘要。
+- 发行流程核对 Mac / Windows CI 与标签为同一提交，验证完整摘要清单，自动生成源码 ZIP / tar.gz 后上传草稿 Release。
 - 固定公网后台已迁至独立的 32 核、64GB 服务器，保留设备身份。
 - 现场验证：Mac / Windows 已安装测试构建并完成双向文件校验；当前两台机器的跨网络 P2P 直连仍超时，使用固定公网。
 

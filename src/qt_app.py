@@ -1,4 +1,5 @@
 import os
+import json
 import queue
 import sys
 import threading
@@ -441,6 +442,7 @@ class PreviewCard(QFrame):
 
 
 class QrDialog(QDialog):
+    mode_finished = Signal(str)
     def __init__(self, parent):
         super().__init__(parent)
         self.parent_window = parent
@@ -453,10 +455,19 @@ class QrDialog(QDialog):
         title = QLabel("扫码连接手机")
         title.setObjectName("dialogTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint = QLabel("手机和电脑在同一 Wi-Fi 下，扫码即可发送文字、图片、视频和文件。访问密钥已隐藏。")
+        hint = QLabel("选择一种连接方式，待就绪后扫码。每台机器使用独立连接码，访问密钥已隐藏。")
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.mode_picker = QComboBox()
+        for ident, (name, _) in bridge.connection_modes.MODES.items(): self.mode_picker.addItem(name, ident)
+        self.mode_picker.currentIndexChanged.connect(self.change_mode)
+        self.import_btn = QPushButton("导入服务器配置")
+        self.import_btn.clicked.connect(self.import_config)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(self.mode_picker, 1); mode_row.addWidget(self.import_btn)
+        self.mode_hint = QLabel(); self.mode_hint.setWordWrap(True)
+        self.mode_finished.connect(self.finish_mode)
         self.qr = QLabel()
         self.qr.setObjectName("qrBox")
         self.qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -496,17 +507,53 @@ class QrDialog(QDialog):
         actions.addWidget(local_btn)
         layout.addWidget(title)
         layout.addWidget(hint)
+        layout.addLayout(mode_row)
+        layout.addWidget(self.mode_hint)
         layout.addWidget(self.qr, 1)
         layout.addWidget(self.link)
         layout.addWidget(check_box)
         layout.addLayout(actions)
         self.refresh_qr()
+        self.poll = QTimer(self); self.poll.timeout.connect(self.refresh_qr); self.poll.start(2000)
+
+    def change_mode(self):
+        mode = self.mode_picker.currentData()
+        self.configure(lambda: self.parent_window.server.connections.select(mode))
+
+    def import_config(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择本机 relay.json", "", "JSON (*.json)")
+        if not path: return
+        def apply():
+            if Path(path).stat().st_size > 16384: raise ValueError("配置文件过大")
+            self.parent_window.server.connections.import_config(json.loads(Path(path).read_text(encoding='utf-8')))
+        self.configure(apply)
+
+    def configure(self, operation):
+        self.mode_picker.setEnabled(False); self.import_btn.setEnabled(False)
+        def work():
+            try: operation(); error = ''
+            except Exception: error = '连接配置未完成，请确认组件完整并导入本机的服务器配置。'
+            self.mode_finished.emit(error)
+        threading.Thread(target=work, daemon=True).start()
+
+    def finish_mode(self, error):
+        self.mode_picker.setEnabled(True); self.import_btn.setEnabled(True)
+        self.refresh_qr()
+        if error: QMessageBox.warning(self, APP_NAME, error)
 
     def refresh_qr(self) -> None:
-        url = self.parent_window.mobile_url()
-        self.qr.setPixmap(qr_pixmap(url, 9))
-        self.link.setText(f"v{APP_VERSION} · 局域网扫码链接已生成 · {display_qr_target(url)}")
-        self.health.setText(f"手机先测：{self.parent_window.health_url()}")
+        server = self.parent_window.server
+        if not server: return
+        state = server.connections.snapshot()
+        self.mode_picker.blockSignals(True)
+        self.mode_picker.setCurrentIndex(self.mode_picker.findData(state['mode']))
+        self.mode_picker.blockSignals(False)
+        self.mode_hint.setText(bridge.connection_modes.MODES[state['mode']][1] + ('\n' + state['error'] if state['error'] else ''))
+        url = state['url'] if state['ready'] else ''
+        if url: self.qr.setPixmap(qr_pixmap(url, 9))
+        else: self.qr.clear(); self.qr.setText('连接就绪后显示二维码')
+        self.link.setText(f"v{APP_VERSION} · {bridge.connection_modes.MODES[state['mode']][0]} · " + ('已就绪' if state['ready'] else '等待连接') + (f' · {display_qr_target(url)}' if url else ''))
+        self.health.setText(f'手机先测（局域网）：{self.parent_window.health_url()}' if state['mode'] == 'lan' else '请确认电脑在线；P2P 打洞失败时请手动切换。')
 
     def refresh_access_key(self) -> None:
         self.parent_window.regenerate_access_key()
