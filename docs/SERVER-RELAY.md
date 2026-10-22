@@ -43,3 +43,9 @@ python server/relay.py --data /var/lib/shengjian-relay --port 18766
 
 - https://github.com/nano-muse/nanoMuse/blob/v1.0.5/docs/self-hosting.md
 - https://github.com/nano-muse/nanoMuse/blob/v1.0.5/docs/hub.md
+
+## 2026-10-22 Mac 实机修复验证
+
+原生界面更新前，服务报告无辅助功能权限，公网 `/send` 返回 500。改为由原生主程序执行键盘操作后，重新添加当前应用的系统授权，`accessibility=true`。本地完整回归为 **263 passed**，Swift 原生界面编译及安装包签名完整性校验通过。
+
+通过真实公网 HTTPS 入口 → 47 中转 → 已安装的 `/Applications/声笺.app` → 独立 AppKit 输入框，含中文和 emoji 的测试文字与输入框实际内容逐字符一致。测试目标具有标准 Edit/Paste 菜单，避免把没有粘贴快捷键的测试控件误判为产品失败。验证结束关闭测试输入框，并恢复测试前剪贴板。没有替代用户手机相机、具体浏览器或蜂窝网络的现场检查；手机需使用当前应用二维码重新连接。
