@@ -13,9 +13,28 @@ import time
 import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.error import HTTPError
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 CHUNK_BYTES = 8 * 1024 * 1024
 JSON_BYTES = 64 * 1024
+SEND_CHUNK_BYTES = 1024 * 1024
+
+
+def safe_filename(value):
+    name = str(value).replace('\\', '/').split('/')[-1]
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).strip('. ')
+    if name.split('.')[0].upper() in {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$',
+                                    *('COM'+str(i) for i in range(1, 10)),
+                                    *('LPT'+str(i) for i in range(1, 10))}:
+        name = '_' + name
+    # Keep a component below both NTFS and UTF-8 filesystem limits.
+    stem, suffix = os.path.splitext(name)
+    if len(suffix.encode('utf-8')) > 30:
+        stem, suffix = name, ''
+    while len((stem + suffix).encode('utf-8')) > 120:
+        stem = stem[:-1]
+    return (stem.rstrip('. ') + suffix).rstrip('. ')
 
 
 def atomic_json(path, value):
@@ -55,17 +74,27 @@ def signature(secret, method, path, stamp, nonce, digest):
     return hmac.new(secret.encode(), canonical, hashlib.sha256).hexdigest()
 
 
+class NoPeerRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError('机器连接地址发生跳转，请重新配对')
+
+
 def transport(base, path, payload, headers):
-    url = urlsplit(endpoint(base))
-    conn = (http.client.HTTPSConnection if url.scheme == 'https' else http.client.HTTPConnection)(url.hostname,url.port,timeout=90)
+    base = endpoint(base)
+    # Honor the user's Windows/macOS system proxy for public HTTPS connections.
+    # LAN traffic stays direct; signatures must never follow a redirect.
+    proxy = ProxyHandler() if urlsplit(base).scheme == 'https' else ProxyHandler({})
+    opener = build_opener(proxy, NoPeerRedirect())
+    request = Request(base+path, payload, headers, method='POST')
     try:
-        conn.request('POST',path,payload,headers)
-        response = conn.getresponse()
+        response = opener.open(request, timeout=90)
+    except HTTPError as error:
+        response = error
+    with response:
         data = json.loads(response.read(JSON_BYTES))
         if response.status != 200 or not data.get('ok'):
             raise ValueError(data.get('error','另一台设备未完成请求'))
         return data
-    finally: conn.close()
 
 
 class PeerManager:
@@ -108,6 +137,8 @@ class PeerManager:
         code = (fields.get('code') or [''])[0]
         if not code: raise ValueError('邀请缺少配对码')
         own_endpoint = endpoint(self.endpoint_provider())
+        if urlsplit(base).scheme == 'https' and urlsplit(own_endpoint).scheme != 'https':
+            raise ValueError('对方使用公网邀请，请先开启本机公网连接再配对。')
         shared = secrets.token_urlsafe(32)
         payload = {'code':code,'device':dict(self.device),'endpoint':own_endpoint,'secret':shared}
         result = transport(base,'/peer/pair',json.dumps(payload).encode(),{'Content-Type':'application/json'})
@@ -186,8 +217,7 @@ class PeerManager:
             meta_file = folder/'state.json'
             meta = load_json(meta_file,None)
             if route.path == '/peer/files/start':
-                filename = str(data.get('name','')).replace('\\','/').split('/')[-1]
-                filename = re.sub(r'[\x00-\x1f/:]','_',filename)[:180].strip('. ')
+                filename = safe_filename(data.get('name',''))
                 size = int(data.get('size',-1)); checksum = str(data.get('sha256',''))
                 if not filename or size < 0 or not re.fullmatch('[a-f0-9]{64}',checksum): raise ValueError('无效文件信息')
                 if meta:
@@ -249,7 +279,7 @@ class PeerManager:
                 with source.open('rb') as stream:
                     retries = 0
                     while offset<size:
-                        stream.seek(offset);chunk=stream.read(min(CHUNK_BYTES,size-offset))
+                        stream.seek(offset);chunk=stream.read(min(CHUNK_BYTES,SEND_CHUNK_BYTES,size-offset))
                         if not chunk: raise ValueError('源文件在传输期间发生变化')
                         try:
                             reply=self.request(peer,'/peer/files/chunk?'+urlencode({'id':file_id,'offset':offset}),chunk)

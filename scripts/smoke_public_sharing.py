@@ -8,6 +8,7 @@ import hashlib
 import http.client
 import json
 import os
+import plistlib
 import selectors
 import subprocess
 import tempfile
@@ -74,6 +75,7 @@ class Machine:
 def main():
     root = Path(__file__).resolve().parents[1]
     binary = root / 'dist/声笺.app/Contents/Resources/bridge-service/bridge-service'
+    expected_version = plistlib.loads((root / 'dist/声笺.app/Contents/Info.plist').read_bytes())['CFBundleShortVersionString']
     machines = []
     with tempfile.TemporaryDirectory(prefix='shengjian-public-check-') as scratch:
         try:
@@ -81,7 +83,7 @@ def main():
                 machines.append(Machine(binary, Path(scratch) / str(i)))
             print('3 bundled services started.', flush=True)
             for machine in machines:
-                assert machine.call('/desktop/state')['version'] == '1.2.0'
+                assert machine.call('/desktop/state')['version'] == expected_version
                 machine.call('/desktop/tunnel/start', {})
             print('Public tunnel startup requested.', flush=True)
             deadline = time.monotonic() + 65

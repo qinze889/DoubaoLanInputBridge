@@ -8,3 +8,6 @@ _test_data = tempfile.TemporaryDirectory(prefix="shengjian-pytest-")
 os.environ["DOUBAO_BRIDGE_DATA_DIR"] = _test_data.name
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+if sys.platform != "darwin":
+    collect_ignore = ["test_macos.py", "test_macos_http.py"]

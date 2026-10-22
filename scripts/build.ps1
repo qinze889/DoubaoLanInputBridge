@@ -1,10 +1,11 @@
 param(
-    [switch]$ReplaceRunningApp
+    [switch]$ReplaceRunningApp,
+    [string]$Python = ""
 )
 
 $ErrorActionPreference = "Stop"
 
-$Python = "C:\Users\0\AppData\Local\Programs\Python\Python312\python.exe"
+if (-not $Python) { $Python = (Get-Command python -ErrorAction Stop).Source }
 $Root = Split-Path -Parent $PSScriptRoot
 $ToolDir = Join-Path $Root "tools\pyinstaller"
 $QrToolDir = Join-Path $Root "tools\qrcode"

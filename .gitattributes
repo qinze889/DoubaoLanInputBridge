@@ -1,0 +1,2 @@
+# Keep the released protocol fixture byte-identical on Windows for SHA256 verification.
+tests/fixtures/peer_share_120.py text eol=lf

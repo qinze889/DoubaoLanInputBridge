@@ -19,6 +19,8 @@ import time
 import warnings
 import webbrowser
 import peer_share
+import mac_tunnel
+import relay_client
 from http.client import HTTPConnection
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,9 +54,7 @@ from qrcode.constants import ERROR_CORRECT_M
 
 APP_NAME = "声笺"
 APP_ID = "DoubaoLanInputBridge"
-APP_VERSION = "1.0.0"
-if sys.platform == "darwin":
-    APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 APP_ICON_RELATIVE_PATH = "assets/app-icon-master.png" if sys.platform == "darwin" else "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20
@@ -86,7 +86,6 @@ IS_WINDOWS = os.name == "nt"
 IS_MACOS = sys.platform == "darwin"
 if IS_MACOS:
     import mac_platform
-    import mac_tunnel
 
 # Serialize clipboard + paste + optional return as one operation across requests.
 PASTE_LOCK = mac_platform.PASTE_LOCK if IS_MACOS else threading.RLock()
@@ -1854,10 +1853,12 @@ def tunnel_log_tail(name: str = "", limit: int = TUNNEL_LOG_TAIL_BYTES) -> str:
 
 def build_access_url(host: str, port: int, access_key: str) -> str:
     """对外扫码地址：公网入口可用时优先公网，不可用时回退局域网。"""
-    if IS_MACOS and not IS_WINDOWS:
-        active = mac_tunnel.manager(DATA_DIR).status()
-        if active["ready"]:
-            return f"{active['public_url']}/?key={quote(access_key, safe='')}"
+    relay_url = relay_client.phone_url(DATA_DIR)
+    if relay_url:
+        return relay_url
+    active = mac_tunnel.manager(DATA_DIR).status()
+    if active["ready"]:
+        return f"{active['public_url']}/?key={quote(access_key, safe='')}"
     public_base = read_public_url_override()
     if public_base:
         probe_url = read_public_probe_override()
@@ -1909,6 +1910,27 @@ def preferred_lan_host() -> str:
         if is_allowed_mobile_lan_host(host):
             return host
     return "127.0.0.1" if IS_MACOS else FIXED_LAN_UPDATE_HOST
+
+
+def machine_lan_host() -> str:
+    """Peer sharing also accepts Windows LANs using 10/8 or 172.16/12."""
+    candidates = get_lan_ipv4_addresses()
+    override = read_mobile_host_override()
+    if override:
+        candidates.insert(0, override)
+    if not IS_MACOS:
+        try:
+            candidates += [row[4][0] for row in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+        except OSError:
+            pass
+    networks = [ipaddress.ip_network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')]
+    for value in candidates:
+        try:
+            if any(ipaddress.ip_address(value) in network for network in networks):
+                return value
+        except ValueError:
+            pass
+    return '127.0.0.1'
 
 
 def bridge_probe_hosts() -> list[str]:
@@ -4008,14 +4030,36 @@ class BridgeServer(ThreadingHTTPServer):
         self.state = {"last_paste_ms": None, "last_error": None, "paste_count": 0}
         self.state_lock = threading.Lock()
         def share_endpoint():
-            if IS_MACOS:
-                public = mac_tunnel.manager(DATA_DIR).status().get("public_url", "")
+            quick = mac_tunnel.manager(DATA_DIR).status()
+            if quick.get("ready") and quick.get("public_url"):
+                return quick["public_url"]
+            if not IS_MACOS:
+                public = read_public_url_override()
                 if public:
-                    return public
-            return f"http://{preferred_lan_host()}:{self.server_port}"
+                    return peer_share.endpoint(public)
+            return f"http://{machine_lan_host()}:{self.server_port}"
         self.peer_manager = peer_share.PeerManager(DATA_DIR, share_endpoint)
-        if IS_MACOS:
-            mac_tunnel.manager(DATA_DIR).origin_port = self.server_port
+        self.quick_tunnel = mac_tunnel.manager(DATA_DIR)
+        self.quick_tunnel.origin_port = self.server_port
+        self.peer_stopping = threading.Event()
+        def advertise_peers():
+            while not self.peer_stopping.wait(10):
+                self.peer_manager.advertise()
+        threading.Thread(target=advertise_peers, daemon=True).start()
+        self.relay = None
+        try:
+            self.relay = relay_client.from_data_dir(DATA_DIR, self.server_port, lambda: current_access_key(self.access_key))
+        except (OSError, ValueError, KeyError):
+            self.add_log('中转配置无效，请重新导入 relay.json')
+
+    def server_close(self):
+        if getattr(self, 'relay', None):
+            self.relay.close()
+        if hasattr(self, "peer_stopping"):
+            self.peer_stopping.set()
+            if self.quick_tunnel.origin_port == self.server_port:
+                self.quick_tunnel.stop()
+        super().server_close()
 
     def add_log(self, message: str) -> None:
         line = append_service_log(message)
@@ -4182,12 +4226,18 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     "host": host,
                     "data_dir": str(DATA_DIR),
                     "accessibility": mac_platform.accessibility_enabled() if IS_MACOS else True,
+                    "relay": {**(dict(self.server.relay.status) if self.server.relay else {"phase": "off"}),
+                              "configured": bool(relay_client.phone_url(DATA_DIR, True)),
+                              "mobile_url": relay_client.phone_url(DATA_DIR, True),
+                              "enabled": bool(self.server.relay)},
                     "tunnel": mac_tunnel.manager(DATA_DIR).status() if IS_MACOS else {},
                 },
             )
             return
         if path == "/desktop/peers":
-            json_response(self, HTTPStatus.OK, {"ok": True, **self.server.peer_manager.snapshot()})
+            json_response(self, HTTPStatus.OK, {"ok": True, **self.server.peer_manager.snapshot(),
+                "network": {"endpoint": self.server.peer_manager.endpoint_provider(),
+                            "tunnel": self.server.quick_tunnel.status()}})
             return
         if path == "/desktop/history":
             query = str((params.get("q") or [""])[0])
@@ -4299,10 +4349,12 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/desktop/update/prepare",
             "/desktop/config",
             "/desktop/accessibility",
+            "/desktop/relay",
             "/desktop/peers/invite",
             "/desktop/peers/join",
             "/desktop/peers/remove",
             "/desktop/peers/send",
+            "/desktop/peers/tunnel",
             "/desktop/firewall",
             "/desktop/tunnel/config",
             "/desktop/tunnel/start",
@@ -4447,9 +4499,31 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def handle_desktop_post(self, path: str, data: dict) -> None:
         port = int(self.server.server_port)
+        if path == "/desktop/relay":
+            target = DATA_DIR / 'relay.json'
+            config = json.loads(target.read_text(encoding='utf-8'))
+            config['enabled'] = bool(data.get('enabled'))
+            temporary = target.with_suffix('.tmp')
+            descriptor = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+                json.dump(config, stream)
+            temporary.replace(target)
+            if self.server.relay:
+                self.server.relay.close()
+            self.server.relay = relay_client.from_data_dir(DATA_DIR, port, lambda: current_access_key(self.server.access_key))
+            if not config['enabled']:
+                self.server.quick_tunnel.stop()
+            json_response(self, HTTPStatus.OK, {"ok": True})
+            return
         if path.startswith("/desktop/peers/"):
             manager = self.server.peer_manager
-            if path.endswith("/invite"):
+            if path.endswith("/tunnel"):
+                if data.get("enabled"):
+                    binary = find_cloudflared(read_tunnel_config().get("cloudflared_path", "")) if not IS_MACOS else ""
+                    result = self.server.quick_tunnel.start(port, binary)
+                else:
+                    result = self.server.quick_tunnel.stop()
+            elif path.endswith("/invite"):
                 result = manager.invite()
             elif path.endswith("/join"):
                 result = manager.join(str(data.get("invitation", "")))
@@ -4517,7 +4591,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/desktop/open-folder":
             target = str(data.get("target", "history"))
-            folder = MOBILE_SHARE_DIR if target == "shared" else ensure_history_archive_structure()
+            folder = (DATA_DIR / "received") if target == "received" else MOBILE_SHARE_DIR if target == "shared" else ensure_history_archive_structure()
+            folder.mkdir(parents=True, exist_ok=True)
             open_local_path(str(folder))
             json_response(self, HTTPStatus.OK, {"ok": True, "path": str(folder)})
             return
@@ -5991,7 +6066,7 @@ def run_server_only(port: int) -> None:
     access_key = read_or_create_access_key()
     refresh_lan_update_manifest_url(port)
     server = BridgeServer(("0.0.0.0", port), BridgeRequestHandler, access_key)
-    print(f"{APP_NAME} listening on {port}")
+    print(f"{APP_ID} listening on {port}", flush=True)
     print("Pairing links are available in the desktop app; credentials are not logged.")
     try:
         server.serve_forever()

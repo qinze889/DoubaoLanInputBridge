@@ -167,3 +167,59 @@ def test_qt_window_permissions_and_service(monkeypatch, tmp_path):
             window.tray.hide()
         window.deleteLater()
         app.processEvents()
+
+
+def test_native_app_owns_permission_and_keyboard_events(monkeypatch):
+    calls = []
+    monkeypatch.setenv('SHENGJIAN_NATIVE_INPUT_SOCKET', '/tmp/native-test.sock')
+    def native(request):
+        calls.append(request['operation'])
+        return {'ok': True, 'allowed': True}
+    monkeypatch.setattr(mac, 'native_input', native)
+    monkeypatch.setattr(mac, 'AXIsProcessTrusted', lambda: pytest.fail('helper permission must not decide app authorization'))
+    monkeypatch.setattr(mac, 'CGEventPost', lambda *args: pytest.fail('helper must not post events'))
+    assert mac.accessibility_enabled()
+    mac.send_command_v()
+    mac.send_enter()
+    assert calls == ['permission', 'permission', 'paste', 'permission', 'enter']
+
+
+def test_native_input_failure_never_falls_back_to_helper(monkeypatch):
+    monkeypatch.setenv('SHENGJIAN_NATIVE_INPUT_SOCKET', '/tmp/nonexistent-shengjian-test.sock')
+    monkeypatch.setenv('SHENGJIAN_NATIVE_INPUT_TOKEN', 'test-token')
+    monkeypatch.setattr(mac, 'AXIsProcessTrusted', lambda: pytest.fail('unsafe helper fallback'))
+    assert not mac.accessibility_enabled()
+    with pytest.raises(RuntimeError, match='原生输入服务'):
+        mac.native_input({'operation': 'paste'})
+
+
+def test_native_socket_authentication_and_explicit_rejection(monkeypatch):
+    import json
+    import socket
+    import tempfile
+    import uuid
+    path = str(Path(tempfile.gettempdir()) / ('sj-' + uuid.uuid4().hex[:8] + '.sock'))
+    # macOS Unix socket paths are limited to 104 bytes; use the short /tmp alias.
+    if len(path.encode()) >= 100:
+        path = '/tmp/sj-' + uuid.uuid4().hex + '.sock'
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(path)
+    listener.listen(1)
+    received = []
+    def serve():
+        client, _ = listener.accept()
+        with client:
+            received.append(json.loads(client.makefile('rb').readline()))
+            client.sendall(b'{"ok":false,"error":"not authorized"}\n')
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    monkeypatch.setenv('SHENGJIAN_NATIVE_INPUT_SOCKET', path)
+    monkeypatch.setenv('SHENGJIAN_NATIVE_INPUT_TOKEN', 'private-test-token')
+    try:
+        with pytest.raises(RuntimeError, match='not authorized'):
+            mac.native_input({'operation': 'paste'})
+        thread.join(timeout=2)
+        assert received == [{'operation': 'paste', 'token': 'private-test-token'}]
+    finally:
+        listener.close()
+        Path(path).unlink(missing_ok=True)
