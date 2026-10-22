@@ -29,8 +29,8 @@ CI 的实现位于仓库隐藏目录 [`.github/workflows/`](../.github/workflows
 ## Mac 与 iOS 检查什么
 
 1. Mac 在 arm64 runner 准备 Python 3.12，下载固定版本和 SHA256 的官方 cloudflared。
-2. 调用 [`build_macos.sh`](../scripts/build_macos.sh)：回归测试、SwiftUI 编译、PyInstaller 服务打包，生成包含 cloudflared 的应用、DMG 与 ZIP。
-3. 调用 [`verify_macos_package.py`](../scripts/verify_macos_package.py)：解压 ZIP、只读挂载 DMG，检查两包中应用的签名完整性、版本、arm64 架构及安装布局，检查无私有运行凭据。
+2. 编译并执行 `tests/native/ShareImportChecks.swift`，检查临时文件保留、Unicode / 重名、私有权限与无效输入。调用 [`build_macos.sh`](../scripts/build_macos.sh)：回归测试、SwiftUI 编译、PyInstaller 服务打包，生成包含 cloudflared 的应用、内嵌系统分享扩展、DMG 与 ZIP。
+3. 调用 [`verify_macos_package.py`](../scripts/verify_macos_package.py)：解压 ZIP、只读挂载 DMG，检查两包中应用及分享扩展的签名完整性、版本、arm64 架构、扩展沙盒和安装布局，检查无私有运行凭据。
 4. 从挂载的 DMG 运行两个冻结服务，验证真实 WebRTC 双向多分块传输及 SHA256，确认文件内容没有经信令服务器转发。
 5. 上传 DMG、ZIP、安装说明、许可证、`Mac-build.json` 和摘要清单为 `Shengjian-macos-arm64` artifact，保留 30 天。
 6. iOS 独立 job 运行 `swift test --package-path ios`，再用 Xcode 为 iOS Simulator 构建 `ShengjianIOS`。

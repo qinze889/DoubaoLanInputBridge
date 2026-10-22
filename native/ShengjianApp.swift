@@ -148,6 +148,11 @@ struct Transfer: Identifiable {
     @Published var lastError = ""
     @Published var selected: String? = "connect"
     @Published var showPublish = false
+    @Published var publishText = ""
+    @Published var publishFiles: [URL] = []
+    @Published var publishTarget = "phone"
+    @Published var publishFileMode = false
+    @Published var importingFiles = false
     @Published var copied = false
     @Published var busy = false
     @Published var machines: [PairedMachine] = []
@@ -155,6 +160,7 @@ struct Transfer: Identifiable {
     @Published var invitation = ""
     @Published var showAddMachine = false
     @Published var showInvitation = false
+    private var pendingImportCount = 0
     private var retryFiles: [String: (String, [URL])] = [:]
     private var process: Process?
     private var nativeInput: NativeInputBroker?
@@ -357,6 +363,52 @@ struct Transfer: Identifiable {
         do { _ = try await api("/desktop/publish",body:["text":text,"paths":paths.map(\.path)]); await loadHistory(); toast("已分享，在手机的“来自电脑”中查看"); return true }
         catch { report(error.localizedDescription); return false }
     }
+    func openPublish(files: Bool = false) {
+        publishFileMode = files
+        showPublish = true
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first(where: { $0.canBecomeMain })?.makeKeyAndOrderFront(nil)
+    }
+    func importSharedFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        guard urls.count + publishFiles.count + pendingImportCount <= ShareImport.maximumFiles else { report(ShareImport.Failure.tooManyFiles.localizedDescription); return }
+        pendingImportCount += urls.count
+        importingFiles = true
+        openPublish(files: true)
+        let parent = dataDirectory.appendingPathComponent("share-imports", isDirectory: true)
+        Task {
+            defer { pendingImportCount -= urls.count; importingFiles = pendingImportCount > 0 }
+            do {
+                let copied = try await Task.detached(priority: .userInitiated) {
+                    let batch = try ShareImport.makeBatch(in: parent)
+                    do { return try urls.map { try ShareImport.copy($0, into: batch) } }
+                    catch { try? FileManager.default.removeItem(at: batch); throw error }
+                }.value
+                publishFiles.append(contentsOf: copied)
+            } catch { report("添加文件失败：\(error.localizedDescription)") }
+        }
+    }
+    func sendDraft() async -> Bool {
+        guard online else { report("请等待本机服务启动。"); return false }
+        let text = publishText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if publishTarget == "phone" {
+            guard await publish(publishText, paths: publishFiles) else { return false }
+        } else {
+            var files = publishFiles
+            if !text.isEmpty {
+                do {
+                    let batch = try ShareImport.makeBatch(in: dataDirectory.appendingPathComponent("share-imports"))
+                    let file = batch.appendingPathComponent("分享文字.txt")
+                    try publishText.write(to: file, atomically: true, encoding: .utf8)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+                    files.append(file)
+                } catch { report("无法准备文字文件，请重试。"); return false }
+            }
+            guard await sendToMachine(publishTarget, files: files) else { return false }
+        }
+        publishText = ""; publishFiles = []; publishTarget = "phone"
+        return true
+    }
     func saveAIKey(_ value:String) async {
         guard !value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { return }
         do { _ = try await api("/desktop/config",body:["minimax_api_key":value]); toast("润色服务已配置") }
@@ -390,13 +442,14 @@ struct Transfer: Identifiable {
         do { _ = try await api("/desktop/peers/remove", body: ["id": id]); await loadMachines() }
         catch { report(error.localizedDescription) }
     }
-    func sendToMachine(_ id: String, files: [URL]) async {
-        guard !files.isEmpty else { return }
+    @discardableResult func sendToMachine(_ id: String, files: [URL]) async -> Bool {
+        guard !files.isEmpty else { return false }
         do {
             let data = try await api("/desktop/peers/send", body: ["id": id, "paths": files.map(\.path)])
             if let job = data["job_id"] as? String { retryFiles[job] = (id, files) }
             await loadMachines(); toast("传输已开始"); selected = "machines"
-        } catch { report(error.localizedDescription) }
+            return true
+        } catch { report(error.localizedDescription); return false }
     }
     func retryMachineJob(_ id: String) async {
         if let (peer, files) = retryFiles[id] { await sendToMachine(peer, files: files) }
@@ -505,15 +558,17 @@ struct ConnectionView:View {
                     }.padding(18).background(Color.orange.opacity(0.055),in:RoundedRectangle(cornerRadius:20))
                 }
                 HStack(spacing:16) {
-                    miniFeature("text.bubble","说出来，发过去","手机语音输入，Mac 即刻接住",color:.blue)
-                    miniFeature("photo.on.rectangle","照片、文件，随手传","拖放分享，双向传送",color:.purple)
+                    miniFeature("text.bubble","发送文字","写下内容，发送到手机或电脑",color:.blue) { model.openPublish() }
+                    miniFeature("photo.on.rectangle","照片、文件，随手传","选择文件，或从系统分享菜单添加",color:.purple) { model.openPublish(files: true) }
                 }
                 HStack(spacing:6) { Image(systemName:"info.circle"); Text("每台机器拥有独立连接码。同一域名按设备编号连接，不会混发到其他电脑。") }.font(.system(size:11)).foregroundStyle(.tertiary).frame(maxWidth:.infinity)
             }.padding(32).frame(maxWidth:1000).frame(maxWidth:.infinity)
         }
     }
-    func miniFeature(_ icon:String,_ title:String,_ subtitle:String,color:Color) -> some View {
-        Card(padding:20) { HStack(spacing:12) { SymbolTile(name:icon,color:color); VStack(alignment:.leading,spacing:4) { Text(title).font(.system(size:13,weight:.semibold)); Text(subtitle).font(.system(size:11)).foregroundStyle(.secondary) }; Spacer(minLength:0) } }
+    func miniFeature(_ icon:String,_ title:String,_ subtitle:String,color:Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Card(padding:20) { HStack(spacing:12) { SymbolTile(name:icon,color:color); VStack(alignment:.leading,spacing:4) { Text(title).font(.system(size:13,weight:.semibold)); Text(subtitle).font(.system(size:11)).foregroundStyle(.secondary) }; Spacer(minLength:0); Image(systemName:"arrow.up.right").font(.system(size:12,weight:.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }
+        }.buttonStyle(.plain).accessibilityLabel(title).help(subtitle)
     }
 }
 
@@ -521,7 +576,7 @@ struct HistoryView:View {
     @EnvironmentObject var model:BridgeModel
     var body:some View {
         VStack(alignment:.leading,spacing:22) {
-            HStack { VStack(alignment:.leading,spacing:7) { Text("传输记录").font(.system(size:30,weight:.bold,design:.rounded)); Text("每一次传递，都好好收着。").font(.system(size:14)).foregroundStyle(.secondary) }; Spacer(); Button { model.showPublish = true } label:{ Label("分享给手机",systemImage:"square.and.arrow.up") }.buttonStyle(.borderedProminent).tint(accent).controlSize(.large) }
+            HStack { VStack(alignment:.leading,spacing:7) { Text("传输记录").font(.system(size:30,weight:.bold,design:.rounded)); Text("每一次传递，都好好收着。").font(.system(size:14)).foregroundStyle(.secondary) }; Spacer(); Button { model.openPublish() } label:{ Label("分享内容",systemImage:"square.and.arrow.up") }.buttonStyle(.borderedProminent).tint(accent).controlSize(.large) }
             HStack(spacing:14) {
                 HStack { Image(systemName:"magnifyingglass").foregroundStyle(.tertiary); TextField("搜索文字、文件名…",text:$model.query).textFieldStyle(.plain).onChange(of:model.query) { _,_ in model.search() }; if !model.query.isEmpty { Button { model.query = "" } label:{ Image(systemName:"xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.tertiary) } }.padding(11).background(surface,in:RoundedRectangle(cornerRadius:12))
                 Picker("类型",selection:$model.category) { Text("全部").tag("all"); Text("文字").tag("text"); Text("图片").tag("image"); Text("文件").tag("file") }.pickerStyle(.segmented).frame(width:260).onChange(of:model.category) { _,_ in Task { await model.loadHistory() } }
@@ -592,34 +647,59 @@ struct SettingsView:View {
 struct PublishView:View {
     @EnvironmentObject var model:BridgeModel
     @Environment(\.dismiss) var dismiss
-    @ViewState private var text = ""
-    @ViewState private var files:[URL] = []
     @ViewState private var sending = false
     @ViewState private var picker = false
+    @FocusState private var textFocused: Bool
     var body:some View {
-        VStack(alignment:.leading,spacing:22) {
-            HStack { VStack(alignment:.leading,spacing:7) { Text("分享给手机").font(.system(size:25,weight:.bold,design:.rounded)); Text("写一句话，或放几个文件。").font(.system(size:13)).foregroundStyle(.secondary) }; Spacer(); Button { dismiss() } label:{Image(systemName:"xmark.circle.fill").font(.system(size:22)).foregroundStyle(.tertiary)}.buttonStyle(.plain) }
-            TextEditor(text:$text).font(.system(size:15)).scrollContentBackground(.hidden).padding(12).frame(height:140).background(canvas,in:RoundedRectangle(cornerRadius:16))
-            Button { picker = true } label:{ VStack(spacing:10) { Image(systemName:"plus.circle").font(.system(size:28,weight:.light)); Text("添加文件或拖到这里").font(.system(size:13,weight:.medium)) }.frame(maxWidth:.infinity).padding(24).background(accent.opacity(0.04),in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).strokeBorder(accent.opacity(0.17),style:StrokeStyle(lineWidth:1,dash:[5]))) }.buttonStyle(.plain).foregroundStyle(accent)
-                .onDrop(of:[UTType.fileURL],isTargeted:nil) { providers in
-                    for provider in providers { _ = provider.loadObject(ofClass:URL.self) { url,_ in if let url { Task { @MainActor in if !files.contains(url) { files.append(url) } } } } }; return true
+        VStack(alignment:.leading,spacing:18) {
+            HStack {
+                VStack(alignment:.leading,spacing:7) {
+                    Text("分享内容").font(.system(size:25,weight:.bold,design:.rounded))
+                    Text(model.publishFileMode ? "截屏、照片和文件，一起送过去。" : "写一句话，或放几个文件。").font(.system(size:13)).foregroundStyle(.secondary)
                 }
-            if !files.isEmpty {
+                Spacer()
+                Button { dismiss() } label:{Image(systemName:"xmark.circle.fill").font(.system(size:22)).foregroundStyle(.tertiary)}.buttonStyle(.plain).accessibilityLabel("关闭分享")
+            }
+            Picker("发送到", selection: $model.publishTarget) {
+                Text("手机 · 来自电脑").tag("phone")
+                ForEach(model.machines) { machine in Text(machine.name).tag(machine.id) }
+            }.pickerStyle(.menu)
+            TextEditor(text:$model.publishText).font(.system(size:15)).scrollContentBackground(.hidden).padding(12).frame(height:model.publishFileMode ? 70 : 120).background(canvas,in:RoundedRectangle(cornerRadius:16)).focused($textFocused).accessibilityLabel("分享文字")
+            Button { picker = true } label:{ Label("添加文件或拖到这里",systemImage:"plus.circle").font(.system(size:13,weight:.medium)).frame(maxWidth:.infinity).padding(18).background(accent.opacity(0.04),in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).strokeBorder(accent.opacity(0.17),style:StrokeStyle(lineWidth:1,dash:[5])).allowsHitTesting(false)) }.buttonStyle(.plain).foregroundStyle(accent)
+                .onDrop(of:[UTType.fileURL],isTargeted:nil) { providers in
+                    for provider in providers { _ = provider.loadObject(ofClass:URL.self) { url,_ in if let url { Task { @MainActor in model.importSharedFiles([url]) } } } }; return true
+                }
+            if model.importingFiles { ProgressView("正在添加文件…").controlSize(.small) }
+            if !model.publishFiles.isEmpty {
                 ScrollView {
                     VStack(spacing:10) {
-                        ForEach(files,id:\.self) { file in
-                            HStack {
-                                Image(systemName:"doc").foregroundStyle(accent)
-                                Text(file.lastPathComponent).font(.system(size:12)).lineLimit(1)
+                        ForEach(model.publishFiles,id:\.self) { file in
+                            HStack(spacing:12) {
+                                if let image = NSImage(contentsOf:file) {
+                                    Image(nsImage:image).resizable().scaledToFit().frame(width:64,height:48).background(canvas,in:RoundedRectangle(cornerRadius:8))
+                                } else { Image(systemName:"doc").foregroundStyle(accent).frame(width:64,height:48) }
+                                Text(file.lastPathComponent).font(.system(size:12)).lineLimit(2)
                                 Spacer()
-                                Button { files.removeAll { $0 == file } } label: { Image(systemName:"xmark.circle.fill").foregroundStyle(.tertiary) }.buttonStyle(.plain)
+                                Button { model.publishFiles.removeAll { $0 == file } } label: { Image(systemName:"xmark.circle.fill").foregroundStyle(.tertiary) }.buttonStyle(.plain).accessibilityLabel("移除 \(file.lastPathComponent)")
                             }
                         }
                     }
-                }.frame(maxHeight:100)
+                }.frame(maxHeight:180)
             }
-            HStack { Text("手机 → 文件与下载 → 来自电脑").font(.system(size:11)).foregroundStyle(.secondary); Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button { sending = true; Task { if await model.publish(text,paths:files) { dismiss() }; sending = false } } label:{ if sending { ProgressView().controlSize(.small).frame(width:58) } else { Text("分享").frame(width:58) } }.buttonStyle(.borderedProminent).tint(accent).disabled(sending || (text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && files.isEmpty)).keyboardShortcut(.defaultAction) }
-        }.padding(28).frame(width:520).fileImporter(isPresented:$picker,allowedContentTypes:[.item],allowsMultipleSelection:true) { result in if case .success(let urls) = result { files.append(contentsOf:urls.filter{!files.contains($0)}) } }
+            HStack {
+                Text(model.publishTarget == "phone" ? "手机 → 文件与下载 → 来自电脑" : "发往已配对电脑；文字将作为 txt 文件发送").font(.system(size:11)).foregroundStyle(.secondary)
+                Spacer()
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button {
+                    sending = true
+                    Task { if await model.sendDraft() { dismiss() }; sending = false }
+                } label:{ if sending { ProgressView().controlSize(.small).frame(width:58) } else { Text("发送").frame(width:58) } }
+                .buttonStyle(.borderedProminent).tint(accent).disabled(sending || model.importingFiles || !model.online || (model.publishText.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && model.publishFiles.isEmpty)).keyboardShortcut(.defaultAction)
+            }
+        }.padding(28).frame(width:560)
+         .task(id: model.online) { if model.online { await model.loadMachines() }; textFocused = !model.publishFileMode }
+         .fileImporter(isPresented:$picker,allowedContentTypes:[.item],allowsMultipleSelection:true) { result in if case .success(let urls) = result { model.importSharedFiles(urls) } }
+         .alert("分享提示",isPresented:Binding(get:{!model.lastError.isEmpty},set:{if !$0 {model.lastError = ""}})) { Button("知道了") { model.lastError = "" } } message:{ Text(model.lastError) }
     }
 }
 
@@ -650,7 +730,7 @@ struct RootView:View {
                 default: ConnectionView()
                 }
             }.frame(maxWidth:.infinity,maxHeight:.infinity).background(canvas)
-              .toolbar { ToolbarItem(placement:.primaryAction) { Button { model.showPublish = true } label:{ Label("分享",systemImage:"square.and.arrow.up") }.help("分享给手机") } }
+              .toolbar { ToolbarItem(placement:.primaryAction) { Button { model.openPublish() } label:{ Label("分享",systemImage:"square.and.arrow.up") }.help("分享给手机或电脑") } }
         }.navigationTitle("").tint(accent).frame(minWidth:980,minHeight:700)
           .sheet(isPresented:$model.showPublish) { PublishView().environmentObject(model) }
           .sheet(isPresented:$model.showAddMachine) { AddMachineView().environmentObject(model) }
@@ -664,6 +744,15 @@ struct RootView:View {
 
 @MainActor final class AppDelegate:NSObject,NSApplicationDelegate {
     weak var model:BridgeModel?
+    private var pendingFiles: [URL] = []
+    func attach(_ model: BridgeModel) {
+        self.model = model
+        if !pendingFiles.isEmpty { let files = pendingFiles; pendingFiles = []; model.importSharedFiles(files) }
+    }
+    func application(_ sender: NSApplication, open urls: [URL]) {
+        if let model { model.importSharedFiles(urls) }
+        else { pendingFiles.append(contentsOf: urls) }
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows:Bool) -> Bool {
         NSApp.windows.first(where:{$0.canBecomeMain})?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true); return true
@@ -692,12 +781,12 @@ struct RootView:View {
     @StateObject private var model = BridgeModel()
     var body:some Scene {
         WindowGroup {
-            RootView().environmentObject(model).onAppear { delegate.model = model }
+            RootView().environmentObject(model).onAppear { delegate.attach(model) }
         }.defaultSize(width:1120,height:780).windowStyle(.hiddenTitleBar)
-         .commands { CommandGroup(replacing:.newItem) { Button("分享给手机…") { model.showPublish = true }.keyboardShortcut("n"); Button("显示连接") { model.selected = "connect" }.keyboardShortcut("1") }; CommandGroup(replacing:.appSettings) { Button("设置…") { model.selected = "settings" }.keyboardShortcut(",") } }
+         .commands { CommandGroup(replacing:.newItem) { Button("分享内容…") { model.openPublish() }.keyboardShortcut("n"); Button("显示连接") { model.selected = "connect" }.keyboardShortcut("1") }; CommandGroup(replacing:.appSettings) { Button("设置…") { model.selected = "settings" }.keyboardShortcut(",") } }
         MenuBarExtra("声笺",systemImage:"waveform.bubble.fill") {
             Button("打开声笺") { NSApp.activate(ignoringOtherApps:true); NSApp.windows.first(where:{$0.canBecomeMain})?.makeKeyAndOrderFront(nil) }
-            Button("分享给手机…") { model.showPublish = true; NSApp.activate(ignoringOtherApps:true) }
+            Button("分享内容…") { model.openPublish() }
             Divider()
             Text(model.connectionLabel)
             Button(model.publicEnabled ? "关闭连接" : "开启连接") { Task { await model.setPublic(!model.publicEnabled) } }

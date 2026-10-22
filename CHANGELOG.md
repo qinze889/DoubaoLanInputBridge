@@ -2,6 +2,13 @@
 
 发行包与完整说明以 [GitHub Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases) 为准。`VERSION` 表示当前分支源码版本。
 
+## 未发布
+
+- Mac 新增系统分享扩展：截屏或预览中选择“分享 → 声笺”，图片会带入发送窗口，可选择手机或已配对电脑。
+- 修复首页底部两张卡片没有点击动作，分别打开文字分享和文件分享。
+- 分享窗口显示图片预览，保留未发送草稿；临时附件会先保存为本机私有副本，避免截图窗口关闭后文件失效。
+- Mac CI 同时构建并校验内嵌分享扩展，增加文件副本生命周期、重复文件名、权限和输入校验测试。
+
 ## 1.4.0 — 2026-10-22
 
 [发行说明与下载](https://github.com/qinze889/DoubaoLanInputBridge/releases/tag/v1.4.0) · [查看改动](https://github.com/qinze889/DoubaoLanInputBridge/pull/3)

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>ShengjianShare</string>
+<key>CFBundleIdentifier</key><string>com.doubaolaninputbridge.mac.share</string>
+<key>CFBundleName</key><string>声笺</string>
+<key>CFBundleDisplayName</key><string>声笺</string>
+<key>CFBundlePackageType</key><string>XPC!</string>
+<key>CFBundleShortVersionString</key><string>1.4.0</string>
+<key>CFBundleVersion</key><string>4</string>
+<key>CFBundleIconFile</key><string>Shengjian.icns</string>
+<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
+<key>LSMinimumSystemVersion</key><string>14.4</string>
+<key>NSExtension</key><dict>
+    <key>NSExtensionPointIdentifier</key><string>com.apple.share-services</string>
+    <key>NSExtensionPrincipalClass</key><string>ShengjianShareViewController</string>
+    <key>NSExtensionAttributes</key><dict>
+        <key>NSExtensionActivationRule</key><string>SUBQUERY(extensionItems, $item, $item.attachments.@count &gt; 0 AND $item.attachments.@count &lt;= 16 AND SUBQUERY($item.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.file-url").@count == $item.attachments.@count).@count == 1</string>
+    </dict>
+</dict>
+</dict></plist>
