@@ -1,5 +1,9 @@
 # Mac 与 Windows 共享文件
 
+[文档导航](README.md) · [当前版本](../CHANGELOG.md)
+
+以下流程面向已发布的 1.3.0。1.4.0 的固定域名机器端点、统一连接方式与 P2P 见 [PR #3](https://github.com/qinze889/DoubaoLanInputBridge/pull/3)。
+
 每台 Mac 或 Windows 运行声笺及自己的 Cloudflare Quick Tunnel，无需共同局域网。可以同时配对多台机器，逐台选择目标发送文件。支持 Mac↔Windows、Windows↔Windows 和 Mac↔Mac。
 
 Windows 需使用带“机器共享”的 1.3.0 或更新版本，Tauri 安装版和 Qt 便携版均提供入口，完整包内置 cloudflared。Mac 1.2.0 已使用相同配对/文件协议，可以继续使用。

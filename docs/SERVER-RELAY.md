@@ -2,7 +2,11 @@
 
 ## 入口与边界
 
-固定入口：`https://server.xjiaoai.com/shengjian/`。这里是独立的设备管理后台，手机扫描每台电脑自己的二维码。
+[文档导航](README.md) · [CI 说明](CI.md)
+
+当前部署在 47.96.180.28（32 核、64GB）；2026-10-22 已从原生产后端迁出。源码的四方式统一入口仍在 1.4.0 / PR #3，既有 1.3.0 固定公网连接器可继续使用新域名。自行部署时，将 systemd 中的 `SHENGJIAN_ORIGIN` 与 Nginx server_name 设置为自己的有效 HTTPS 域名。
+
+固定入口：`https://test.xjiaoai.com/shengjian/`。这里是独立的设备管理后台，手机扫描每台电脑自己的二维码。
 
 电脑通过 HTTPS 长轮询主动连接服务器，不要求电脑有公网 IP、端口映射或 Cloudflare 临时域名。手机请求由服务器临时转给电脑，实际粘贴由电脑执行后返回结果。设备离线会提示离线，超过等待时间会提示结果未知，连接恢复不会自动重放键盘输入。电脑后台需要一直运行。
 
@@ -29,7 +33,7 @@
 python server/relay.py --data /var/lib/shengjian-relay --port 18766
 ```
 
-后端仅监听 `127.0.0.1:18766`。`server/shengjian-relay.service` 为独立低权限 systemd 服务，代码放 `/opt/shengjian-relay/current`，私有状态放 `/var/lib/shengjian-relay`。`server/nginx-location.conf` 仅添加到 `server.xjiaoai.com` 的现有 HTTPS server 中，检查 `nginx -t` 后平滑 reload。
+后端仅监听 `127.0.0.1:18766`。`server/shengjian-relay.service` 为独立低权限 systemd 服务，代码放 `/opt/shengjian-relay/current`，私有状态放 `/var/lib/shengjian-relay`。`server/nginx-location.conf` 仅添加到 `test.xjiaoai.com` 的现有 HTTPS server 中，检查 `nginx -t` 后平滑 reload。
 
 凭据文件权限为 0600、目录为 0700。手机文本和文件仅留在有上限的内存请求中，请求完成/超时后释放，不写入服务器数据库；桌面原有历史归档保持不变。服务重启会清除会话和未完成请求，不能将未知结果视作发送成功。备份仅需私有凭据文件，恢复后需重新登录后台。
 

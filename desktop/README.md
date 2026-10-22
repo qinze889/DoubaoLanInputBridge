@@ -1,4 +1,6 @@
-# 声笺桌面端
+# 声笺 Windows 桌面端
+
+[项目首页](../README.md) · [开发与构建](../docs/DEVELOPMENT.md) · [CI 说明](../docs/CI.md)
 
 桌面壳使用 Tauri 2、React 和 TypeScript，Python Sidecar 继续提供局域网手机页面、剪贴板与历史数据服务。
 
