@@ -150,11 +150,25 @@ async def streaming_speech(provider, store, uid, body):
         await client.aclose()
         raise Fault('audio_result_unknown', 502) from None
     if upstream.status_code != 200:
-        if 400 <= upstream.status_code < 500:
+        code = 'audio_rejected' if 400 <= upstream.status_code < 500 else 'audio_result_unknown'
+        raw = bytearray()
+        try:
+            async for chunk in upstream.aiter_bytes():
+                raw.extend(chunk)
+                if len(raw) > 8192:
+                    break
+            value = json.loads(raw)
+            known = value.get('error', {}).get('code')
+            if known in REFUNDABLE:
+                code = known
+        except (ValueError, AttributeError, TypeError, httpx.HTTPError):
+            pass
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+        if code in REFUNDABLE:
             store.settle(uid, body.request_id, 0)
-        await upstream.aclose()
-        await client.aclose()
-        raise Fault('audio_rejected', 502)
+        raise Fault(code, 503 if code in {'audio_busy', 'tts_login_required'} else 502)
     async def generate():
         total = 0
         complete = False

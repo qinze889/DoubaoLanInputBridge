@@ -93,3 +93,13 @@ def test_stream_asr_partial_before_finish_and_no_duplicate_settlement(tmp_path, 
             assert ws.receive_json()['error']=='usage_already_submitted'
         assert app.state.store.wallet(user['user_id'])=={'balance':99,'reserved':0}
         assert len(links)==1
+
+
+@pytest.mark.parametrize('code',['audio_busy','tts_login_required'])
+def test_stream_http_pre_execution_failure_refunds_without_private_details(tmp_path,code):
+    app,user=setup(tmp_path,lambda r:httpx.Response(503,json={'error':{'code':code,'message':'private upstream account detail'}}))
+    with TestClient(app) as client:
+        r=client.post(PREFIX+'/voice/speech/stream',headers={'Authorization':'Bearer '+user['token']},json={'input':'你好','request_id':'http-pre-execution-failure'})
+        assert r.status_code==503 and r.json()['error']==code
+        assert 'private upstream' not in r.text
+        assert app.state.store.wallet(user['user_id'])=={'balance':100,'reserved':0}
