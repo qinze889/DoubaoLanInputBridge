@@ -78,7 +78,8 @@ const {
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
     let connections = 0,
-      finals = 0;
+      finals = 0,
+      finalDelay = 0;
     await page.routeWebSocket(/\/voice\/asr\/stream$/, (socket) => {
       connections++;
       socket.onMessage((data) => {
@@ -89,14 +90,18 @@ const {
               JSON.stringify({ type: "asr.ready", partial_results: true }),
             );
           if (control.type === "finish") {
-            finals++;
-            socket.send(
-              JSON.stringify({
-                type: "asr.final",
-                text: "这是第" + finals + "个语音问题",
-              }),
-            );
-            socket.send(JSON.stringify({ type: "asr.finished" }));
+            const number = ++finals;
+            const complete = () => {
+              socket.send(
+                JSON.stringify({
+                  type: "asr.final",
+                  text: "这是第" + number + "个语音问题",
+                }),
+              );
+              socket.send(JSON.stringify({ type: "asr.finished" }));
+            };
+            if (finalDelay) setTimeout(complete, finalDelay);
+            else complete();
           }
         } else
           socket.send(
@@ -229,6 +234,43 @@ const {
       await page.locator("#messages .assistant").first().textContent(),
       "这是第一句实时回答。",
       "late deltas from the interrupted turn are ignored",
+    );
+    const historyAfterBarge = await page.evaluate(() => messages);
+    assert(
+      historyAfterBarge.some(
+        (m) => m.role === "assistant" && m.content.includes("后续内容未播出"),
+      ),
+      "next turn knows the previous voice reply was interrupted",
+    );
+    const userCount = await page.locator("#messages .user").count();
+    finalDelay = 300;
+    await page.evaluate(() => feed(true, 20));
+    await page.waitForTimeout(30);
+    await page.evaluate(() => feed(false, 40));
+    await page.evaluate(() => feed(true, 20));
+    assert(
+      await page.evaluate(() => !!live.waitingFor),
+      "a resumed phrase waits for the earlier ASR final",
+    );
+    finalDelay = 0;
+    await page.waitForFunction(
+      () => live.utterance.ready && !live.waitingFor,
+      null,
+      { timeout: 5000 },
+    );
+    await page.evaluate(() => feed(false, 40));
+    await page.waitForFunction(() => live && !live.processing, null, {
+      timeout: 15000,
+    });
+    assert.equal(
+      await page.locator("#messages .user").count(),
+      userCount + 1,
+      "continuation submits exactly once",
+    );
+    assert.equal(
+      await page.locator("#messages .user").last().textContent(),
+      "这是第3个语音问题 这是第4个语音问题",
+      "no dropped words across the ASR finish boundary",
     );
     // Listening also remains active while waiting for the model, before any audio.
     await page.evaluate(() => feed(true, 20));

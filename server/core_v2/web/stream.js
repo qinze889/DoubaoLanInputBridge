@@ -42,11 +42,12 @@ class VoiceSentences {
     this.send = send;
     this.pending = "";
     this.first = true;
+    this.timer = null;
   }
   push(text) {
     this.pending += text;
     while (this.pending) {
-      const minimum = this.first ? 8 : 18;
+      const minimum = this.first ? 4 : 18;
       const punctuation = /[。！？!?；;\n，,]/g;
       let match,
         cut = 0;
@@ -56,23 +57,40 @@ class VoiceSentences {
           break;
         }
       }
-      const maximum = this.first ? 32 : 64;
+      const maximum = this.first ? 16 : 64;
       if (!cut && Array.from(this.pending).length >= maximum)
         cut = Array.from(this.pending).slice(0, maximum).join("").length;
-      if (!cut) return;
+      if (!cut) {
+        if (this.first && this.pending.length >= 6 && !this.timer)
+          this.timer = setTimeout(() => {
+            this.timer = null;
+            if (this.first) this.flush();
+          }, 140);
+        return;
+      }
       const piece = this.pending.slice(0, cut);
       this.pending = this.pending.slice(cut);
       this.first = false;
+      clearTimeout(this.timer);
+      this.timer = null;
       this.send(piece);
     }
   }
+  cancel() {
+    clearTimeout(this.timer);
+    this.timer = null;
+    this.pending = "";
+  }
   flush() {
+    clearTimeout(this.timer);
+    this.timer = null;
+    this.first = false;
     if (this.pending.trim()) this.send(this.pending);
     this.pending = "";
   }
 }
 class PCMPlayback {
-  constructor(context, onStart = () => {}) {
+  constructor(context, onStart = () => {}, echo = null) {
     this.context = context;
     this.sources = new Set();
     this.next = 0;
@@ -80,6 +98,8 @@ class PCMPlayback {
     this.tail = null;
     this.src = "";
     this.onStart = onStart;
+    this.echo = echo;
+    this.segments = [];
   }
   async push(encoded) {
     // Wait at most two seconds ahead; a long answer cannot accumulate minutes of audio.
@@ -111,14 +131,27 @@ class PCMPlayback {
     this.sources.add(source);
     const at = Math.max(this.next, this.context.currentTime + 0.025);
     this.next = at + buffer.duration;
+    this.echo?.add(values, at);
     source.start(at);
+    if (this.firstScheduled === undefined) this.firstScheduled = at;
     this.onStart();
   }
   async drain() {
     while (!this.stopped && this.sources.size)
       await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  mark(text, start) {
+    this.segments.push({ text, start, end: this.next });
+  }
+  heard() {
+    return this.segments
+      .filter((segment) => segment.end <= this.context.currentTime)
+      .map((segment) => segment.text)
+      .join("");
+  }
   pause() {
+    this.onStop?.();
+    this.echo?.cut(this.context.currentTime);
     this.stopped = true;
     for (const source of this.sources) {
       source.stop();

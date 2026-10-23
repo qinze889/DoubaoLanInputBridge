@@ -179,8 +179,8 @@ async def speech(request: Request):
             url = 'wss://ws-samantha.doubao.com/samantha/audio/tts?' + source.urlencode(params)
             # Decode AAC incrementally. No temporary audio files and no network inputs to FFmpeg.
             process = await asyncio.create_subprocess_exec(source.shutil.which('ffmpeg') or 'ffmpeg', '-nostdin', '-hide_banner',
-                '-loglevel', 'error', '-probesize', '2048', '-analyzeduration', '0', '-protocol_whitelist', 'pipe,fd',
-                '-f', 'aac', '-i', 'pipe:0', '-vn', '-f', 's16le', '-ar', '24000', '-ac', '1', 'pipe:1',
+                '-loglevel', 'error', '-probesize', '32', '-analyzeduration', '0', '-protocol_whitelist', 'pipe,fd',
+                '-f', 'aac', '-i', 'pipe:0', '-vn', '-f', 's16le', '-ar', '24000', '-ac', '1', '-flush_packets', '1', 'pipe:1',
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             async def feed():
                 nonlocal complete

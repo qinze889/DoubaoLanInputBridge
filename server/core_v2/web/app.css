@@ -282,3 +282,11 @@ small {
   border-left: 3px solid var(--blue);
   line-height: 1.6;
 }
+
+.message[data-interrupted="true"]::after {
+  content: "已打断";
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 8px;
+}

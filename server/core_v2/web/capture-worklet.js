@@ -11,7 +11,13 @@ class ShengjianCapture extends AudioWorkletProcessor {
       for (let i = 0; i < channel.length; i++) {
         this.samples[this.offset++] = channel[i];
         if (this.offset === this.samples.length) {
-          this.port.postMessage(this.samples, [this.samples.buffer]);
+          this.port.postMessage(
+            {
+              samples: this.samples,
+              time: (currentFrame + i + 1) / sampleRate,
+            },
+            [this.samples.buffer],
+          );
           this.samples = new Float32Array(512);
           this.offset = 0;
         }

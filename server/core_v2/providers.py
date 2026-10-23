@@ -23,6 +23,7 @@ class ProviderConfig:
     text_model: str = ''
     vision_model: str = ''
     voice_key: str = ''
+    voice_effort: str = ''
     audio_base: str = ''
     audio_key: str = ''
     audio_stream: bool = False
@@ -37,7 +38,7 @@ class ProviderConfig:
                    text_model=os.getenv('SHENGJIAN_TEXT_MODEL',''), vision_model=os.getenv('SHENGJIAN_VISION_MODEL',''),
                    audio_base=os.getenv('SHENGJIAN_AUDIO_BASE_URL','').rstrip('/'), audio_key=os.getenv('SHENGJIAN_AUDIO_API_KEY',''),
                    audio_stream=os.getenv('SHENGJIAN_AUDIO_STREAM','')=='1',
-                   voice_key=os.getenv('SHENGJIAN_DOUBAO_API_KEY',''), speaker=os.getenv('SHENGJIAN_DOUBAO_SPEAKER',''),
+                   voice_key=os.getenv('SHENGJIAN_DOUBAO_API_KEY',''), voice_effort=os.getenv('SHENGJIAN_VOICE_REASONING_EFFORT',''), speaker=os.getenv('SHENGJIAN_DOUBAO_SPEAKER',''),
                    asr_resource=os.getenv('SHENGJIAN_DOUBAO_ASR_RESOURCE','volc.seedasr.sauc.duration'),
                    tts_resource=os.getenv('SHENGJIAN_DOUBAO_TTS_RESOURCE','seed-tts-2.0'))
 
@@ -53,6 +54,8 @@ class Providers:
                 raise ValueError('Model endpoint must be HTTPS or loopback HTTP without URL credentials')
         if not 1 <= config.token_credits <= 10000:
             raise ValueError('Invalid credit rate')
+        if config.voice_effort not in {'', 'low'}:
+            raise ValueError('Voice effort must be empty or an upstream-verified low profile')
         self.cached_models = None
         self.models_at = 0
         self.discovery_lock = asyncio.Lock()
@@ -127,11 +130,13 @@ class Providers:
                 data=await request.json()
             except ValueError:
                 raise Fault('invalid_json') from None
-            if not isinstance(data,dict) or set(data)-{'model','messages','max_tokens','max_completion_tokens','temperature','stream','stream_options','tools','tool_choice','parallel_tool_calls'}:
+            if not isinstance(data,dict) or set(data)-{'model','messages','max_tokens','max_completion_tokens','temperature','stream','stream_options','tools','tool_choice','parallel_tool_calls','reasoning_effort'}:
                 raise Fault('unsupported_model_request')
             models=await self.models()
             if data.get('model') not in {m['id'] for m in models}:
                 raise Fault('model_not_allowed',403)
+            if 'reasoning_effort' in data and (self.config.voice_effort != 'low' or data['reasoning_effort'] != 'low' or data['model'] != self.config.text_model):
+                raise Fault('unsupported_reasoning_effort')
             messages=data.get('messages')
             if not isinstance(messages,list) or not 1<=len(messages)<=100 or any(not isinstance(m,dict) or m.get('role') not in {'system','developer','user','assistant','tool'} for m in messages):
                 raise Fault('invalid_messages')
@@ -228,6 +233,7 @@ class Providers:
         @app.get(PREFIX+'/voice/capabilities')
         async def voice_capabilities(uid=Depends(user)):
             return {'partial_results': self.config.audio_stream, 'streaming_audio': self.config.audio_stream,
+                    'reasoning_effort': self.config.voice_effort or None,
                     'asr_path': '/voice/asr/stream' if self.config.audio_stream else '/voice/asr', 'sample_rate': 24000}
 
         @app.post(PREFIX+'/voice/speech/stream')

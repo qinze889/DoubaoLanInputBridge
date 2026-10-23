@@ -25,7 +25,12 @@ class VoiceEndpoint {
       while (this.preLength > 6400 && this.pre.length > 1)
         this.preLength -= this.pre.shift().length;
       this.voiced = voice ? this.voiced + pcm.length : 0;
-      if (this.voiced < 2240) return; // 140 ms prevents a click from opening ASR.
+      if (this.voiced < 1600) return; // 100 ms prevents a click from opening ASR.
+      // Only the voiced onset plus 120 ms lead-in is needed. Sending 400 ms
+      // of old silence creates a permanent queue in the source's paced ASR pump.
+      const keep = this.voiced + 1920;
+      while (this.preLength > keep && this.pre.length > 1)
+        this.preLength -= this.pre.shift().length;
       this.active = true;
       this.length = this.preLength;
       this.callbacks.start(this.pre);
@@ -36,9 +41,10 @@ class VoiceEndpoint {
     this.length += pcm.length;
     this.silence = voice ? 0 : this.silence + pcm.length;
     this.callbacks.data(pcm);
-    if (this.silence >= 10400 || this.length >= 25 * 16000) {
+    if (this.silence >= 7200 || this.length >= 25 * 16000) {
+      const trailingSilence = this.silence / 16000;
       this.reset();
-      this.callbacks.end();
+      this.callbacks.end({ trailingSilence });
     }
   }
 }

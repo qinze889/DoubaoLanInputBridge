@@ -89,3 +89,25 @@ def test_official_voice_is_explicitly_unconfigured(tmp_path):
             ws.send_json({'token':user['token'],'request_id':'isolated-asr-request'})
             assert ws.receive_json()=={'type':'error','error':'asr_provider_not_configured'}
         assert app.state.store.wallet(user['user_id'])=={'balance':100,'reserved':0}
+
+
+
+def test_verified_voice_effort_is_opt_in_and_leaves_task_requests_unchanged(tmp_path):
+    captured=[]
+    def upstream(request):
+        if request.method=='GET':return httpx.Response(200,json={'data':[{'id':'fixture-text'}]})
+        captured.append(json.loads(request.content))
+        return httpx.Response(200,json={'choices':[{'message':{'content':'好的'}}],'usage':{'total_tokens':2}})
+    provider=Providers(ProviderConfig(model_base='http://127.0.0.1:1/v1',model_key='fixture',text_model='fixture-text',voice_effort='low'),httpx.MockTransport(upstream))
+    app=create_app(tmp_path,admin_token='admin-'+'x'*40,providers=provider)
+    identity=app.state.store.register('voice-effort-user','voice-effort-password',app.state.store.invite(100))
+    with TestClient(app) as client:
+        headers={'Authorization':'Bearer '+identity['token']}
+        assert client.get(PREFIX+'/voice/capabilities',headers=headers).json()['reasoning_effort']=='low'
+        body={'model':'fixture-text','messages':[{'role':'user','content':'你好'}],'max_tokens':64}
+        assert client.post(PREFIX+'/model/v1/chat/completions',headers=headers,json={**body,'reasoning_effort':'high'}).status_code==400
+        assert not captured
+        assert client.post(PREFIX+'/model/v1/chat/completions',headers=headers,json={**body,'reasoning_effort':'low'}).status_code==200
+        assert captured[-1]['reasoning_effort']=='low'
+        assert client.post(PREFIX+'/model/v1/chat/completions',headers=headers,json=body).status_code==200
+        assert 'reasoning_effort' not in captured[-1]

@@ -118,6 +118,8 @@ function logoutLocal() {
   $("workspace").hidden = true;
   $("logout").hidden = true;
   $("device-config").textContent = "";
+  $("voice-latency").textContent = "";
+  $("voice-latency").hidden = true;
   messages = [];
   $("messages").replaceChildren();
 }
@@ -558,6 +560,7 @@ async function streamAudio(text, epoch, player) {
   const controller = new AbortController();
   voiceController = controller;
   let audioDone = false;
+  const segmentStart = Math.max(player.next, player.context.currentTime);
   try {
     const response = await api(
       "/voice/speech/stream",
@@ -577,11 +580,12 @@ async function streamAudio(text, epoch, player) {
       controller.signal,
     );
     if (!audioDone) throw new Error("audio_result_unknown");
+    if (epoch === speechEpoch) player.mark(text, segmentStart);
   } finally {
     if (voiceController === controller) voiceController = null;
   }
 }
-function speechPipeline() {
+function speechPipeline(turn = null) {
   const epoch = speechEpoch,
     session = live;
   const player = new PCMPlayback(session.context, () => {
@@ -593,9 +597,26 @@ function speechPipeline() {
           first_audio_ms: Math.round(performance.now() - session.replyStart),
         };
       }
+      const speechEnd = turn?.speechEnd;
+      if (Number.isFinite(speechEnd) && !turn.latencyShown) {
+        turn.latencyShown = true;
+        const seconds = Math.max(
+          0,
+          player.firstScheduled -
+            speechEnd +
+            (session.context.outputLatency || session.context.baseLatency || 0),
+        );
+        $("voice-latency").textContent =
+          "本轮首音约 " + seconds.toFixed(2) + " 秒";
+        $("voice-latency").title =
+          "根据本机采集和播放时钟估算；实际听感受音频设备与网络影响。";
+        $("voice-latency").hidden = false;
+      }
       liveState("正在播报 · 开口即可打断");
     }
   });
+  player.echo = session.echo || null;
+  if (turn) turn.player = player;
   // Register before the first audio arrives so pending synthesis can also be stopped.
   playback = player;
   let chain = Promise.resolve(),
@@ -612,6 +633,7 @@ function speechPipeline() {
         }
       });
   });
+  player.onStop = () => sentences.cancel();
   return {
     push: (text) => sentences.push(text),
     async done() {
@@ -634,9 +656,18 @@ async function streamChat(history, model, owner, operation) {
   replyController = controller;
   const session = live;
   session.replyStart = performance.now();
-  const speech = $("speak").checked ? speechPipeline() : null;
+  const turn = {
+    history,
+    text: "",
+    voiced: $("speak").checked,
+    complete: false,
+    speechEnd: session.utterance?.speechEnd,
+  };
+  session.replyTurn = turn;
+  const speech = turn.voiced ? speechPipeline(turn) : null;
   const node = el("div", "", "message assistant");
   $("messages").append(node);
+  turn.node = node;
   let text = "",
     complete = false;
   messages = history;
@@ -654,6 +685,7 @@ async function streamChat(history, model, owner, operation) {
           ...history,
         ],
         max_tokens: 512,
+        reasoning_effort: session.capabilities.reasoning_effort || undefined,
         stream: true,
       },
       "POST",
@@ -677,6 +709,7 @@ async function streamChat(history, model, owner, operation) {
             first_token_ms: Math.round(performance.now() - session.replyStart),
           };
         text += delta;
+        turn.text = text;
         node.textContent = text;
         messages = [...history, { role: "assistant", content: text }];
         $("messages").scrollTop = $("messages").scrollHeight;
@@ -688,6 +721,7 @@ async function streamChat(history, model, owner, operation) {
     if (!complete || !text) throw new Error("model_result_unknown");
     $("prompt").value = "";
     await speech?.done();
+    turn.complete = true;
     if (owner === token && operation === composeEpoch) await refresh();
   } finally {
     if (replyController === controller) replyController = null;
@@ -799,7 +833,22 @@ $("record").onclick = async () => {
 function liveState(text) {
   $("live-state").textContent = text;
 }
-function interruptReply() {
+function interruptReply(session = live) {
+  const turn = session?.replyTurn;
+  if (turn && !turn.complete && !turn.interrupted) {
+    turn.interrupted = true;
+    const heard = turn.voiced ? turn.player?.heard() || "" : turn.text;
+    messages = [
+      ...turn.history,
+      {
+        role: "assistant",
+        content:
+          (heard || "") +
+          "（用户打断了回复，后续内容未播出。请接着用户的新话继续。）",
+      },
+    ];
+    if (turn.node) turn.node.dataset.interrupted = "true";
+  }
   replyController?.abort();
   replyController = null;
   stopSpeech();
@@ -817,6 +866,7 @@ function stopLive(reason = "实时对话已结束") {
     session.closed = true;
     clearTimeout(session.timeout);
     session.ws?.close();
+    session.sockets?.forEach((socket) => socket.close());
     $("live-transcript").textContent = "";
     $("live-transcript").hidden = true;
     session.processor?.disconnect();
@@ -827,7 +877,7 @@ function stopLive(reason = "实时对话已结束") {
     stopSpeech();
     // Ignore results from a conversation that the user ended.
     if (session.owner === token && session.destination === "chat")
-      interruptReply();
+      interruptReply(session);
   }
   $("realtime").textContent = "开始实时对话";
   $("realtime").setAttribute("aria-pressed", "false");
@@ -844,9 +894,23 @@ function liveFailure(session, failure) {
 }
 function startUtterance(session, chunks) {
   if (live !== session) return;
-  if (session.utterance && !session.utterance.final) {
-    session.utterance.abandoned = true;
-    session.ws?.close();
+  const previous = session.utterance;
+  if (session.waitingFor && previous && !previous.ws) {
+    previous.ended = false;
+    for (const chunk of chunks) sendLivePCM(session, chunk, previous);
+    liveState("正在听，请继续说…");
+    return;
+  }
+  const continuing =
+    previous &&
+    !previous.final &&
+    previous.ended &&
+    previous.ws &&
+    !session.waitingFor;
+  if (continuing) session.waitingFor = previous;
+  else if (previous && !previous.final) {
+    previous.abandoned = true;
+    previous.ws?.close();
   }
   interruptReply();
   session.processing = true;
@@ -854,13 +918,29 @@ function startUtterance(session, chunks) {
   $("live-transcript").textContent = "";
   $("live-transcript").hidden = false;
   session.utteranceStart = performance.now();
+  $("voice-latency").hidden = true;
   const utterance = {
     pending: [...chunks],
     ended: false,
     ready: false,
     final: false,
+    prefix: "",
+    ws: null,
   };
   session.utterance = utterance;
+  if (continuing) {
+    clearTimeout(session.timeout);
+    session.timeout = setTimeout(
+      () => liveFailure(session, new Error("voice_connection_ended")),
+      1800,
+    );
+    liveState("正在听，请继续说…");
+    return;
+  }
+  openLiveASR(session, utterance);
+}
+function openLiveASR(session, utterance) {
+  if (live !== session || session.utterance !== utterance) return;
   liveState("正在听，停顿后自动发送…");
   const socket = new WebSocket(
     location.origin.replace(/^http/, "ws") +
@@ -868,6 +948,9 @@ function startUtterance(session, chunks) {
       (session.capabilities?.asr_path || "/voice/asr"),
   );
   session.ws = socket;
+  utterance.ws = socket;
+  session.sockets ||= new Set();
+  session.sockets.add(socket);
   clearTimeout(session.timeout);
   session.timeout = setTimeout(
     () => liveFailure(session, new Error("voice_connection_ended")),
@@ -882,7 +965,7 @@ function startUtterance(session, chunks) {
   socket.onmessage = async (event) => {
     if (
       live !== session ||
-      session.utterance !== utterance ||
+      (session.utterance !== utterance && session.waitingFor !== utterance) ||
       session.owner !== token
     )
       return;
@@ -891,12 +974,14 @@ function startUtterance(session, chunks) {
       if (reply.type === "error") throw new Error(reply.error);
       if (reply.type === "asr.ready") {
         utterance.ready = true;
-        for (const chunk of utterance.pending) sendLivePCM(session, chunk);
+        for (const chunk of utterance.pending)
+          sendLivePCM(session, chunk, utterance);
         utterance.pending = [];
         if (utterance.ended) socket.send(JSON.stringify({ type: "finish" }));
       }
-      if (reply.type === "asr.partial") {
-        $("live-transcript").textContent = reply.text || "";
+      if (reply.type === "asr.partial" && session.utterance === utterance) {
+        $("live-transcript").textContent =
+          (utterance.prefix ? utterance.prefix + " " : "") + (reply.text || "");
         if (!session.firstPartial) {
           session.firstPartial = true;
           session.metrics = {
@@ -911,12 +996,23 @@ function startUtterance(session, chunks) {
         utterance.final = true;
         clearTimeout(session.timeout);
         socket.close();
-        const text = reply.text?.trim();
+        const recognized = reply.text?.trim() || "";
+        if (session.waitingFor === utterance) {
+          session.waitingFor = null;
+          const next = session.utterance;
+          next.prefix = [utterance.prefix, recognized]
+            .filter(Boolean)
+            .join(" ");
+          openLiveASR(session, next);
+          return;
+        }
+        const text = [utterance.prefix, recognized].filter(Boolean).join(" ");
+        $("live-transcript").textContent = text;
         if (text) {
           $("prompt").value = text;
           liveState(
             session.destination === "chat"
-              ? "正在回复，你可以在播报时开口打断…"
+              ? "正在回复，可随时开口打断…"
               : "正在发送电脑任务…",
           );
           await submitPrompt(text);
@@ -932,32 +1028,34 @@ function startUtterance(session, chunks) {
     }
   };
   socket.onerror = () => {
-    if (session.utterance === utterance && !utterance.abandoned)
+    if (
+      (session.utterance === utterance || session.waitingFor === utterance) &&
+      !utterance.abandoned
+    )
       liveFailure(session, new Error("voice_connection_ended"));
   };
   socket.onclose = () => {
+    session.sockets?.delete(socket);
     if (
       !utterance.final &&
       !utterance.abandoned &&
-      session.utterance === utterance
+      (session.utterance === utterance || session.waitingFor === utterance)
     )
       liveFailure(session, new Error("voice_connection_ended"));
   };
 }
-function sendLivePCM(session, pcm) {
+function sendLivePCM(session, pcm, u = session.utterance) {
   if (live !== session) return;
-  const u = session.utterance;
   if (!u.ready) {
     u.pending.push(pcm.slice());
+    if (u.pending.reduce((n, chunk) => n + chunk.length, 0) > 28000)
+      liveFailure(session, new Error("识别衔接等待过久，请检查网络后重试。"));
     return;
   }
-  if (
-    session.ws.readyState !== WebSocket.OPEN ||
-    session.ws.bufferedAmount > 128000
-  )
+  if (u.ws.readyState !== WebSocket.OPEN || u.ws.bufferedAmount > 128000)
     return liveFailure(session, new Error("网络发送较慢，请检查连接后重试。"));
   for (let i = 0; i < pcm.length; i += 3200)
-    session.ws.send(pcm.slice(i, i + 3200).buffer);
+    u.ws.send(pcm.slice(i, i + 3200).buffer);
 }
 $("realtime").onclick = async () => {
   if (live) return stopLive();
@@ -1005,19 +1103,26 @@ $("realtime").onclick = async () => {
     session.models = models;
     if (live !== session) return;
     const resampler = new PCMResampler(session.context.sampleRate);
+    session.echo = new PlaybackEchoGuard();
     session.detector = new VoiceEndpoint({
       start: (chunks) => startUtterance(session, chunks),
       data: (pcm) => sendLivePCM(session, pcm),
-      end: () => {
+      end: ({ trailingSilence = 0 } = {}) => {
+        session.utterance.speechEnd =
+          (session.sampleTime ?? session.context.currentTime) - trailingSilence;
         session.utterance.ended = true;
-        if (session.utterance.ready && session.ws.readyState === WebSocket.OPEN)
-          session.ws.send(JSON.stringify({ type: "finish" }));
+        if (
+          session.utterance.ready &&
+          session.utterance.ws.readyState === WebSocket.OPEN
+        )
+          session.utterance.ws.send(JSON.stringify({ type: "finish" }));
         liveState("正在识别…");
       },
     });
     session.source = session.context.createMediaStreamSource(session.media);
-    const acceptSamples = (samples) => {
+    const acceptSamples = (samples, time = session.context.currentTime) => {
       if (live !== session) return;
+      session.sampleTime = time;
       if (
         !session.capabilities?.partial_results &&
         session.processing &&
@@ -1025,7 +1130,9 @@ $("realtime").onclick = async () => {
         !playback
       )
         return;
-      session.detector.push(resampler.push(samples));
+      session.detector.push(
+        session.echo.process(resampler.push(samples), time),
+      );
     };
     if (
       session.context.audioWorklet &&
@@ -1040,7 +1147,8 @@ $("realtime").onclick = async () => {
         "shengjian-capture",
         { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] },
       );
-      session.processor.port.onmessage = (event) => acceptSamples(event.data);
+      session.processor.port.onmessage = (event) =>
+        acceptSamples(event.data.samples, event.data.time);
     } else {
       session.processor = session.context.createScriptProcessor(512, 1, 1);
       session.processor.onaudioprocess = (event) =>
