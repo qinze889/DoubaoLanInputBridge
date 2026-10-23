@@ -10,6 +10,7 @@
     <title>声笺 · 设备与任务</title>
     <link rel="stylesheet" href="console/app.css" />
     <script src="console/pcm.js" defer></script>
+    <script src="console/vad.js" defer></script>
     <script src="console/app.js" defer></script>
   </head>
   <body>
@@ -81,14 +82,17 @@
               </div>
               <div class="actions">
                 <button class="primary" type="submit">发送</button
+                ><button type="button" id="realtime" aria-pressed="false">
+                  开始实时对话</button
                 ><button type="button" id="record">开始录音</button
                 ><button type="button" id="stop-speech">停止播报</button
                 ><label class="inline"
                   ><input type="checkbox" id="speak" checked />语音回复</label
                 >
               </div>
+              <p id="live-state" role="status" hidden></p>
               <p id="voice-note" class="muted">
-                说完后点击结束录音。识别文字可编辑，再发送对话或任务。
+                开启实时对话后，停顿即自动发送，再次开口可打断播报。单次录音可编辑后发送。
               </p>
             </form>
           </div>

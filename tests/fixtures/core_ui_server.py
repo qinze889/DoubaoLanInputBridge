@@ -23,4 +23,5 @@ async def complete_fixture(ident: str):
     return {'ok':True}
 
 app.state.store.register('browser-test','browser-password-123',app.state.store.invite(100))
+app.state.store.register('browser-second','browser-password-456',app.state.store.invite(100))
 uvicorn.run(app,host='127.0.0.1',port=int(sys.argv[2]),access_log=False,log_level='error')

@@ -23,6 +23,37 @@ for (const rate of [16000, 44100, 48000]) {
       ) < 0.003,
     );
 }
+// Endpointing is bounded and does not open a paid ASR request for silence/clicks.
+const VoiceEndpoint = require("../server/core_v2/web/vad.js");
+{
+  let starts = 0,
+    ends = 0,
+    samples = 0;
+  const detector = new VoiceEndpoint({
+    start: (chunks) => {
+      starts++;
+      samples += chunks.reduce((n, c) => n + c.length, 0);
+    },
+    data: (pcm) => (samples += pcm.length),
+    end: () => ends++,
+  });
+  const silence = new Int16Array(320);
+  const voice = new Int16Array(320).fill(3000);
+  for (let i = 0; i < 100; i++) detector.push(silence);
+  detector.push(voice); // One click, then silence.
+  for (let i = 0; i < 100; i++) detector.push(silence);
+  assert.equal(starts, 0);
+  for (let i = 0; i < 30; i++) detector.push(voice);
+  for (let i = 0; i < 46; i++) detector.push(silence);
+  assert.equal(starts, 1);
+  assert.equal(ends, 1);
+  assert(samples < 32000);
+  for (let i = 0; i < 1300; i++) detector.push(voice);
+  assert(
+    ends >= 2,
+    "continuous speech is split before the 30 second ASR limit",
+  );
+}
 (async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "shengjian-core-ui-"),
@@ -62,8 +93,33 @@ for (const rate of [16000, 44100, 48000]) {
         viewport: { width: 1100, height: 780 },
       }),
       page = await context.newPage();
+    page.setDefaultTimeout(15000);
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
+    let asrConnections = 0,
+      finishes = 0,
+      audioBytes = 0;
+    await page.routeWebSocket(/\/voice\/asr$/, (socket) => {
+      asrConnections++;
+      socket.onMessage((data) => {
+        if (typeof data !== "string") {
+          audioBytes += data.length;
+          return;
+        }
+        const control = JSON.parse(data);
+        if (control.token) socket.send(JSON.stringify({ type: "asr.ready" }));
+        if (control.type === "finish") {
+          finishes++;
+          socket.send(
+            JSON.stringify({
+              type: "asr.final",
+              text: "连续对话第" + finishes + "句",
+            }),
+          );
+          socket.send(JSON.stringify({ type: "asr.finished" }));
+        }
+      });
+    });
     await page.goto(origin + "/shengjian/api/v2/console");
     await page.getByLabel("用户名", { exact: true }).fill("browser-test");
     await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
@@ -124,6 +180,152 @@ for (const rate of [16000, 44100, 48000]) {
     );
     speechDelay = 0;
     speechBodies.length = 0;
+    // Real-time conversation: one microphone grant, automatic send, a second turn,
+    // interruption during playback, then background shutdown with no retry.
+    await page.locator("#destination").selectOption("chat");
+    await page.evaluate(() => {
+      window.savedAudioContext = window.AudioContext;
+      window.savedGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
+        navigator.mediaDevices,
+      );
+      window.liveGrants = 0;
+      window.liveStopped = 0;
+      navigator.mediaDevices.getUserMedia = async () => {
+        window.liveGrants++;
+        return {
+          getTracks: () => [
+            { stop: () => window.liveStopped++, addEventListener: () => {} },
+          ],
+        };
+      };
+      window.AudioContext = class {
+        constructor() {
+          this.sampleRate = 16000;
+          this.state = "running";
+        }
+        resume() {
+          return Promise.resolve();
+        }
+        close() {
+          this.state = "closed";
+          return Promise.resolve();
+        }
+        createMediaStreamSource() {
+          return { connect() {}, disconnect() {} };
+        }
+        createScriptProcessor() {
+          return { connect() {}, disconnect() {} };
+        }
+      };
+      window.feedLive = (speaking, blocks) => {
+        for (let i = 0; i < blocks; i++)
+          live.processor.onaudioprocess({
+            inputBuffer: {
+              getChannelData: () =>
+                new Float32Array(320).fill(speaking ? 0.1 : 0),
+            },
+          });
+      };
+    });
+    await page
+      .getByRole("button", { name: "开始实时对话", exact: true })
+      .click();
+    await page.getByText("正在聆听，请直接说…", { exact: true }).waitFor();
+    await page.evaluate(() => feedLive(false, 100));
+    assert.equal(asrConnections, 0, "silence never opens ASR");
+    await page.evaluate(() => feedLive(true, 20));
+    await page.waitForTimeout(50);
+    assert(
+      await page.evaluate(() => !!live),
+      "live stopped: " +
+        (await page.locator("#notice").textContent()) +
+        " sockets " +
+        asrConnections,
+    );
+    await page.evaluate(() => feedLive(false, 46));
+    await page.getByText("连续对话第1句", { exact: true }).waitFor();
+    await page.waitForFunction(() => live && !live.processing, null, {
+      timeout: 15000,
+    });
+    assert(audioBytes > 0);
+    // Hold playback so the user can interrupt with a second utterance.
+    await page.evaluate(() => {
+      window.Audio = class {
+        constructor(src) {
+          this.src = src;
+          this.ended = false;
+        }
+        play() {
+          return Promise.resolve();
+        }
+        pause() {
+          this.onpause?.();
+        }
+      };
+      window.pendingSpeech = speak("播放中可以打断");
+    });
+    await page.waitForFunction(() => !!playback);
+    await page.evaluate(() => feedLive(true, 20));
+    await page.waitForTimeout(50);
+    assert(
+      await page.evaluate(() => playback === null),
+      "opening speech interrupts playback",
+    );
+    await page.evaluate(() => {
+      window.Audio = class {
+        constructor(src) {
+          this.src = src;
+          this.ended = false;
+        }
+        play() {
+          setTimeout(() => {
+            this.ended = true;
+            this.onended?.();
+          }, 3);
+          return Promise.resolve();
+        }
+        pause() {
+          this.onpause?.();
+        }
+      };
+      feedLive(false, 46);
+    });
+    await page.getByText("连续对话第2句", { exact: true }).waitFor();
+    await page.waitForFunction(() => live && !live.processing, null, {
+      timeout: 15000,
+    });
+    assert.equal(
+      await page.evaluate(() => window.liveGrants),
+      1,
+      "microphone reused across turns",
+    );
+    assert.equal(finishes, 2);
+    await page.evaluate(async () => {
+      window.contextPlaybackCount = 0;
+      live.context.decodeAudioData = async () => ({});
+      live.context.createBufferSource = () => ({
+        connect() {},
+        disconnect() {},
+        start() {
+          window.contextPlaybackCount++;
+          setTimeout(() => this.onended?.(), 3);
+        },
+        stop() {
+          this.onended?.();
+        },
+      });
+      await speak("复用手机音频通道");
+    });
+    assert.equal(await page.evaluate(() => window.contextPlaybackCount), 1);
+
+    await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+    assert(await page.evaluate(() => live === null));
+    assert.equal(await page.evaluate(() => window.liveStopped), 1);
+    assert.equal(asrConnections, 2, "disconnect does not replay utterances");
+    await page.evaluate(() => {
+      window.AudioContext = window.savedAudioContext;
+      navigator.mediaDevices.getUserMedia = window.savedGetUserMedia;
+    });
     await page.getByRole("button", { name: "设备", exact: true }).click();
     await page.getByText("登记电脑连接器", { exact: true }).click();
     await page.getByLabel("设备名称").fill("测试电脑");
@@ -221,11 +423,55 @@ for (const rate of [16000, 44100, 48000]) {
         });
       }
     }
-    assert.deepEqual(errors, []);
+    // A response begun under the old account must never appear after logout.
+    let releaseReply, markStarted;
+    const replyGate = new Promise((resolve) => (releaseReply = resolve));
+    const requestStarted = new Promise((resolve) => (markStarted = resolve));
+    await page.route(
+      "**/shengjian/api/v2/model/v1/chat/completions",
+      async (route) => {
+        markStarted();
+        await replyGate;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            choices: [{ message: { content: "private-old-reply" } }],
+          }),
+        });
+      },
+    );
+    await page.locator("#destination").selectOption("chat");
+    await page.locator("#prompt").fill("旧账号延迟请求");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await requestStarted;
     await page.getByRole("button", { name: "退出登录" }).click();
     await page.locator("#auth").waitFor({ state: "visible" });
+    await page.getByLabel("用户名", { exact: true }).fill("browser-second");
+    await page.getByLabel("密码", { exact: true }).fill("browser-password-456");
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await page.locator("#workspace").waitFor({ state: "visible" });
+    releaseReply();
+    await page.waitForTimeout(200);
+    assert.equal(await page.locator("#messages").textContent(), "");
+    assert.equal(await page.locator("#prompt").inputValue(), "");
+    assert.equal(await page.locator("#task-list").textContent(), "");
+    assert.equal(await page.locator("#device-config").textContent(), "");
+    assert(
+      !(await page
+        .getByRole("button", { name: "发送", exact: true })
+        .isDisabled()),
+    );
+    await page.getByRole("button", { name: "任务", exact: true }).click();
+    assert(
+      !(await page.locator("#task-detail").textContent()).includes(
+        "voice-task-report",
+      ),
+    );
+    assert.deepEqual(errors, []);
+    await page.getByRole("button", { name: "退出登录" }).click();
     console.log(
-      "Core UI: login, chat, enroll, grant, durable task, cancellation, light/dark, mobile passed",
+      "Core UI: real-time endpointing/two turns/interruption/mic reuse/offline, account isolation, voice queue/stop, task report, enrollment/grants, cancellation, light/dark and mobile passed",
     );
   } finally {
     if (browser) await browser.close();

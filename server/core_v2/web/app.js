@@ -8,9 +8,11 @@ let token = sessionStorage.getItem("shengjian.session") || "",
   refreshTimer = null,
   playback = null,
   capture = null,
+  live = null,
   busy = false,
   messages = [],
-  taskEpoch = 0;
+  taskEpoch = 0,
+  composeEpoch = 0;
 const labels = {
   queued: "排队中",
   running: "执行中",
@@ -56,10 +58,11 @@ function error(e) {
   notice(errors[text] || text);
 }
 async function api(path, body, method = body === undefined ? "GET" : "POST") {
+  const requestToken = token;
   const r = await fetch(base + path, {
     method,
     headers: {
-      Authorization: "Bearer " + token,
+      Authorization: "Bearer " + requestToken,
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -69,7 +72,7 @@ async function api(path, body, method = body === undefined ? "GET" : "POST") {
     try {
       data = await r.json();
     } catch {}
-    if (r.status === 401) logoutLocal();
+    if (r.status === 401 && requestToken === token) logoutLocal();
     throw new Error(data.error || "服务暂时不可用 (" + r.status + ")");
   }
   return r;
@@ -85,10 +88,22 @@ function showPage(id) {
 }
 function logoutLocal() {
   taskEpoch++;
+  composeEpoch++;
+  busy = false;
+  currentTask = "";
+  cursor = 0;
+  $("compose").querySelector("[type=submit]").disabled = false;
+  $("prompt").value = "";
+  $("device-list").replaceChildren();
+  $("task-list").replaceChildren();
+  $("task-detail").replaceChildren(
+    el("p", "选择任务查看进度。手机切后台不会取消任务。", "muted"),
+  );
   token = "";
   sessionStorage.removeItem("shengjian.session");
   if (stream) stream.close();
   clearInterval(refreshTimer);
+  stopLive();
   stopCapture(false);
   stopSpeech();
   $("auth").hidden = false;
@@ -99,7 +114,9 @@ function logoutLocal() {
   $("messages").replaceChildren();
 }
 async function enter() {
+  const owner = token;
   await refresh();
+  if (owner !== token || !token) return;
   $("auth").hidden = true;
   $("workspace").hidden = false;
   $("logout").hidden = false;
@@ -127,21 +144,24 @@ $("login-form").addEventListener("submit", async (e) => {
   }
 });
 $("logout").onclick = async () => {
+  const owner = token;
   try {
     await json("/auth/logout", {});
   } finally {
-    logoutLocal();
+    if (owner === token) logoutLocal();
   }
 };
 document
   .querySelectorAll("nav button")
   .forEach((b) => (b.onclick = () => showPage(b.dataset.page)));
 async function refresh() {
+  const owner = token;
   const [me, devices, tasks] = await Promise.all([
     json("/me"),
     json("/devices"),
     json("/tasks"),
   ]);
+  if (owner !== token || !token) return;
   $("balance").textContent = `可用 ${me.balance} 积分 · 预留 ${me.reserved}`;
   const selected = $("destination").value;
   $("destination").replaceChildren(new Option("语音对话", "chat"));
@@ -217,6 +237,8 @@ async function refresh() {
     });
   if ([...$("destination").options].some((o) => o.value === selected))
     $("destination").value = selected;
+  if (live && $("destination").value !== live.destination)
+    stopLive("目标设备已不可用，实时对话已暂停");
   $("task-list").replaceChildren();
   for (const task of tasks.tasks) {
     const b = button(
@@ -236,9 +258,11 @@ async function refresh() {
 $("refresh").onclick = () => refresh().catch(error);
 $("enroll").onsubmit = async (e) => {
   e.preventDefault();
+  const owner = token;
   try {
     const name = new FormData(e.target).get("name"),
       d = await json("/devices", { name, capabilities: ["tasks", "metrics"] });
+    if (owner !== token || !token) return;
     $("device-config").textContent = JSON.stringify(
       {
         server: location.origin + base,
@@ -262,6 +286,7 @@ async function openTask(id) {
   cursor = 0;
   showPage("tasks");
   const d = await json("/tasks/" + id);
+  if (epoch !== taskEpoch || !token) return;
   const terminal = new Set(["succeeded", "failed", "cancelled", "unknown"]);
   const stateLine = el("p", labels[d.task.state] || d.task.state, "muted");
   const cancelButton = button("取消任务", async () => {
@@ -290,15 +315,22 @@ async function openTask(id) {
   const approvals = new Map();
   function connect() {
     if (currentTask !== id || epoch !== taskEpoch || !token) return;
-    stream = new WebSocket(
+    const connection = new WebSocket(
       location.origin.replace(/^http/, "ws") +
         base +
         "/tasks/" +
         id +
         "/stream",
     );
-    stream.onopen = () => stream.send(JSON.stringify({ token, after: cursor }));
-    stream.onmessage = (e) => {
+    stream = connection;
+    connection.onopen = () => {
+      if (epoch !== taskEpoch || !token) {
+        connection.close();
+        return;
+      }
+      connection.send(JSON.stringify({ token, after: cursor }));
+    };
+    connection.onmessage = (e) => {
       if (epoch !== taskEpoch) return;
       const item = JSON.parse(e.data);
       if (!item.seq || item.seq <= cursor) return;
@@ -337,7 +369,7 @@ async function openTask(id) {
         $("task-detail").append(actions);
       }
     };
-    stream.onclose = () => {
+    connection.onclose = () => {
       if (currentTask === id && epoch === taskEpoch && token)
         setTimeout(connect, 2000);
     };
@@ -348,14 +380,18 @@ function message(role, text) {
   $("messages").append(el("div", text, "message " + role));
   $("messages").scrollTop = $("messages").scrollHeight;
 }
-$("compose").onsubmit = async (e) => {
+$("compose").onsubmit = (e) => {
   e.preventDefault();
+  submitPrompt($("prompt").value.trim());
+};
+async function submitPrompt(prompt) {
   if (busy) return;
-  const prompt = $("prompt").value.trim();
   if (!prompt) return;
+  const owner = token,
+    operation = ++composeEpoch;
   busy = true;
   notice();
-  const submit = e.target.querySelector("[type=submit]");
+  const submit = $("compose").querySelector("[type=submit]");
   submit.disabled = true;
   stopSpeech();
   try {
@@ -366,40 +402,59 @@ $("compose").onsubmit = async (e) => {
         engine: $("engine").value,
         request_id: crypto.randomUUID(),
       });
+      if (owner !== token || operation !== composeEpoch) return;
       $("prompt").value = "";
       await openTask(d.task.id);
-      await refresh();
+      if (owner === token && operation === composeEpoch) await refresh();
     } else {
       message("user", prompt);
       const models = await json("/models"),
         model = models.data.find((m) => m.input_modalities.includes("text"));
+      if (owner !== token || operation !== composeEpoch) return;
       if (!model) throw new Error("尚未配置对话模型");
       const history = [...messages, { role: "user", content: prompt }].slice(
         -20,
       );
       const r = await api("/model/v1/chat/completions", {
         model: model.id,
-        messages: history,
-        max_tokens: 2048,
+        messages:
+          live && $("destination").value === "chat"
+            ? [
+                {
+                  role: "system",
+                  content:
+                    "你正在进行中文实时语音对话。回答自然、简短，通常两三句话；除非用户要求详细解释，不要列长清单。",
+                },
+                ...history,
+              ]
+            : history,
+        max_tokens: live ? 512 : 2048,
         stream: false,
       });
       const d = await r.json();
+      if (owner !== token || operation !== composeEpoch) return;
       if (d.error) throw new Error("模型响应未完成");
       const text = d.choices?.[0]?.message?.content;
       if (typeof text !== "string") throw new Error("没有收到文字回复");
       messages = [...history, { role: "assistant", content: text }];
       message("assistant", text);
+      if (owner !== token || operation !== composeEpoch) return;
       $("prompt").value = "";
       if ($("speak").checked) await speak(text);
     }
-    await refresh();
+    if (owner === token && operation === composeEpoch) await refresh();
   } catch (e) {
-    error(e);
+    if (owner === token && operation === composeEpoch) {
+      if (live) stopLive("对话请求未完成，请确认后重新开启");
+      error(e);
+    }
   } finally {
-    busy = false;
-    submit.disabled = false;
+    if (operation === composeEpoch) {
+      busy = false;
+      submit.disabled = false;
+    }
   }
-};
+}
 let speechEpoch = 0,
   playbackDone = null;
 function stopSpeech() {
@@ -426,7 +481,34 @@ async function speak(text) {
     });
     const blob = await r.blob();
     if (epoch !== speechEpoch) return;
-    const audio = new Audio(URL.createObjectURL(blob));
+    let audio;
+    // Reuse the AudioContext unlocked by the microphone button on mobile Safari.
+    // A fresh HTMLAudioElement after a network round trip may require another tap.
+    const context = live?.context;
+    if (context && typeof context.decodeAudioData === "function") {
+      const buffer = await context.decodeAudioData(await blob.arrayBuffer());
+      if (epoch !== speechEpoch || context.state === "closed") return;
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      source.connect(context.destination);
+      audio = {
+        src: "",
+        ended: false,
+        play() {
+          source.onended = () => {
+            this.ended = true;
+            this.onended?.();
+            source.disconnect();
+          };
+          source.start();
+          return Promise.resolve();
+        },
+        pause() {
+          source.stop();
+          this.onpause?.();
+        },
+      };
+    } else audio = new Audio(URL.createObjectURL(blob));
     playback = audio;
     let failed = false;
     await new Promise((resolve) => {
@@ -472,12 +554,13 @@ async function stopCapture(finish = true) {
   $("record").textContent = "开始录音";
 }
 $("record").onclick = async () => {
+  stopLive();
   if (capture) {
     await stopCapture();
     return;
   }
   stopSpeech();
-  let c = {};
+  let c = { owner: token };
   capture = c;
   try {
     c.media = await navigator.mediaDevices.getUserMedia({
@@ -494,9 +577,20 @@ $("record").onclick = async () => {
     c.ws = new WebSocket(
       location.origin.replace(/^http/, "ws") + base + "/voice/asr",
     );
-    c.ws.onopen = () =>
-      c.ws.send(JSON.stringify({ token, request_id: crypto.randomUUID() }));
+    c.ws.onopen = () => {
+      if (c.owner !== token || capture !== c) {
+        c.ws.close();
+        return;
+      }
+      c.ws.send(
+        JSON.stringify({ token: c.owner, request_id: crypto.randomUUID() }),
+      );
+    };
     c.ws.onmessage = async (e) => {
+      if (c.owner !== token) {
+        c.ws.close();
+        return;
+      }
       try {
         const event = JSON.parse(e.data);
         if (event.type === "error") throw new Error(event.error);
@@ -546,4 +640,225 @@ $("record").onclick = async () => {
     await stopCapture(false);
   }
 };
+function liveState(text) {
+  $("live-state").textContent = text;
+}
+function interruptReply() {
+  stopSpeech();
+  // Discard late model/TTS results; never replay or cancel a computer task here.
+  if ($("destination").value === "chat") {
+    composeEpoch++;
+    busy = false;
+    $("compose").querySelector("[type=submit]").disabled = false;
+  }
+}
+function stopLive(reason = "实时对话已结束") {
+  const session = live;
+  live = null;
+  if (session) {
+    session.closed = true;
+    clearTimeout(session.timeout);
+    session.ws?.close();
+    session.processor?.disconnect();
+    session.source?.disconnect();
+    session.media?.getTracks().forEach((track) => track.stop());
+    session.context?.close().catch(() => {});
+    stopSpeech();
+    // Ignore results from a conversation that the user ended.
+    if (session.owner === token && session.destination === "chat")
+      interruptReply();
+  }
+  $("realtime").textContent = "开始实时对话";
+  $("realtime").setAttribute("aria-pressed", "false");
+  $("record").disabled = false;
+  $("destination").disabled = false;
+  $("engine").disabled = false;
+  $("live-state").hidden = !session;
+  if (session) liveState(reason);
+}
+function liveFailure(session, failure) {
+  if (live !== session) return;
+  stopLive("实时对话已暂停，请重新开启");
+  error(failure);
+}
+function startUtterance(session, chunks) {
+  if (live !== session) return;
+  interruptReply();
+  session.processing = true;
+  const utterance = {
+    pending: [...chunks],
+    ended: false,
+    ready: false,
+    final: false,
+  };
+  session.utterance = utterance;
+  liveState("正在听，停顿后自动发送…");
+  const socket = new WebSocket(
+    location.origin.replace(/^http/, "ws") + base + "/voice/asr",
+  );
+  session.ws = socket;
+  clearTimeout(session.timeout);
+  session.timeout = setTimeout(
+    () => liveFailure(session, new Error("voice_connection_ended")),
+    110000,
+  );
+  socket.onopen = () => {
+    if (live !== session || session.owner !== token) return socket.close();
+    socket.send(
+      JSON.stringify({ token: session.owner, request_id: crypto.randomUUID() }),
+    );
+  };
+  socket.onmessage = async (event) => {
+    if (
+      live !== session ||
+      session.utterance !== utterance ||
+      session.owner !== token
+    )
+      return;
+    try {
+      const reply = JSON.parse(event.data);
+      if (reply.type === "error") throw new Error(reply.error);
+      if (reply.type === "asr.ready") {
+        utterance.ready = true;
+        for (const chunk of utterance.pending) sendLivePCM(session, chunk);
+        utterance.pending = [];
+        if (utterance.ended) socket.send(JSON.stringify({ type: "finish" }));
+      }
+      if (reply.type === "asr.final" && !utterance.final) {
+        utterance.final = true;
+        clearTimeout(session.timeout);
+        socket.close();
+        const text = reply.text?.trim();
+        if (text) {
+          $("prompt").value = text;
+          liveState(
+            session.destination === "chat"
+              ? "正在回复，你可以在播报时开口打断…"
+              : "正在发送电脑任务…",
+          );
+          await submitPrompt(text);
+        }
+        if (live === session && session.utterance === utterance) {
+          session.processing = false;
+          session.detector.reset();
+          liveState("正在聆听，请继续说…");
+        }
+      }
+    } catch (failure) {
+      liveFailure(session, failure);
+    }
+  };
+  socket.onerror = () => {
+    if (session.utterance === utterance)
+      liveFailure(session, new Error("voice_connection_ended"));
+  };
+  socket.onclose = () => {
+    if (!utterance.final && session.utterance === utterance)
+      liveFailure(session, new Error("voice_connection_ended"));
+  };
+}
+function sendLivePCM(session, pcm) {
+  if (live !== session) return;
+  const u = session.utterance;
+  if (!u.ready) {
+    u.pending.push(pcm.slice());
+    return;
+  }
+  if (
+    session.ws.readyState !== WebSocket.OPEN ||
+    session.ws.bufferedAmount > 128000
+  )
+    return liveFailure(session, new Error("网络发送较慢，请检查连接后重试。"));
+  for (let i = 0; i < pcm.length; i += 3200)
+    session.ws.send(pcm.slice(i, i + 3200).buffer);
+}
+$("realtime").onclick = async () => {
+  if (live) return stopLive();
+  if (busy && $("destination").value !== "chat") {
+    notice("正在提交电脑任务，请稍后开启实时对话。");
+    return;
+  }
+  await stopCapture(false);
+  interruptReply();
+  const session = {
+    owner: token,
+    destination: $("destination").value,
+    processing: false,
+  };
+  live = session;
+  $("realtime").textContent = "结束实时对话";
+  $("realtime").setAttribute("aria-pressed", "true");
+  $("record").disabled = true;
+  $("destination").disabled = true;
+  $("engine").disabled = true;
+  $("speak").checked = true;
+  $("live-state").hidden = false;
+  liveState("正在开启麦克风…");
+  try {
+    session.media = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      },
+    });
+    if (live !== session) {
+      session.media.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    session.context = new AudioContext();
+    await session.context.resume();
+    if (live !== session) return;
+    const resampler = new PCMResampler(session.context.sampleRate);
+    session.detector = new VoiceEndpoint({
+      start: (chunks) => startUtterance(session, chunks),
+      data: (pcm) => sendLivePCM(session, pcm),
+      end: () => {
+        session.utterance.ended = true;
+        if (session.utterance.ready && session.ws.readyState === WebSocket.OPEN)
+          session.ws.send(JSON.stringify({ type: "finish" }));
+        liveState("正在识别…");
+      },
+    });
+    session.source = session.context.createMediaStreamSource(session.media);
+    session.processor = session.context.createScriptProcessor(2048, 1, 1);
+    session.processor.onaudioprocess = (event) => {
+      if (live !== session) return;
+      // Keep the microphone, but serialize ASR and synthesis on the rev source.
+      // During actual playback, a new utterance can interrupt the local reply.
+      if (session.processing && !session.detector.active && !playback) return;
+      session.detector.push(
+        resampler.push(event.inputBuffer.getChannelData(0)),
+      );
+    };
+    session.source.connect(session.processor);
+    session.processor.connect(session.context.destination);
+    session.media
+      .getTracks()
+      .forEach((track) =>
+        track.addEventListener("ended", () =>
+          liveFailure(session, new Error("麦克风已断开，请重新开启实时对话。")),
+        ),
+      );
+    session.context.onstatechange = () => {
+      if (session.context.state === "suspended")
+        liveFailure(
+          session,
+          new Error("音频已被系统暂停，请返回页面重新开启。"),
+        );
+    };
+    liveState("正在聆听，请直接说…");
+  } catch (failure) {
+    liveFailure(session, failure);
+  }
+};
+window.addEventListener("offline", () =>
+  stopLive("网络已断开，重连后请重新开启实时对话"),
+);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden)
+    stopLive("已暂停麦克风，返回后请重新开启实时对话。电脑任务继续运行。");
+});
+window.addEventListener("pagehide", () => stopLive());
 if (token) enter().catch(error);
