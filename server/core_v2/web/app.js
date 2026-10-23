@@ -16,6 +16,8 @@ let token = sessionStorage.getItem("shengjian.session") || "",
   replyController = null,
   voiceController = null;
 let authEpoch = 0;
+let agentMode = false, computerDevices = [];
+let reportEpoch = 0, agentAckPending = false, reportSpeaking = false;
 const labels = {
   queued: "排队中",
   running: "执行中",
@@ -97,6 +99,7 @@ function showPage(id) {
     .forEach((b) => b.classList.toggle("selected", b.dataset.page === id));
 }
 function logoutLocal() {
+  reportEpoch++;
   authEpoch++;
   taskEpoch++;
   composeEpoch++;
@@ -111,6 +114,9 @@ function logoutLocal() {
     el("p", "选择任务查看进度。手机切后台不会取消任务。", "muted"),
   );
   token = "";
+  agentMode = false;
+  computerDevices = [];
+  $("agent-mode").setAttribute("aria-pressed", "false");
   sessionStorage.removeItem("shengjian.session");
   if (stream) stream.close();
   clearInterval(refreshTimer);
@@ -178,6 +184,7 @@ async function refresh() {
   ]);
   if (owner !== token || !token) return;
   $("balance").textContent = `可用 ${me.balance} 积分 · 预留 ${me.reserved}`;
+  computerDevices = devices.devices.filter(d => !d.revoked && d.grants.includes("tasks"));
   const selected = $("destination").value;
   $("destination").replaceChildren(new Option("语音对话", "chat"));
   $("device-list").replaceChildren();
@@ -294,12 +301,12 @@ $("enroll").onsubmit = async (e) => {
     error(e);
   }
 };
-async function openTask(id) {
+async function openTask(id, { reveal = true, conversation = false } = {}) {
   const epoch = ++taskEpoch;
   if (stream) stream.close();
   currentTask = id;
   cursor = 0;
-  showPage("tasks");
+  if (reveal) showPage("tasks");
   const d = await json("/tasks/" + id);
   if (epoch !== taskEpoch || !token) return;
   const terminal = new Set(["succeeded", "failed", "cancelled", "unknown"]);
@@ -323,10 +330,11 @@ async function openTask(id) {
     ),
     stateLine,
     cancelButton,
-    button("停止播报", stopSpeech),
+    button("停止播报", stopAgentSpeech),
   );
   let resultText = "",
     spoken = false;
+  const reports = new Set();
   const approvals = new Map();
   function connect() {
     if (currentTask !== id || epoch !== taskEpoch || !token) return;
@@ -360,9 +368,14 @@ async function openTask(id) {
           cancelButton.disabled = true;
           for (const actions of approvals.values()) actions.remove();
         }
+        if (conversation && !reports.has(event.state) && ["awaiting_user", "failed", "cancelled", "unknown"].includes(event.state)) {
+          reports.add(event.state);
+          agentReport(event.state === "awaiting_user" ? "电脑需要你确认本次操作。请查看任务卡片，可说允许本次操作或拒绝本次操作。" : "电脑任务" + labels[event.state] + "。");
+        }
         if (event.state === "succeeded" && resultText && !spoken) {
           spoken = true;
-          if ($("speak").checked) speak(resultText).catch(error);
+          if (conversation) agentReport("电脑任务已完成。" + resultText);
+          else if ($("speak").checked) speak(resultText).catch(error);
         }
       } else $("task-detail").append(el("pre", text));
       if (event.type === "task.result") resultText = event.text || "";
@@ -370,6 +383,10 @@ async function openTask(id) {
         approvals.get(event.approval_id)?.remove();
       if (event.type === "task.approval") {
         stateLine.textContent = labels.awaiting_user;
+        if (conversation && !reports.has(event.approval_id)) {
+          reports.add(event.approval_id);
+          agentReport("电脑需要你确认本次操作，请查看任务卡片。可说允许本次操作或拒绝本次操作。");
+        }
         const actions = el("div", undefined, "actions");
         for (const allow of [true, false])
           actions.append(
@@ -395,6 +412,28 @@ function message(role, text) {
   $("messages").append(el("div", text, "message " + role));
   $("messages").scrollTop = $("messages").scrollHeight;
 }
+function agentReport(text) {
+  message("assistant", text);
+  const owner = token, epoch = reportEpoch, until = Date.now() + 30000;
+  function play() {
+    if (owner !== token || epoch !== reportEpoch || !$("speak").checked || Date.now() > until) return;
+    if (live?.processing || live?.detector?.active || busy || playback || agentAckPending || reportSpeaking) return setTimeout(play, 250);
+    reportSpeaking = true;
+    speak(text.slice(0, 1800)).catch(failure => { if (owner === token && failure.name !== "AbortError") error(failure); }).finally(() => { reportSpeaking = false; });
+  }
+  play();
+}
+$("agent-mode").onclick = () => {
+  if (live) stopLive();
+  agentMode = !agentMode;
+  if (agentMode) {
+    const selected = computerDevices.find(d => d.id === $("destination").value) || computerDevices.find(d => d.online);
+    if (selected) $("destination").value = selected.id;
+    else notice("请在电脑声笺的“电脑 Agent”页启用 DeepSeek Harness，再回来刷新。");
+  } else $("destination").value = "chat";
+  $("agent-mode").setAttribute("aria-pressed", String(agentMode));
+  $("voice-note").textContent = agentMode ? "直接说出电脑任务；可说“汇报进度”“取消当前任务”“查看电脑状态”。停止播报不会取消任务。" : "开启实时对话即可连续交谈，随时开口打断。也可说“让电脑帮我…”派任务。";
+};
 $("compose").onsubmit = (e) => {
   e.preventDefault();
   submitPrompt($("prompt").value.trim());
@@ -402,6 +441,13 @@ $("compose").onsubmit = (e) => {
 async function submitPrompt(prompt) {
   if (busy) return;
   if (!prompt) return;
+  if (ShengjianAgent.silence(prompt)) {
+    reportEpoch++;
+    stopSpeech();
+    notice("已停止播报，电脑任务继续运行。");
+    $("prompt").value = "";
+    return;
+  }
   const owner = token,
     operation = ++composeEpoch;
   busy = true;
@@ -410,7 +456,25 @@ async function submitPrompt(prompt) {
   submit.disabled = true;
   stopSpeech();
   try {
-    if ($("destination").value !== "chat") {
+    const selected = $("destination").value;
+    if ((live || agentMode || selected === "chat") && ShengjianAgent.shouldRoute(prompt, agentMode || selected !== "chat", currentTask)) {
+      message("user", prompt);
+      const data = await json("/assistant/turn", { text: prompt, request_id: crypto.randomUUID(), device_id: selected === "chat" ? null : selected, task_id: currentTask || null, engine: $("engine").value });
+      if (owner !== token || operation !== composeEpoch) return;
+      $("prompt").value = "";
+      message("assistant", data.reply);
+      if (data.task && (data.action === "task" || currentTask !== data.task.id)) {
+        await openTask(data.task.id, { reveal: false, conversation: data.action === "task" });
+        $("messages").append(button("查看任务与确认", () => showPage("tasks")));
+      }
+      busy = false;
+      submit.disabled = false;
+      if ($("speak").checked) {
+        agentAckPending = true;
+        speak(data.reply).catch(failure => { if (owner === token && failure.name !== "AbortError") error(failure); }).finally(() => { agentAckPending = false; });
+      }
+      await refresh();
+    } else if (selected !== "chat") {
       const d = await json("/tasks", {
         device_id: $("destination").value,
         prompt,
@@ -732,7 +796,8 @@ async function streamChat(history, model, owner, operation) {
     if (replyController === controller) replyController = null;
   }
 }
-$("stop-speech").onclick = stopSpeech;
+function stopAgentSpeech() { reportEpoch++; stopSpeech(); }
+$("stop-speech").onclick = stopAgentSpeech;
 async function stopCapture(finish = true) {
   const c = capture;
   if (!c) return;
@@ -839,6 +904,7 @@ function liveState(text) {
   $("live-state").textContent = text;
 }
 function interruptReply(session = live) {
+  reportEpoch++;
   const turn = session?.replyTurn;
   if (turn && !turn.complete && !turn.interrupted) {
     turn.interrupted = true;

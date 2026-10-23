@@ -150,7 +150,7 @@ function App() {
   const [category, setCategory] = useState('all')
   const [loading, setLoading] = useState(true)
   const loadingMoreRef = useRef(false)
-  const [page, setPage] = useState<'connect' | 'history' | 'machines' | 'settings'>('connect')
+  const [page, setPage] = useState<'connect' | 'history' | 'machines' | 'agent' | 'settings'>('connect')
   const [modal, setModal] = useState<'publish' | null>(null)
   const [publishFiles, setPublishFiles] = useState(false)
   const [notice, setNotice] = useState('')
@@ -405,6 +405,7 @@ function App() {
           <button className={`nav-item ${page === 'connect' ? 'active' : ''}`} aria-current={page === 'connect' ? 'page' : undefined} onClick={() => void openQrDialog()}><MonitorSmartphone size={18} /><span>连接设备</span></button>
           <button className={`nav-item ${page === 'history' ? 'active' : ''}`} aria-current={page === 'history' ? 'page' : undefined} onClick={() => setPage('history')}><Archive size={18} /><span>传输记录</span></button>
           <button className={`nav-item ${page === 'machines' ? 'active' : ''}`} aria-current={page === 'machines' ? 'page' : undefined} onClick={() => setPage('machines')}><MonitorSmartphone size={18} /><span>机器共享</span></button>
+          <button className={`nav-item ${page === 'agent' ? 'active' : ''}`} aria-current={page === 'agent' ? 'page' : undefined} onClick={() => setPage('agent')}><MonitorSmartphone size={18} /><span>电脑 Agent</span></button>
           <button className={`nav-item ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}><Settings size={18} /><span>设置</span></button>
         </nav>
         {availableUpdate && (
@@ -433,12 +434,13 @@ function App() {
         <div className={`page-content page-${page}`}>
         <header className="page-heading">
           <div>
-            <h1>{page === 'connect' ? '连接你的手机' : page === 'history' ? '传输记录' : page === 'machines' ? '机器共享' : '设置'}</h1>
-            <p>{page === 'connect' ? '想法在手机，落笔在电脑。' : page === 'history' ? '每一次传递，都好好收着。' : page === 'machines' ? '各自在线，彼此相连。' : '让声笺更合你的习惯。'}</p>
+            <h1>{page === 'connect' ? '连接你的手机' : page === 'history' ? '传输记录' : page === 'machines' ? '机器共享' : page === 'agent' ? '电脑 Agent' : '设置'}</h1>
+            <p>{page === 'connect' ? '想法在手机，落笔在电脑。' : page === 'history' ? '每一次传递，都好好收着。' : page === 'machines' ? '各自在线，彼此相连。' : page === 'agent' ? '在手机开口，把任务交给这台电脑。' : '让声笺更合你的习惯。'}</p>
           </div>
           {page === 'history' && <button className="button primary" disabled={!bridge} onClick={() => openPublish()}><Upload size={16} />分享内容</button>}
         </header>
         {page === 'connect' && <ConnectionView apiGet={apiGet} apiPost={apiPost} ready={Boolean(bridge)} notify={notify} onPublish={openPublish} onRefresh={async () => { const result = await apiPost<{ key: string; mobile_url: string }>('/desktop/key/regenerate'); setRuntime((current) => ({ ...current, key: result.key })); await loadBridgeState(); notify('二维码和访问密钥已刷新') }} onOpen={() => { if (bridge) void openUrl(bridge.local_url) }} />}
+        {page === 'agent' && <ComputerAgentPanel apiGet={apiGet} apiPost={apiPost} ready={Boolean(bridge)} onLogin={() => setPage('connect')} />}
         {page === 'history' && <>
         <section className="filter-bar" aria-label="历史筛选">
           <div className="search-field"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文字、文件名、路径或类型" />{query && <button onClick={() => setQuery('')} title="清除搜索"><X size={16} /></button>}</div>
@@ -527,6 +529,27 @@ function ConnectionView({ apiGet, apiPost, ready, notify, onPublish, onRefresh, 
 }
 
 type AccountReply = { authenticated: boolean; url?: string; expires_at?: number }
+type AgentState = { phase: string; connected: boolean; workspace: string; engine: string; version: string; model?: string; error?: string; active_tasks: number; last_task?: { state?: string; text?: string } }
+function ComputerAgentPanel({ apiGet, apiPost, ready, onLogin }: { apiGet: <T>(path: string) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; ready: boolean; onLogin: () => void }) {
+  const [state, setState] = useState<AgentState | null>(null)
+  const [prompt, setPrompt] = useState('')
+  const [reply, setReply] = useState('')
+  const [working, setWorking] = useState(false)
+  const [failure, setFailure] = useState('')
+  useEffect(() => {
+    let active = true
+    async function load() { if (ready) try { const data = await apiGet<AgentState>('/desktop/agent'); if (active) setState(data) } catch (reason) { if (active) setFailure(reason instanceof Error ? reason.message : '无法读取状态') } }
+    void load(); const timer = setInterval(() => void load(), 2000)
+    return () => { active = false; clearInterval(timer) }
+  }, [ready, apiGet])
+  async function run(command: string) { setWorking(true); setFailure(''); try { setState(await apiPost<AgentState>('/desktop/agent/' + command)) } catch (reason) { setFailure(reason instanceof Error ? reason.message : '操作失败') } finally { setWorking(false) } }
+  return <>
+    <section className="cloud-account-panel"><h2>DeepSeek Harness</h2><p>执行器 {state?.version || '0.2.1-rc.2'} · 模型来自 sub-buddy</p><strong>{state?.connected ? '已连接' : ({ installing: '正在安装', starting: '正在启动', running: '正在连接', stopping: '正在停止', error: '需要处理' } as Record<string, string>)[state?.phase || ''] || '未启用'}</strong>{state?.model && <p>{state.model}</p>}<h3>任务目录</h3><p>{state?.workspace || 'Documents/声笺任务'}</p><p>运行代码、整理和编辑文件。任务在此目录执行；需要额外权限的操作会发到手机确认。</p><div className="qr-actions"><button className="button primary" disabled={!ready || working || ['starting', 'installing', 'running', 'stopping'].includes(state?.phase || '')} onClick={() => void run('start')}>启用 DeepSeek Harness</button><button className="button secondary" disabled={!ready || working || !state || state.phase === 'off'} onClick={() => void run('stop')}>停止 Agent</button><button className="text-button" onClick={onLogin}>账号登录</button></div><p>运行中任务：{state?.active_tasks || 0}</p>{(failure || state?.error) && <p role="alert">{failure || state?.error}</p>}</section>
+    <section className="cloud-account-panel"><h3>给本机 Agent 派任务</h3><form onSubmit={async event => { event.preventDefault(); setWorking(true); setFailure(''); try { const data = await apiPost<{ reply: string }>('/desktop/agent/task', { prompt }); setReply(data.reply); setPrompt('') } catch (reason) { setFailure(reason instanceof Error ? reason.message : '提交失败') } finally { setWorking(false) } }}><div className="cloud-account-fields"><input aria-label="电脑任务" placeholder="也可以在这里输入电脑任务…" value={prompt} maxLength={16000} onChange={event => setPrompt(event.target.value)} /></div><button className="button primary" disabled={working || !state?.connected || !prompt.trim()}>交给 Harness 执行</button></form>{reply && <p>{reply}</p>}{state?.last_task && <p>最近任务：{({ running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消', unknown: '结果未知', awaiting_user: '等待确认' } as Record<string, string>)[state.last_task.state || ''] || '正在处理'}<br />{state.last_task.text?.slice(0, 1200)}</p>}</section>
+    <section className="cloud-account-panel"><h3>手机语音这样用</h3><p>点击手机上的“电脑 Agent”，再开启实时对话。也可直接说“让电脑帮我在任务目录写一份说明”。</p><p>“汇报进度” · “取消当前任务” · “查看电脑状态” · “继续完善刚才的文件”</p><p>“停止播报”只停止声音；停止 Agent 会中断执行，未确认的操作会显示结果未知。</p></section>
+  </>
+}
+
 function CloudAccountPanel({ apiGet, apiPost, ready }: { apiGet: <T>(path: string) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; ready: boolean }) {
   const [account, setAccount] = useState<AccountReply>({ authenticated: false })
   const [username, setUsername] = useState('')

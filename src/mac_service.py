@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gui_app as bridge
 import mac_tunnel
+import agent_runtime
 
 
 def create_service(key, ports=None):
@@ -32,6 +33,8 @@ def create_service(key, ports=None):
 def main():
     key = bridge.read_or_create_access_key()
     server = create_service(key)
+    server.agent = agent_runtime.manager(bridge.DATA_DIR)
+    server.agent.resume()
     bridge.backfill_history_archive()
     manager = mac_tunnel.manager(bridge.DATA_DIR)
     manager.origin_port = server.server_port

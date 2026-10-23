@@ -44,6 +44,11 @@ def verify_app(app, version):
     assert plistlib.loads(entitlements)['com.apple.security.app-sandbox'] is True
     for binary in (native, service, cloudflared, extension_binary):
         subprocess.run(['lipo', str(binary), '-verify_arch', 'arm64'], check=True)
+    runtime = service.parent/'_internal/agent-runtime'
+    assert (runtime/'node_modules/@deepseek-ai/dsh/lib/bin.js').is_file(), 'Bundled Harness entry is missing'
+    assert json.loads((runtime/'node_modules/@deepseek-ai/dsh/package.json').read_text())['version'] == '0.2.1-rc.2'
+    assert os.access(runtime/'node', os.X_OK), 'Bundled Node must be executable'
+    subprocess.run([str(runtime/'node'), '--version'], check=True)
     subprocess.run([str(cloudflared), '--version'], check=True)
     private_names = {'relay.json', 'access_key.txt', 'paired-devices.json', 'device.json',
                      'minimax_api_key.txt', 'service.log'}

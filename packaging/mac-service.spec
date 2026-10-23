@@ -1,7 +1,11 @@
 from pathlib import Path
+import shutil
 root = Path(SPECPATH).parent
-analysis = Analysis([str(root/'src/mac_service.py')], pathex=[str(root/'src')],
-    datas=[(str(root/'assets'),'assets')],
+node = Path(shutil.which('node')).resolve()
+node_license = node.parent.parent/'LICENSE'
+analysis = Analysis([str(root/'src/mac_service.py')], pathex=[str(root/'src'), str(root)],
+    datas=[(str(root/'assets'),'assets'), (str(root/'server/desktop_agent/dsh_approval.mjs'), 'server/desktop_agent'),
+           (str(root/'tools/dsh/node_modules'), 'agent-runtime/node_modules'), (str(node), 'agent-runtime')]+([(str(node_license), 'agent-runtime')] if node_license.exists() else []),
     hiddenimports=['mac_platform','peer_share','mac_tunnel','ios_mobile','rtc_bridge','connection_modes','aiortc','aioice','av','pylibsrtp','ApplicationServices','AppKit','Quartz','Foundation'],
     excludes=['qt_app','PySide6','matplotlib','numpy'])
 pyz = PYZ(analysis.pure)

@@ -387,6 +387,8 @@ def create_app(directory, admin_token=None, providers=None):
                 with anyio.CancelScope(shield=True):
                     await asyncio.gather(sender, return_exceptions=True)
 
+    from .assistant import mount as mount_assistant
+    mount_assistant(app, store, user, peers)
     if providers:
         providers.mount(app, store, user)
     static = Path(__file__).parent/'web'
@@ -396,7 +398,7 @@ def create_app(directory, admin_token=None, providers=None):
             return FileResponse(static/'index.html')
         @app.get(PREFIX+'/console/{asset}')
         async def asset(asset: str):
-            if asset not in {'app.js', 'app.css', 'pcm.js', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js'}:
+            if asset not in {'app.js', 'app.css', 'pcm.js', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js'}:
                 raise Fault('not_found', 404)
             return FileResponse(static/asset)
     return app

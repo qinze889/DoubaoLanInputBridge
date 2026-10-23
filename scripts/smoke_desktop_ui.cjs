@@ -12,6 +12,7 @@ const path = require('node:path');
  const context = await browser.newContext({viewport:{width:1180,height:760},colorScheme:'light'});
  const page = await context.newPage();
  const errors=[]; const calls=[];
+ let mockAgentEnabled=false;
  page.on('pageerror', error => errors.push(error.message));
  await page.addInitScript(() => {
   let next=0; const callbacks=new Map();
@@ -49,6 +50,10 @@ const path = require('node:path');
   else if(u.pathname==='/desktop/account/login')result={ok:true,authenticated:true};
   else if(u.pathname==='/desktop/account/qr')result={ok:true,authenticated:true,url:'https://example.invalid/console#login=fixture-only',expires_at:Date.now()/1000+120};
   else if(u.pathname==='/desktop/account/logout')result={ok:true,authenticated:false};
+  else if(u.pathname==='/desktop/agent')result={ok:true,phase:mockAgentEnabled?'running':'off',connected:mockAgentEnabled,workspace:'C:/Users/Test/Documents/声笺任务',version:'0.2.1-rc.2',active_tasks:0};
+  else if(u.pathname==='/desktop/agent/start'){mockAgentEnabled=true;result={ok:true,phase:'running',connected:true,workspace:'C:/Users/Test/Documents/声笺任务',version:'0.2.1-rc.2',active_tasks:0};}
+  else if(u.pathname==='/desktop/agent/stop'){mockAgentEnabled=false;result={ok:true,phase:'off',connected:false,workspace:'C:/Users/Test/Documents/声笺任务',version:'0.2.1-rc.2',active_tasks:0};}
+  else if(u.pathname==='/desktop/agent/task')result={ok:true,reply:'已提交测试任务'};
   else if(u.pathname==='/desktop/connections'){
    if(req.method()==='POST'){mode=data.mode;enabled=data.enabled;}
    result=state();
@@ -130,6 +135,15 @@ const path = require('node:path');
   await page.getByRole('button',{name:/复制邀请/}).waitFor(); await assertNoOverflow();
   await page.locator('.toast').waitFor({state:'hidden'}); await page.screenshot({path:path.join(output, 'machines.png')}); await page.keyboard.press('Escape'); await checkHeading('机器共享');
   await nav('设置').click(); await checkHeading('设置');
+  await nav('电脑 Agent').click(); await checkHeading('电脑 Agent');
+  await page.getByRole('button',{name:'启用 DeepSeek Harness',exact:true}).click();
+  await page.getByText('已连接',{exact:true}).waitFor();
+  await page.getByRole('textbox',{name:'电脑任务',exact:true}).fill('创建测试说明');
+  await page.getByRole('button',{name:'交给 Harness 执行',exact:true}).click();
+  await page.getByText('已提交测试任务',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'停止 Agent',exact:true}).click();
+  assert(calls.some(c=>c.path==='/desktop/agent/start'));
+  await nav('设置').click();
   await page.getByRole('button',{name:'检查更新',exact:true}).click();
   await page.getByText('当前已是最新版 1.4.0').first().waitFor();
   await page.locator('.toast').waitFor({state:'hidden'}); await page.screenshot({path:path.join(output, 'settings.png')}); await nav('连接设备').click(); await checkHeading('连接你的手机');

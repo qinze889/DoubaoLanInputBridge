@@ -42,6 +42,13 @@ async def complete_fixture(ident: str):
     store.device_event(row['device_id'],ident,{'type':'task.state','state':'succeeded'},'fixture-completed')
     return {'ok':True}
 
+@app.post('/__test/agent-online/{ident}')
+async def agent_online(ident: str):
+    class FixturePeer:
+        async def close(self, **kwargs): pass
+    app.state.peers[ident] = FixturePeer()
+    return {'ok': True}
+
 app.state.store.register('browser-test','browser-password-123',app.state.store.invite(100))
 app.state.store.register('browser-second','browser-password-456',app.state.store.invite(100))
 uvicorn.run(app,host='127.0.0.1',port=int(sys.argv[2]),access_log=False,log_level='error')

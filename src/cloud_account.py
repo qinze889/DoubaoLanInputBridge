@@ -109,11 +109,11 @@ class CloudAccount:
     def __init__(self, directory, vault=None):
         self.vault = vault or CredentialVault(directory)
 
-    def request(self, path, body=None, token=''):
+    def request(self, path, body=None, token='', method=None):
         headers = {'Content-Type': 'application/json'}
         if token:
             headers['Authorization'] = 'Bearer '+token
-        request = Request(BASE+path, data=json.dumps(body).encode() if body is not None else None, headers=headers)
+        request = Request(BASE+path, data=json.dumps(body).encode() if body is not None else None, headers=headers, method=method)
         try:
             with build_opener(NoRedirect()).open(request, timeout=20) as response:
                 return json.load(response)

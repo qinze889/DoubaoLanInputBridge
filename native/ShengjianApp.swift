@@ -189,6 +189,7 @@ struct Transfer: Identifiable {
     var connectionColor: Color { !online || !publicEnabled ? .secondary : tunnelPhase == "ready" ? .green : .orange }
 
     init() {
+        if CommandLine.arguments.contains("--agent") { selected = "agent" }
         if preview {
             online = true; allowed = true; tunnelPhase = "ready"
             publicURL = "https://preview-example.trycloudflare.com/?key=preview-only"
@@ -775,6 +776,72 @@ struct PublishView:View {
     }
 }
 
+struct ComputerAgentView: View {
+    @EnvironmentObject var model: BridgeModel
+    @ViewState private var state: [String: Any] = [:]
+    @ViewState private var working = false
+    @ViewState private var failure = ""
+    private var phase: String { state["phase"] as? String ?? "off" }
+    @ViewState private var prompt = ""
+    @ViewState private var reply = ""
+    private var connected: Bool { state["connected"] as? Bool ?? false }
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("电脑 Agent").font(.system(size: 30, weight: .bold, design: .rounded))
+                Text("在手机开口，把任务交给这台 Mac。").foregroundStyle(.secondary)
+                Card {
+                    VStack(alignment: .leading, spacing: 18) {
+                        HStack { Label("DeepSeek Harness", systemImage: "brain.head.profile").font(.title2.bold()); Spacer(); StatusPill(text: connected ? "已连接" : ["starting": "正在启动", "installing": "正在安装", "running": "正在连接", "stopping": "正在停止", "error": "需要处理"][phase] ?? "未启用", color: connected ? .green : .secondary) }
+                        Text("执行器 0.2.1-rc.2 · 模型来自 sub-buddy").font(.subheadline).foregroundStyle(.secondary)
+                        if let name = state["model"] as? String, !name.isEmpty { Text(name).font(.caption).foregroundStyle(.secondary) }
+                        Text("任务目录").font(.headline)
+                        Text(state["workspace"] as? String ?? "~/Documents/声笺任务").font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                        Text("运行代码、整理和编辑文件。任务在此目录执行；需要额外权限的操作会发到手机确认。").font(.subheadline).foregroundStyle(.secondary)
+                        HStack {
+                            Button(phase == "off" || phase == "error" ? "启用 DeepSeek Harness" : "重新连接") { Task { await action("start") } }.buttonStyle(.borderedProminent).disabled(working || ["starting", "installing", "stopping", "running"].contains(phase))
+                            Button("停止 Agent") { Task { await action("stop") } }.disabled(working || phase == "off")
+                            Button("账号登录") { model.selected = "connect" }
+                        }
+                        Text("运行中任务：\(state["active_tasks"] as? Int ?? 0)").font(.caption).foregroundStyle(.secondary)
+                        TextField("也可以在这里输入电脑任务…", text: $prompt).textFieldStyle(.roundedBorder)
+                        Button("交给 Harness 执行") { Task {
+                            working = true; defer { working = false }
+                            do { let result = try await model.api("/desktop/agent/task", body: ["prompt": prompt]); reply = result["reply"] as? String ?? "已提交"; prompt = "" }
+                            catch { failure = error.localizedDescription }
+                        } }.disabled(working || !connected || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        if !reply.isEmpty { Text(reply).font(.caption).foregroundStyle(.secondary) }
+                        if let task = state["last_task"] as? [String: Any] {
+                            Text("最近任务：" + (["running": "执行中", "succeeded": "已完成", "failed": "失败", "cancelled": "已取消", "unknown": "结果未知", "awaiting_user": "等待确认"][task["state"] as? String ?? ""] ?? "正在处理")).font(.headline)
+                            if let text = task["text"] as? String { Text(String(text.prefix(1200))).font(.caption).textSelection(.enabled) }
+                        }
+                        if let problem = state["error"] as? String, !problem.isEmpty { Text(problem).foregroundStyle(.red) }
+                        if !failure.isEmpty { Text(failure).foregroundStyle(.red) }
+                    }
+                }
+                Card {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("手机语音这样用").font(.headline)
+                        Text("点击手机上的“电脑 Agent”，再开启实时对话。也可直接说“让电脑帮我在任务目录写一份说明”。")
+                        Text("“汇报进度” · “取消当前任务” · “查看电脑状态” · “继续完善刚才的文件”").foregroundStyle(.secondary)
+                        Text("“停止播报”只停止声音；停止 Agent 会中断执行，未确认的操作会显示结果未知。").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }.padding(32)
+        }.task {
+            while !Task.isCancelled {
+                if model.online && !model.preview { do { state = try await model.api("/desktop/agent") } catch { failure = error.localizedDescription } }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+    private func action(_ command: String) async {
+        working = true; failure = ""; defer { working = false }
+        do { state = try await model.api("/desktop/agent/"+command, body: [:]) }
+        catch { failure = error.localizedDescription }
+    }
+}
+
 struct RootView:View {
     @EnvironmentObject var model:BridgeModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -786,6 +853,7 @@ struct RootView:View {
                     Label("连接设备",systemImage:"iphone.radiowaves.left.and.right").tag("connect")
                     Label("传输记录",systemImage:"clock.arrow.circlepath").tag("history")
                     Label("机器共享",systemImage:"desktopcomputer.and.arrow.down").tag("machines")
+                    Label("电脑 Agent",systemImage:"brain.head.profile").tag("agent")
                     Label("设置",systemImage:"gearshape").tag("settings")
                 }.listStyle(.sidebar).scrollContentBackground(.hidden)
                 VStack(alignment:.leading,spacing:10) {
@@ -799,6 +867,7 @@ struct RootView:View {
                 case "history": HistoryView()
                 case "settings": SettingsView()
                 case "machines": MachinesView()
+                case "agent": ComputerAgentView()
                 default: ConnectionView()
                 }
             }.frame(maxWidth:.infinity,maxHeight:.infinity).background(canvas)

@@ -3,8 +3,8 @@ from pathlib import Path
 root = Path(SPECPATH).parent
 analysis = Analysis(
     [str(root / 'src' / 'qt_app.py')],
-    pathex=[str(root / 'src')],
-    datas=[(str(root / 'assets'), 'assets')],
+    pathex=[str(root / 'src'), str(root)],
+    datas=[(str(root / 'assets'), 'assets'), (str(root/'server/desktop_agent/dsh_approval.mjs'), 'server/desktop_agent')],
     hiddenimports=['mac_platform', 'ApplicationServices', 'AppKit', 'Quartz', 'Foundation'],
     excludes=['PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets',
               'PySide6.QtPdf', 'PySide6.QtPdfWidgets', 'matplotlib', 'numpy'],

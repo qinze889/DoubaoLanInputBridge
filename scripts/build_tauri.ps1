@@ -24,6 +24,9 @@ if (-not (Test-Path -LiteralPath $PythonExe)) {
 }
 
 New-Item -ItemType Directory -Path (Split-Path -Parent $SidecarTarget) -Force | Out-Null
+& $PythonExe (Join-Path $ProjectRoot 'scripts\prepare_harness.py')
+if ($LASTEXITCODE -ne 0) { throw 'Harness preparation failed' }
+$AgentNode = (Get-Command node -ErrorAction Stop).Source
 
 & $PythonExe -m PyInstaller `
     --noconfirm `
@@ -38,6 +41,10 @@ New-Item -ItemType Directory -Path (Split-Path -Parent $SidecarTarget) -Force | 
     --workpath $SidecarBuild `
     --specpath $SidecarBuild `
     --add-data "$Assets;assets" `
+    --paths "$ProjectRoot" `
+    --add-data "$ProjectRoot\server\desktop_agent\dsh_approval.mjs;server/desktop_agent" `
+    --add-data "$ProjectRoot\tools\dsh\node_modules;agent-runtime/node_modules" `
+    --add-binary "$AgentNode;agent-runtime" `
     --add-data "$ProjectRoot\docs\cloudflared-LICENSE;." `
     --add-binary "$Cloudflared;." `
     $ServiceEntry

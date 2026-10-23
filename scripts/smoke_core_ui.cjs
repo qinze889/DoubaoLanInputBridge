@@ -96,6 +96,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     page.setDefaultTimeout(15000);
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
+    let voiceText = null;
     let asrConnections = 0,
       finishes = 0,
       audioBytes = 0;
@@ -113,7 +114,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
           socket.send(
             JSON.stringify({
               type: "asr.final",
-              text: "连续对话第" + finishes + "句",
+              text: voiceText || "连续对话第" + finishes + "句",
             }),
           );
           socket.send(JSON.stringify({ type: "asr.finished" }));
@@ -329,6 +330,8 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     assert.equal(await page.evaluate(() => window.liveStopped), 1);
     assert.equal(asrConnections, 2, "disconnect does not replay utterances");
     await page.evaluate(() => {
+      window.agentAudioContext = window.AudioContext;
+      window.agentGetUserMedia = navigator.mediaDevices.getUserMedia;
       window.AudioContext = window.savedAudioContext;
       navigator.mediaDevices.getUserMedia = window.savedGetUserMedia;
     });
@@ -405,6 +408,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       .getByRole("button", { name: "停止播报", exact: true })
       .click();
     await page.evaluate(() => {
+      window.agentAudio = window.Audio;
       window.Audio = window.originalAudio;
     });
     await page.getByRole("button", { name: "对话", exact: true }).click();
@@ -429,6 +433,45 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
         });
       }
     }
+    // Final ASR can create, inspect, continue and cancel real durable fixture tasks.
+    const agentDevice = await page.evaluate(async () => (await json('/devices')).devices.find(d => d.name === '测试电脑').id);
+    await page.request.post(origin + '/__test/agent-online/' + agentDevice);
+    await page.evaluate(async () => {
+      await refresh();
+      window.AudioContext = window.agentAudioContext;
+      navigator.mediaDevices.getUserMedia = window.agentGetUserMedia;
+      window.Audio = window.agentAudio;
+    });
+    await page.getByRole('button', { name: '电脑 Agent · DeepSeek Harness', exact: true }).click();
+    await page.getByRole('button', { name: '开始实时对话', exact: true }).click();
+    await page.waitForFunction(() => live?.processor);
+    async function sayAgent(text) {
+      voiceText = text;
+      await page.evaluate(() => { feedLive(false, 12); feedLive(true, 20); });
+      await page.waitForTimeout(40);
+      await page.evaluate(() => feedLive(false, 46));
+      await page.locator('#messages').getByText(text, { exact: true }).last().waitFor();
+      await page.waitForFunction(() => live && !live.processing && !busy);
+    }
+    await sayAgent('让电脑帮我写一份说明');
+    const createdAgentTask = await page.evaluate(() => currentTask);
+    assert.equal(await page.locator('#conversation').isVisible(), true);
+    await page.request.post(origin + '/__test/complete/' + createdAgentTask);
+    await page.locator('#messages').getByText('电脑任务已完成。voice-task-report', { exact: true }).waitFor();
+    for (let i = 0; i < 100 && !speechBodies.some(body => body.input === '电脑任务已完成。voice-task-report'); i++) await page.waitForTimeout(25);
+    assert(speechBodies.some(body => body.input === '电脑任务已完成。voice-task-report'));
+    const countBefore = await page.evaluate(async () => (await json('/tasks')).tasks.length);
+    await sayAgent('汇报进度');
+    assert.equal(await page.evaluate(async () => (await json('/tasks')).tasks.length), countBefore);
+    await sayAgent('继续补充示例');
+    const followupTask = await page.evaluate(() => currentTask);
+    assert.notEqual(followupTask, createdAgentTask);
+    await sayAgent('取消当前任务');
+    assert.equal(await page.evaluate(async () => (await json('/tasks/' + currentTask)).task.state), 'cancelled');
+    await page.evaluate(() => stopLive());
+    await page.getByRole('button', { name: '电脑 Agent · DeepSeek Harness', exact: true }).click();
+    voiceText = null;
+    await page.evaluate(() => { window.AudioContext = window.savedAudioContext; navigator.mediaDevices.getUserMedia = window.savedGetUserMedia; window.Audio = window.originalAudio; });
     // A response begun under the old account must never appear after logout.
     let releaseReply, markStarted;
     const replyGate = new Promise((resolve) => (releaseReply = resolve));

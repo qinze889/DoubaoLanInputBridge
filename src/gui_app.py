@@ -22,6 +22,7 @@ import peer_share
 import mac_tunnel
 import relay_client
 import cloud_account
+import agent_runtime
 import connection_modes
 from http.client import HTTPConnection
 from http import HTTPStatus
@@ -4070,6 +4071,8 @@ class BridgeServer(ThreadingHTTPServer):
             except (OSError, ValueError): self.add_log('连接模式未能恢复，请重新选择连接方式')
 
     def server_close(self):
+        if getattr(self, 'agent', None):
+            self.agent.stop(persist=False)
         if getattr(self, 'relay', None):
             self.relay.close()
         if getattr(self, 'peer_manager', None) and self.peer_manager.rtc_outgoing:
@@ -4233,6 +4236,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if path == '/desktop/account':
             json_response(self, HTTPStatus.OK, cloud_account.CloudAccount(DATA_DIR).perform('status'))
             return
+        if path == '/desktop/agent':
+            json_response(self, HTTPStatus.OK, agent_runtime.manager(DATA_DIR).status())
+            return
         if path == '/desktop/connections':
             json_response(self, HTTPStatus.OK, {'ok': True, **self.server.connections.snapshot()})
             return
@@ -4371,6 +4377,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/desktop/account/register",
             "/desktop/account/logout",
             "/desktop/account/qr",
+            "/desktop/agent/start",
+            "/desktop/agent/stop",
+            "/desktop/agent/task",
             "/desktop/publish",
             "/desktop/copy",
             "/desktop/diagnostics/copy",
@@ -4531,6 +4540,17 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def handle_desktop_post(self, path: str, data: dict) -> None:
         port = int(self.server.server_port)
+        if path == '/desktop/agent/start':
+            self.server.agent = agent_runtime.manager(DATA_DIR)
+            json_response(self, HTTPStatus.OK, self.server.agent.start())
+            return
+        if path == '/desktop/agent/stop':
+            self.server.agent = agent_runtime.manager(DATA_DIR)
+            json_response(self, HTTPStatus.OK, self.server.agent.stop())
+            return
+        if path == '/desktop/agent/task':
+            json_response(self, HTTPStatus.OK, agent_runtime.manager(DATA_DIR).submit(data.get('prompt')))
+            return
         if path.startswith('/desktop/account/'):
             json_response(self, HTTPStatus.OK, cloud_account.CloudAccount(DATA_DIR).perform(path.rsplit('/', 1)[-1], data))
             return
@@ -6093,6 +6113,8 @@ def run_server_only(port: int) -> None:
     access_key = read_or_create_access_key()
     refresh_lan_update_manifest_url(port)
     server = BridgeServer(("0.0.0.0", port), BridgeRequestHandler, access_key)
+    server.agent = agent_runtime.manager(DATA_DIR)
+    server.agent.resume()
     print(f"{APP_ID} listening on {port}", flush=True)
     print("Pairing links are available in the desktop app; credentials are not logged.")
     try:

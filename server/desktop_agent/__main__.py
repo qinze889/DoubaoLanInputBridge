@@ -36,12 +36,15 @@ class Connector:
         self.engines = {}
         self.lock = asyncio.Lock()
         self.execution_slot = asyncio.Semaphore(1)
+        self.last_task = None
 
     async def send(self, message):
         async with self.lock:
             await self.ws.send(json.dumps(message, ensure_ascii=False))
 
     async def emit(self, ident, body):
+        previous = self.last_task if self.last_task and self.last_task['id'] == ident else {'id': ident}
+        self.last_task = {**previous, **{key: body[key] for key in ('state', 'text') if key in body}, 'event': body['type']}
         if body['type'] == 'task.state':
             self.journal.state(ident, body['state'])
         await self.send(self.journal.event(ident, body))

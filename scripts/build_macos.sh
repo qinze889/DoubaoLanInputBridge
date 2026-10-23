@@ -11,6 +11,7 @@ if [[ ! -x .venv/bin/python ]]; then
 fi
 if command -v uv >/dev/null; then uv pip install --python .venv/bin/python -r requirements-macos.txt; else .venv/bin/python -m pip install -r requirements-macos.txt; fi
 .venv/bin/python -m pytest -q tests
+.venv/bin/python scripts/prepare_harness.py
 mkdir -p build/Shengjian.iconset
 for size in 16 32 128 256 512; do
   sips -z "$size" "$size" assets/app-icon-master.png --out "build/Shengjian.iconset/icon_${size}x${size}.png" >/dev/null

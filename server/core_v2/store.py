@@ -309,6 +309,20 @@ class Store:
         with self.lock:
             return [dict(r) for r in self.db.execute('SELECT * FROM tasks WHERE user_id=? ORDER BY created DESC LIMIT 100', (uid,))]
 
+    def task_brief(self, uid, ident):
+        self.task(uid, ident)
+        with self.lock:
+            rows = self.db.execute('SELECT body FROM events WHERE task_id=? ORDER BY seq DESC LIMIT 12', (ident,)).fetchall()
+            events = [json.loads(row['body']) for row in rows]
+            approvals = [row['id'] for row in self.db.execute("SELECT id FROM approvals WHERE task_id=? AND status='pending'", (ident,))]
+        return {'result': next((e.get('text', '') for e in events if e['type'] == 'task.result'), ''),
+                'latest': next((e.get('text', '') for e in events if e['type'] == 'task.log'), ''), 'approvals': approvals}
+
+    def task_by_request(self, uid, request_id):
+        with self.lock:
+            row = self.db.execute('SELECT * FROM tasks WHERE user_id=? AND request_id=?', (uid, request_id)).fetchone()
+            return dict(row) if row else None
+
     def events(self, uid, task_id, after):
         self.task(uid, task_id)
         with self.lock:
