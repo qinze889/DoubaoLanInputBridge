@@ -21,7 +21,14 @@ def verify_app(app, version):
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
     info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
     assert info['CFBundleShortVersionString'] == version, 'Bundle version mismatch'
-    assert info['CFBundleIdentifier'] == 'com.doubaolaninputbridge.mac'
+    mode = os.environ.get('SHENGJIAN_BUILD_MODE', 'development')
+    expected = 'com.doubaolaninputbridge.mac'+('.development' if mode == 'development' else '')
+    assert info['CFBundleIdentifier'] == expected
+    assert info.get('SHENGJIANDistributionMode') == mode
+    if mode == 'production':
+        subprocess.run(['xcrun', 'stapler', 'validate', str(app)], check=True)
+        details = subprocess.run(['codesign', '-dv', '--verbose=4', str(app)], capture_output=True, text=True, check=True).stderr
+        assert 'Authority=Developer ID Application:' in details and 'TeamIdentifier=not set' not in details
     assert any('public.item' in item.get('LSItemContentTypes', []) and item.get('LSHandlerRank') == 'Alternate'
                for item in info.get('CFBundleDocumentTypes', [])), 'Open-file receiver is missing'
     native = app/'Contents/MacOS/Shengjian'
@@ -46,6 +53,8 @@ def verify_app(app, version):
 
 def main():
     version = (ROOT/'VERSION').read_text().strip()
+    mode = os.environ.get('SHENGJIAN_BUILD_MODE', 'development')
+    app_name = '声笺.app' if mode == 'production' else '声笺开发版.app'
     dmg = ROOT/'dist/Shengjian-mac-arm64.dmg'
     archive = ROOT/'dist/Shengjian-mac-arm64.zip'
     subprocess.run(['hdiutil', 'verify', str(dmg)], check=True)
@@ -53,11 +62,11 @@ def main():
         scratch = Path(scratch)
         extracted, mount = scratch/'zip', scratch/'mounted'
         subprocess.run(['ditto', '-x', '-k', str(archive), str(extracted)], check=True)
-        zip_hashes = verify_app(extracted/'声笺.app', version)
+        zip_hashes = verify_app(extracted/app_name, version)
         mount.mkdir()
         subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', str(mount), str(dmg)], check=True)
         try:
-            app = mount/'声笺.app'
+            app = mount/app_name
             assert (mount/'Applications').is_symlink()
             assert os.readlink(mount/'Applications') == '/Applications'
             assert (mount/'安装说明.txt').is_file()
@@ -76,7 +85,7 @@ def main():
     metadata = {'version': version, 'source_commit': subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'workflow_run': os.environ.get('GITHUB_RUN_ID'), 'architecture': 'arm64',
-        'signing': 'ad-hoc', 'notarized': False,
+        'signing': 'developer-id' if mode == 'production' else 'ad-hoc', 'notarized': mode == 'production', 'distribution_mode': mode,
         'dmg_zip_signature_and_frozen_p2p_verified': True}
     (output/'Mac-build.json').write_text(json.dumps(metadata, indent=2)+'\n')
     files = sorted(p for p in output.iterdir() if p.name != 'SHA256SUMS.txt')

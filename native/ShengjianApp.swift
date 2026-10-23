@@ -174,7 +174,8 @@ struct Transfer: Identifiable {
     let preview = CommandLine.arguments.contains("--preview")
     let dataDirectory: URL = {
         if let override = ProcessInfo.processInfo.environment["DOUBAO_BRIDGE_DATA_DIR"], !override.isEmpty { return URL(fileURLWithPath: override) }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DoubaoLanInputBridge")
+        let folder = Bundle.main.bundleIdentifier?.hasSuffix(".development") == true ? "DoubaoLanInputBridge-Development" : "DoubaoLanInputBridge"
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/" + folder)
     }()
     static let modes = [("public", "固定公网", "globe"), ("cloudflare", "CF 隧道", "cloud"), ("p2p", "P2P 直连", "point.3.connected.trianglepath.dotted"), ("lan", "局域网", "wifi")]
     var modeTitle: String { Self.modes.first { $0.0 == connectionMode }?.1 ?? "连接" }
@@ -208,6 +209,7 @@ struct Transfer: Identifiable {
         let child = Process(); let output = Pipe()
         child.executableURL = executable
         child.environment = ProcessInfo.processInfo.environment
+        child.environment?["DOUBAO_BRIDGE_DATA_DIR"] = dataDirectory.path
         child.environment?.merge(nativeInput!.environment) { _, new in new }
         child.standardOutput = output
         child.standardError = FileHandle.nullDevice
@@ -788,6 +790,7 @@ struct RootView:View {
             Button("打开声笺") { NSApp.activate(ignoringOtherApps:true); NSApp.windows.first(where:{$0.canBecomeMain})?.makeKeyAndOrderFront(nil) }
             Button("分享内容…") { model.openPublish() }
             Divider()
+            Link("设备、任务与语音对话", destination: URL(string:"https://test.xjiaoai.com/shengjian/api/v2/console")!)
             Text(model.connectionLabel)
             Button(model.publicEnabled ? "关闭连接" : "开启连接") { Task { await model.setPublic(!model.publicEnabled) } }
             Divider()

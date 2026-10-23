@@ -734,6 +734,7 @@ function SettingsView({ apiGet, apiPost, currentVersion, onConnect, notify }: { 
   }
   return <section className="settings-page">
     <div className="manage-sections">
+      <button className="settings-link" onClick={() => void openUrl('https://test.xjiaoai.com/shengjian/api/v2/console')}><span className="symbol-tile"><MonitorSmartphone size={21} /></span><span><strong>设备、任务与语音对话</strong><small>登录账号，查看设备状态和电脑任务</small></span><ArrowUpRight size={16} /></button>
       <button className="settings-link" onClick={onConnect}><span className="symbol-tile"><MonitorSmartphone size={21} /></span><span><strong>连接设备</strong><small>在连接页切换四种方式、管理连接码</small></span><ArrowUpRight size={16} /></button>
       <details><summary>已有 Cloudflare 命名隧道（高级）</summary><TunnelPanel apiGet={apiGet} apiPost={apiPost} notify={notify} /></details>
       <section>

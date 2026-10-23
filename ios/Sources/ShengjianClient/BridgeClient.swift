@@ -5,21 +5,33 @@ public struct BridgeConnection: Codable, Identifiable, Equatable, Sendable {
     public var name: String
     public let baseURL: URL
     public let key: String
+    public var isFixedRelay: Bool { baseURL.path.hasPrefix("/shengjian/d/") }
     public init(pairingURL: URL, name: String = "我的 Mac") throws {
         guard let components = URLComponents(url: pairingURL, resolvingAgainstBaseURL: false),
               let scheme = components.scheme?.lowercased(), ["https", "http"].contains(scheme),
               let host = components.host, !host.isEmpty,
-              components.user == nil, components.password == nil,
-              components.path.isEmpty || components.path == "/",
-              let key = components.queryItems?.first(where: { $0.name == "key" })?.value,
-              !key.isEmpty, key.count <= 256 else { throw ClientError.invalidConnection }
+              components.user == nil, components.password == nil else { throw ClientError.invalidConnection }
+        let relay = components.path.range(of: #"^/shengjian/d/[A-Za-z0-9_-]{1,64}/?$"#, options: .regularExpression) != nil
+        let key: String
+        if relay {
+            guard scheme == "https", components.query == nil,
+                  let fragment = components.fragment,
+                  fragment.range(of: #"^[A-Za-z0-9_-]{32,100}$"#, options: .regularExpression) != nil else { throw ClientError.invalidConnection }
+            key = fragment
+        } else {
+            guard components.path.isEmpty || components.path == "/",
+                  let value = components.queryItems?.first(where: { $0.name == "key" })?.value,
+                  !value.isEmpty, value.count <= 256 else { throw ClientError.invalidConnection }
+            key = value
+        }
         if scheme == "http" {
             let parts = host.split(separator: ".").compactMap { Int($0) }
             let local = host == "localhost" || host == "127.0.0.1" || (host.split(separator: ".", omittingEmptySubsequences: false).count == 4 && parts.count == 4 && parts.allSatisfy { (0...255).contains($0) } &&
                 (parts[0] == 10 || (parts[0] == 172 && (16...31).contains(parts[1])) || (parts[0] == 192 && parts[1] == 168)))
             guard local else { throw ClientError.invalidConnection }
         }
-        var base = components; base.scheme = scheme; base.query = nil; base.fragment = nil; base.path = ""
+        var base = components; base.scheme = scheme; base.query = nil; base.fragment = nil; base.path = relay ? components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) : ""
+        if relay { base.path = "/" + base.path }
         guard let url = base.url else { throw ClientError.invalidConnection }
         self.id = UUID(); self.name = name; self.baseURL = url; self.key = key
     }
@@ -57,13 +69,14 @@ private final class SameHostRedirects: NSObject, URLSessionTaskDelegate, @unchec
 public actor BridgeClient {
     public let connection: BridgeConnection
     private let session: URLSession
+    private var relayLoggedIn = false
     public init(connection: BridgeConnection, session: URLSession? = nil) {
         self.connection = connection
         self.session = session ?? URLSession(configuration: .ephemeral, delegate: SameHostRedirects(), delegateQueue: nil)
     }
     private func url(_ path: String, query: [URLQueryItem] = []) -> URL {
-        var components = URLComponents(url: connection.baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        components.queryItems = query + [URLQueryItem(name: "key", value: connection.key)]
+        var components = URLComponents(url: connection.baseURL.appendingPathComponent(connection.isFixedRelay ? "r/" + path : path), resolvingAgainstBaseURL: false)!
+        components.queryItems = connection.isFixedRelay ? (query.isEmpty ? nil : query) : query + [URLQueryItem(name: "key", value: connection.key)]
         return components.url!
     }
     private func validate(_ data: Data, _ response: URLResponse) throws -> [String: Any] {
@@ -74,10 +87,26 @@ public actor BridgeClient {
         }
         return value
     }
+    private func loginRelay() async throws {
+        guard connection.isFixedRelay, !relayLoggedIn else { return }
+        var request = URLRequest(url: connection.baseURL.appendingPathComponent("login"))
+        request.httpMethod = "POST"; request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["code": connection.key])
+        let (data, response) = try await session.data(for: request)
+        _ = try validate(data, response); relayLoggedIn = true
+    }
     public func checkConnection() async throws {
-        _ = try await sharedItems()
+        if connection.isFixedRelay {
+            try await loginRelay()
+            let (data, response) = try await session.data(from: connection.baseURL.appendingPathComponent("status"))
+            let status = try validate(data, response)
+            guard status["connection_mode"] as? String != "p2p" else { throw ClientError.server("此电脑正在使用 P2P 模式，请用浏览器连接，或在电脑切换固定公网。") }
+            guard status["online"] as? Bool == true else { throw ClientError.server("电脑离线，请先打开声笺。") }
+        } else { _ = try await sharedItems() }
     }
     public func sendText(_ text: String, pressEnter: Bool = true) async throws {
+        try await loginRelay()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ClientError.server("请先输入文字。") }
         var request = URLRequest(url: url("send")); request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -86,12 +115,18 @@ public actor BridgeClient {
         let (data, response) = try await session.data(for: request); _ = try validate(data, response)
     }
     public func sharedItems() async throws -> [SharedItem] {
+        try await loginRelay()
         let (data, response) = try await session.data(from: url("files/shared"))
         let value = try validate(data, response)
         let items = try JSONSerialization.data(withJSONObject: value["items"] ?? [])
         return try JSONDecoder().decode([SharedItem].self, from: items)
     }
     public func uploadFiles(_ files: [URL], paste: Bool = false) async throws {
+        try await loginRelay()
+        if connection.isFixedRelay {
+            let total = try files.reduce(0) { try $0 + ($1.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) }
+            guard total <= 15 * 1024 * 1024 else { throw ClientError.server("固定公网每次上传最多 15 MiB，请分批发送或使用 P2P。") }
+        }
         guard !files.isEmpty, files.count <= 8 else { throw ClientError.server("一次请选择 1–8 个文件。") }
         let boundary = "Shengjian-" + UUID().uuidString
         let bodyURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -99,7 +134,9 @@ public actor BridgeClient {
         defer { try? FileManager.default.removeItem(at: bodyURL) }
         let output = try FileHandle(forWritingTo: bodyURL)
         do {
-            try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\n\(connection.key)\r\n".utf8))
+            if !connection.isFixedRelay {
+                try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\n\(connection.key)\r\n".utf8))
+            }
             for file in files {
                 let name = file.lastPathComponent.replacingOccurrences(of: "\"", with: "_").replacingOccurrences(of: "\r", with: "_").replacingOccurrences(of: "\n", with: "_")
                 try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"files\"; filename=\"\(name)\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8))
@@ -116,6 +153,7 @@ public actor BridgeClient {
         let (data, response) = try await session.upload(for: request, fromFile: bodyURL); _ = try validate(data, response)
     }
     public func download(_ item: SharedItem) async throws -> URL {
+        try await loginRelay()
         guard let name = item.name else { throw ClientError.invalidResponse }
         let (location, response) = try await session.download(from: url("files/download", query: [URLQueryItem(name: "file", value: name)]))
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ClientError.server("文件下载失败。") }

@@ -58,4 +58,28 @@ final class BridgeClientTests: XCTestCase {
         MockProtocol.handler = { _ in (401, Data("{\"ok\":false}".utf8)) }
         do { _ = try await client().sharedItems(); XCTFail("should reject expired key") } catch { XCTAssertTrue(error.localizedDescription.contains("失效")) }
     }
+    func testFixedRelayStripsFragmentAndAuthenticatesBeforeForwarding() async throws {
+        let code = String(repeating: "a", count: 40)
+        let connection = try BridgeConnection(pairingURL: URL(string: "https://test.example/shengjian/d/test-device/#" + code)!)
+        XCTAssertTrue(connection.isFixedRelay)
+        XCTAssertEqual(connection.baseURL.absoluteString, "https://test.example/shengjian/d/test-device")
+        XCTAssertNil(URLComponents(url: connection.baseURL, resolvingAgainstBaseURL: false)?.fragment)
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockProtocol.self]
+        var paths: [String] = []
+        MockProtocol.handler = { request in
+            paths.append(request.url!.path)
+            XCTAssertNil(request.url?.query)
+            return (200, Data("{\"ok\":true,\"items\":[]}".utf8))
+        }
+        let client = BridgeClient(connection: connection, session: URLSession(configuration: config))
+        _ = try await client.sharedItems()
+        _ = try await client.sharedItems()
+        XCTAssertEqual(paths, ["/shengjian/d/test-device/login", "/shengjian/d/test-device/r/files/shared", "/shengjian/d/test-device/r/files/shared"])
+    }
+    func testFixedRelayRequiresHTTPSAndWellFormedFragment() {
+        for value in ["http://192.168.1.1/shengjian/d/device/#" + String(repeating: "a", count: 40), "https://test.example/shengjian/d/device/#short", "https://test.example/shengjian/d/device/?key=secret#" + String(repeating: "a", count: 40)] {
+            XCTAssertThrowsError(try BridgeConnection(pairingURL: URL(string: value)!))
+        }
+    }
+
 }

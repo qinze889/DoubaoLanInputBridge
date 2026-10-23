@@ -49,7 +49,7 @@ final class ShareViewController: NSViewController {
                 }
                 try Task.checkCancellation()
                 let app = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-                guard Bundle(url: app)?.bundleIdentifier == "com.doubaolaninputbridge.mac" else { throw ShareImport.Failure.invalidFile }
+                guard Bundle(url: app)?.bundleIdentifier == Bundle.main.bundleIdentifier?.replacingOccurrences(of: ".share", with: "") else { throw ShareImport.Failure.invalidFile }
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                     NSWorkspace.shared.open(files, withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, error in
                         if let error { continuation.resume(throwing: error) }

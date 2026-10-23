@@ -29,7 +29,7 @@ struct HomeView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         if let selected = store.selected {
-                            HStack(spacing: 12) { Image(systemName: "desktopcomputer").font(.title2).foregroundStyle(.blue); VStack(alignment: .leading, spacing: 4) { Text(selected.name).font(.headline); Text(selected.baseURL.scheme == "https" ? "Cloudflare 公网连接" : "局域网连接").font(.caption).foregroundStyle(.secondary) }; Spacer(); Image(systemName: "lock.shield").foregroundStyle(.green) }.padding(20).background(.background, in: RoundedRectangle(cornerRadius: 22))
+                            HStack(spacing: 12) { Image(systemName: "desktopcomputer").font(.title2).foregroundStyle(.blue); VStack(alignment: .leading, spacing: 4) { Text(selected.name).font(.headline); Text(selected.isFixedRelay ? "固定公网连接" : selected.baseURL.scheme == "https" ? "Cloudflare 公网连接" : "局域网连接").font(.caption).foregroundStyle(.secondary) }; Spacer(); Image(systemName: "lock.shield").foregroundStyle(.green) }.padding(20).background(.background, in: RoundedRectangle(cornerRadius: 22))
                             VStack(alignment: .leading, spacing: 16) {
                                 Text("想说什么？").font(.title3.bold())
                                 TextEditor(text: $text).font(.body).frame(minHeight: 170).scrollContentBackground(.hidden).padding(12).background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16)).accessibilityLabel("发送到 Mac 的文字")
@@ -72,7 +72,8 @@ struct HomeView: View {
                         }.onDelete { offsets in let ids = offsets.map { store.connections[$0].id }; for id in ids { store.remove(id) } }
                         Button { addDevice = true } label: { Label("添加另一台 Mac", systemImage: "plus.circle") }
                     }
-                    Section { Text("每台 Mac 运行自己的 Cloudflare 隧道。临时域名变化后，请重新扫码更新连接。").font(.footnote).foregroundStyle(.secondary) }
+                    Section { Link("设备、任务与语音对话", destination: URL(string: "https://test.xjiaoai.com/shengjian/api/v2/console")!) }
+                    Section { Text("支持固定公网和 Cloudflare 连接。临时域名变化后，请重新扫码更新连接。").font(.footnote).foregroundStyle(.secondary) }
                 }.navigationTitle("设备")
             }.tabItem { Label("设备", systemImage: "laptopcomputer.and.iphone") }.tag(2)
         }.tint(.blue).sensoryFeedback(.success, trigger: store.success)

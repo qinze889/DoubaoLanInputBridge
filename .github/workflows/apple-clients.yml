@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      distribution_mode:
+        type: choice
+        description: Development test package or signed/notarized production package
+        default: development
+        options: [development, production]
 permissions:
   contents: read
 concurrency:
@@ -12,12 +18,24 @@ concurrency:
 jobs:
   macos:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      SHENGJIAN_BUILD_MODE: ${{ inputs.distribution_mode || 'development' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Prepare production signing credentials
+        if: inputs.distribution_mode == 'production'
+        env:
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: python scripts/setup_macos_ci.py
       - name: Verify shared-file import lifecycle and validation
         run: |
           xcrun swiftc -parse-as-library native/ShareImport.swift tests/native/ShareImportChecks.swift -o /tmp/shengjian-share-import-checks
@@ -44,6 +62,13 @@ jobs:
           path: dist/macos/
           if-no-files-found: error
           retention-days: 30
+      - name: Remove temporary production keychain
+        if: always() && inputs.distribution_mode == 'production'
+        shell: bash
+        run: |
+          if [ -n "${SHENGJIAN_NOTARY_KEYCHAIN:-}" ]; then
+            security delete-keychain "$SHENGJIAN_NOTARY_KEYCHAIN"
+          fi
   ios:
     runs-on: macos-15
     steps:

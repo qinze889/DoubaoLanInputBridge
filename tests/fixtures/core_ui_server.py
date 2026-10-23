@@ -1,0 +1,16 @@
+"""Isolated browser fixture. Never imported by the deployed service."""
+from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+import httpx
+import uvicorn
+from server.core_v2.app import create_app
+from server.core_v2.providers import Providers,ProviderConfig
+
+def upstream(request):
+    if request.method=='GET':return httpx.Response(200,json={'data':[{'id':'fixture-text'}]})
+    return httpx.Response(200,json={'choices':[{'message':{'content':'已收到你的消息。'}}],'usage':{'total_tokens':5}})
+app=create_app(sys.argv[1],admin_token='fixture-admin-'+'x'*40,providers=Providers(
+    ProviderConfig(model_base='http://127.0.0.1:1/v1',model_key='fixture-only',text_model='fixture-text'),httpx.MockTransport(upstream)))
+app.state.store.register('browser-test','browser-password-123',app.state.store.invite(100))
+uvicorn.run(app,host='127.0.0.1',port=int(sys.argv[2]),access_log=False,log_level='error')

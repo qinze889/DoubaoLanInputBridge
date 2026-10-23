@@ -71,7 +71,8 @@ def main():
     assert windows['frozen_p2p_verified'] is True
     assert mac['dmg_zip_signature_and_frozen_p2p_verified'] is True
     assert windows['architecture'] == 'x64' and mac['architecture'] == 'arm64'
-    assert mac['signing'] == 'ad-hoc' and mac['notarized'] is False
+    assert mac['signing'] == 'developer-id' and mac['notarized'] is True, 'Stable releases require Developer ID and notarization'
+    assert mac.get('distribution_mode') == 'production', 'Development builds cannot be released as production'
     args.output.mkdir()  # Never silently combine artifacts from different builds.
     for root, names, metadata in ((args.windows, win_files, 'Windows-build.json'),
                                    (args.macos, mac_files, 'Mac-build.json')):

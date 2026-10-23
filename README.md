@@ -26,7 +26,9 @@
 
 详细说明：[Mac 安装与授权](docs/README-macOS.md) · [Windows 安装](docs/INSTALL-Windows.txt) · [机器共享](docs/MACHINE-SHARING.md) · [固定公网后台](docs/SERVER-RELAY.md)
 
-手机浏览器是固定公网入口的使用方式。原生 iOS 源码目前支持局域网和 CF 的 `?key=` 链接，尚未适配固定中转页面的登录与 P2P 协议。
+本分支原生 iOS 源码支持局域网 / CF 的 `?key=` 链接及 HTTPS 固定中转登录；P2P 使用手机浏览器。
+
+v2 测试入口已接入账号、设备授权、豆包登录态语音及电脑任务，详见 [部署、验证与当前边界](docs/CORE_V2.md)。原生连续语音与屏幕互控仍在后续阶段，正式发行状态以 Releases 为准。
 
 ## 连接方式
 

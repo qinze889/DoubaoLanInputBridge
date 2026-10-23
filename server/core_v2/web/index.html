@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <title>声笺 · 设备与任务</title>
+    <link rel="stylesheet" href="console/app.css" />
+    <script src="console/pcm.js" defer></script>
+    <script src="console/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div class="brand">声笺<span>连接你的设备与任务</span></div>
+      <button id="logout" hidden>退出登录</button>
+    </header>
+    <main>
+      <section id="auth" class="card narrow">
+        <h1>随时，与电脑对话</h1>
+        <p class="muted">登录后查看设备、发起任务和语音对话。</p>
+        <form id="login-form">
+          <label
+            >用户名<input
+              name="username"
+              autocomplete="username"
+              minlength="3"
+              required /></label
+          ><label
+            >密码<input
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              minlength="12"
+              required /></label
+          ><label
+            >邀请码 <span class="muted">仅注册时需要</span
+            ><input name="invite" autocomplete="off"
+          /></label>
+          <div class="actions">
+            <button class="primary" name="action" value="login">登录</button
+            ><button name="action" value="register">使用邀请码注册</button>
+          </div>
+        </form>
+      </section>
+      <div id="workspace" hidden>
+        <nav aria-label="页面">
+          <button data-page="conversation" class="selected">对话</button
+          ><button data-page="devices">设备</button
+          ><button data-page="tasks">任务</button>
+        </nav>
+        <section id="conversation" class="page">
+          <div class="card">
+            <div class="heading">
+              <h1>此刻，想做什么？</h1>
+              <span id="balance" class="muted"></span>
+            </div>
+            <div id="messages" role="log" aria-live="polite"></div>
+            <form id="compose">
+              <label for="prompt">输入或说出你的想法</label
+              ><textarea
+                id="prompt"
+                rows="4"
+                maxlength="16000"
+                required
+                placeholder="与我聊聊，或交给电脑完成一项任务…"
+              ></textarea>
+              <div class="options">
+                <label
+                  >发送到<select id="destination">
+                    <option value="chat">语音对话</option>
+                  </select></label
+                ><label
+                  >执行引擎<select id="engine">
+                    <option value="harness">DeepSeek Harness</option>
+                    <option value="codex">Codex</option>
+                  </select></label
+                >
+              </div>
+              <div class="actions">
+                <button class="primary" type="submit">发送</button
+                ><button type="button" id="record">开始录音</button
+                ><button type="button" id="stop-speech">停止播报</button
+                ><label class="inline"
+                  ><input type="checkbox" id="speak" checked />语音回复</label
+                >
+              </div>
+              <p id="voice-note" class="muted">
+                说完后点击结束录音。识别文字可编辑，再发送对话或任务。
+              </p>
+            </form>
+          </div>
+        </section>
+        <section id="devices" class="page" hidden>
+          <div class="heading">
+            <h1>我的设备</h1>
+            <button id="refresh">刷新</button>
+          </div>
+          <div id="device-list" class="grid"></div>
+          <details class="card">
+            <summary>登记电脑连接器</summary>
+            <form id="enroll">
+              <label
+                >设备名称<input name="name" maxlength="80" required /></label
+              ><button class="primary">登记任务与状态能力</button>
+            </form>
+            <p class="muted">
+              登记后保存配置到这台电脑的私有文件，并在设备卡片中开启能力。
+            </p>
+            <pre id="device-config"></pre>
+          </details>
+        </section>
+        <section id="tasks" class="page" hidden>
+          <h1>任务与进度</h1>
+          <div class="task-layout">
+            <div id="task-list"></div>
+            <article id="task-detail" class="card">
+              <p class="muted">选择任务查看进度。手机切后台不会取消任务。</p>
+            </article>
+          </div>
+        </section>
+      </div>
+      <p id="notice" role="status" aria-live="polite"></p>
+    </main>
+    <footer>声笺 · 电脑与手机，保持连接</footer>
+  </body>
+</html>

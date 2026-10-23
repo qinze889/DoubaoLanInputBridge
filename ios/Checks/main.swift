@@ -44,6 +44,18 @@ func runChecks() async throws {
     var expired = false
     do { _ = try await client.sharedItems() } catch { expired = error.localizedDescription.contains("失效") }
     precondition(expired)
-    print("6 client checks passed: QR parsing, invalid endpoints, LAN, text POST, shared feed, expired key.")
+    let relay = try BridgeConnection(pairingURL: URL(string: "https://test.example/shengjian/d/device/#" + String(repeating: "a", count: 40))!)
+    precondition(relay.isFixedRelay && relay.baseURL.absoluteString == "https://test.example/shengjian/d/device")
+    let relayClient = BridgeClient(connection: relay, session: URLSession(configuration: config))
+    var paths: [String] = []
+    CheckProtocol.handler = { request in
+        precondition(request.url?.query == nil && request.url?.fragment == nil)
+        paths.append(request.url!.path)
+        return (200, Data("{\"ok\":true,\"items\":[]}".utf8))
+    }
+    _ = try await relayClient.sharedItems()
+    _ = try await relayClient.sharedItems()
+    precondition(paths == ["/shengjian/d/device/login", "/shengjian/d/device/r/files/shared", "/shengjian/d/device/r/files/shared"])
+    print("Client checks passed: legacy QR/LAN/text/files, invalid endpoints, expired key, fixed relay login and credential-free forwarding URL.")
 }
 try await runChecks()

@@ -30,6 +30,6 @@ swift run --package-path ios ClientChecks
 
 手机连接二维码与 `shengjian://pair` 机器共享邀请用途不同；后者用于 Mac / Windows 电脑之间配对。HTTP 仅接受本机或 RFC1918 局域网地址，公网需要 HTTPS。跳转限制为原始协议、主机与端口。
 
-当前原生客户端只接受根路径带 `?key=` 的局域网 / CF 连接链接；固定中转的 `/shengjian/d/.../#...` 页面与 1.4.0 的 P2P 请使用手机浏览器。
+原生客户端支持根路径带 `?key=` 的局域网 / CF 链接，以及 HTTPS 固定中转 `/shengjian/d/.../#...` 链接。固定中转通过 POST 登录并使用会话 Cookie，不把连接码放进转发 URL；上传每次最多 15 MiB。P2P 仍使用手机浏览器。设备页的“设备、任务与语音对话”进入 v2 账号入口；v2 对话与任务目前在网页中运行。
 
 仓库 CI 执行 Swift 单元测试和完整 Xcode 模拟器构建，结果见 [Apple clients](https://github.com/qinze889/DoubaoLanInputBridge/actions/workflows/apple-clients.yml)。相机、权限、照片/文件选择和设备互传仍需真机联调。

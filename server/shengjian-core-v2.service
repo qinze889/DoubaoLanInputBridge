@@ -1,0 +1,30 @@
+[Unit]
+Description=Shengjian account, device, voice and task service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shengjian-core
+Group=shengjian-core
+WorkingDirectory=/opt/shengjian-core/current
+EnvironmentFile=/etc/shengjian-core/providers.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/shengjian-core/venv/bin/python -m server.core_v2 --data /var/lib/shengjian-core --port 18767
+Restart=on-failure
+RestartSec=5
+UMask=0077
+StateDirectory=shengjian-core
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/shengjian-core
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -31,3 +31,6 @@ desktop/src-tauri/icons/*
 
 # Local generated distribution bundles; historical samples live in docs/archive.
 /release/
+
+# Generated browser verification evidence.
+/artifacts/
