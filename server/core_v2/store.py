@@ -67,8 +67,17 @@ class Store:
           actual INTEGER, state TEXT NOT NULL, fingerprint TEXT NOT NULL, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS grants(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), amount INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), status TEXT NOT NULL DEFAULT 'pending', decision TEXT);
-        PRAGMA user_version=1;
         ''')
+        version = self.db.execute('PRAGMA user_version').fetchone()[0]
+        if version > 2:
+            raise RuntimeError('Database schema is newer than this service')
+        if version < 2:
+            # Version 1 data stays in place; all changes commit together.
+            with self.tx() as db:
+                db.execute('ALTER TABLE sessions ADD COLUMN device_id TEXT REFERENCES devices(id)')
+                db.execute('CREATE TABLE qr_tickets(ticket TEXT PRIMARY KEY, session_token TEXT NOT NULL REFERENCES sessions(token) ON DELETE CASCADE, expires REAL NOT NULL, consumed REAL)')
+                db.execute('CREATE INDEX sessions_device ON sessions(device_id)')
+                db.execute('PRAGMA user_version=2')
         # A restart cannot prove whether a dispatched action executed. Never redispatch it.
         with self.tx() as db:
             for row in db.execute("SELECT id FROM tasks WHERE dispatched IS NOT NULL AND state NOT IN ('succeeded','failed','cancelled','unknown')").fetchall():
@@ -126,8 +135,34 @@ class Store:
         expires = time.time()+30*86400
         with self.tx() as db:
             db.execute('DELETE FROM sessions WHERE expires<=?', (time.time(),))
-            db.execute('INSERT INTO sessions VALUES(?,?,?)', (digest(token), uid, expires))
+            db.execute('INSERT INTO sessions(token,user_id,expires) VALUES(?,?,?)', (digest(token), uid, expires))
         return {'token': token, 'user_id': uid, 'expires_at': expires}
+
+    def qr_ticket(self, token):
+        ticket = secrets.token_urlsafe(32)
+        now = time.time()
+        with self.tx() as db:
+            if not db.execute('SELECT 1 FROM sessions WHERE token=? AND expires>?', (digest(token), now)).fetchone():
+                raise Fault('unauthorized', 401)
+            db.execute('DELETE FROM qr_tickets WHERE expires<=? OR session_token=?', (now, digest(token)))
+            db.execute('INSERT INTO qr_tickets VALUES(?,?,?,NULL)', (digest(ticket), digest(token), now+120))
+        return {'ticket': ticket, 'expires_at': now+120}
+
+    def redeem_qr(self, ticket, name):
+        token, ident = secrets.token_urlsafe(48), secrets.token_hex(16)
+        now = time.time()
+        with self.tx() as db:
+            row = db.execute('SELECT s.user_id FROM qr_tickets q JOIN sessions s ON s.token=q.session_token WHERE q.ticket=? AND q.expires>? AND q.consumed IS NULL AND s.expires>?', (digest(ticket), now, now)).fetchone()
+            if not row:
+                raise Fault('qr_expired', 410)
+            uid = row['user_id']
+            if db.execute('SELECT COUNT(*) FROM devices WHERE user_id=? AND revoked=0', (uid,)).fetchone()[0] >= 32:
+                raise Fault('device_limit', 409)
+            # A phone login is a client, never an execution connector.
+            db.execute('INSERT INTO devices(id,user_id,name,token,capabilities) VALUES(?,?,?,?,?)', (ident, uid, name, digest(secrets.token_urlsafe(48)), '[]'))
+            db.execute('INSERT INTO sessions(token,user_id,expires,device_id) VALUES(?,?,?,?)', (digest(token), uid, now+30*86400, ident))
+            db.execute('UPDATE qr_tickets SET consumed=? WHERE ticket=?', (now, digest(ticket)))
+        return {'token': token, 'user_id': uid, 'device_id': ident, 'expires_at': now+30*86400}
 
     def authenticate(self, token, device=False):
         with self.lock:
@@ -228,6 +263,7 @@ class Store:
         with self.tx() as db:
             if not db.execute('UPDATE devices SET revoked=1,grants=\'[]\' WHERE id=? AND user_id=?', (ident, uid)).rowcount:
                 raise Fault('device_not_found', 404)
+            db.execute('DELETE FROM sessions WHERE device_id=? AND user_id=?', (ident, uid))
             for row in db.execute("SELECT id FROM tasks WHERE device_id=? AND state IN ('queued','running','awaiting_user')", (ident,)).fetchall():
                 db.execute("UPDATE tasks SET state='unknown',cancel_requested=1 WHERE id=?", (row['id'],))
                 self._event(db, row['id'], {'type': 'task.state', 'state': 'unknown', 'reason': 'device_revoked'})

@@ -15,6 +15,7 @@ let token = sessionStorage.getItem("shengjian.session") || "",
   composeEpoch = 0,
   replyController = null,
   voiceController = null;
+let authEpoch = 0;
 const labels = {
   queued: "排队中",
   running: "执行中",
@@ -54,6 +55,7 @@ const errors = {
   usage_already_submitted: "这项请求已提交，请查看原结果。",
   utterance_too_long: "这段录音已达到 30 秒，请分句录制。",
   voice_connection_ended: "语音连接中断，请重新录音。",
+  qr_expired: "二维码已使用或已过期，请在电脑上刷新后重新扫描。",
 };
 function error(e) {
   const text = e.message || String(e);
@@ -95,6 +97,7 @@ function showPage(id) {
     .forEach((b) => b.classList.toggle("selected", b.dataset.page === id));
 }
 function logoutLocal() {
+  authEpoch++;
   taskEpoch++;
   composeEpoch++;
   busy = false;
@@ -135,6 +138,7 @@ async function enter() {
 }
 $("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const operation = ++authEpoch;
   try {
     const form = new FormData(e.target),
       action = e.submitter.value;
@@ -144,8 +148,10 @@ $("login-form").addEventListener("submit", async (e) => {
     };
     if (action === "register") body.invite = form.get("invite");
     const data = await json("/auth/" + action, body);
+    if (operation !== authEpoch) return;
     token = data.token;
-    sessionStorage.setItem("shengjian.session", token);
+    // Persistent credential lives in the server's HttpOnly HTTPS cookie.
+    sessionStorage.removeItem("shengjian.session");
     e.target.reset();
     await enter();
     notice();
@@ -157,9 +163,8 @@ $("logout").onclick = async () => {
   const owner = token;
   try {
     await json("/auth/logout", {});
-  } finally {
     if (owner === token) logoutLocal();
-  }
+  } catch (failure) { error(failure); }
 };
 document
   .querySelectorAll("nav button")
@@ -1211,4 +1216,24 @@ document.addEventListener("visibilitychange", () => {
     stopLive("已暂停麦克风，返回后请重新开启实时对话。电脑任务继续运行。");
 });
 window.addEventListener("pagehide", () => stopLive());
-if (token) enter().catch(error);
+async function restoreLogin() {
+  const ticket = new URLSearchParams(location.hash.slice(1)).get("login");
+  if (ticket) history.replaceState(null, "", location.pathname + location.search);
+  if (ticket && token) logoutLocal();
+  const operation = ++authEpoch;
+  try {
+    if (ticket) {
+      const data = await json("/auth/qr/redeem", { ticket });
+      if (operation !== authEpoch) return;
+      token = data.token;
+      sessionStorage.removeItem("shengjian.session");
+    } else if (!token) {
+      const data = await json("/auth/session", {});
+      if (operation !== authEpoch) return;
+      if (data.authenticated) token = data.token;
+    }
+    if (token) await enter();
+  } catch (failure) { if (operation === authEpoch) error(failure); }
+}
+window.addEventListener("hashchange", restoreLogin);
+restoreLogin();

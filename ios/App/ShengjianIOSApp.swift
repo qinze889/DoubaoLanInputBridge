@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 import PhotosUI
 import CoreTransferable
 import ShengjianClient
+import WebKit
 
 private typealias ViewState<Value> = SwiftUI.State<Value>
 
@@ -72,10 +73,16 @@ struct HomeView: View {
                         }.onDelete { offsets in let ids = offsets.map { store.connections[$0].id }; for id in ids { store.remove(id) } }
                         Button { addDevice = true } label: { Label("添加另一台 Mac", systemImage: "plus.circle") }
                     }
-                    Section { Link("设备、任务与语音对话", destination: URL(string: "https://test.xjiaoai.com/shengjian/api/v2/console")!) }
+                    Section { Button("账号、任务与实时语音") { tab = 3 } }
                     Section { Text("支持固定公网和 Cloudflare 连接。临时域名变化后，请重新扫码更新连接。").font(.footnote).foregroundStyle(.secondary) }
                 }.navigationTitle("设备")
             }.tabItem { Label("设备", systemImage: "laptopcomputer.and.iphone") }.tag(2)
+            NavigationStack {
+                CloudConsoleView().environmentObject(store)
+                    .navigationTitle("对话")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { addDevice = true } label: { Image(systemName: "qrcode.viewfinder") } } }
+            }.tabItem { Label("对话", systemImage: "waveform") }.tag(3)
         }.tint(.blue).sensoryFeedback(.success, trigger: store.success)
           .overlay(alignment: .top) { if !store.notice.isEmpty { Label(store.notice, systemImage: "checkmark.circle.fill").font(.subheadline.weight(.medium)).padding(14).background(.regularMaterial, in: Capsule()).padding(.top, 4).transition(.move(edge: .top).combined(with: .opacity)) } }
           .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.82), value: store.notice)
@@ -84,6 +91,7 @@ struct HomeView: View {
           .fileImporter(isPresented: $importFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in if case .success(let files) = result { Task { await store.upload(files, paste: pasteFiles) } } }
           .onChange(of: photo) { _, value in Task { await uploadPhoto(value) } }
           .onChange(of: store.selectedID) { _, _ in Task { await store.refresh() } }
+          .onChange(of: store.cloudScanID) { _, _ in tab = 3 }
           .alert("连接提示", isPresented: Binding(get: { !store.error.isEmpty }, set: { if !$0 { store.error = "" } })) { Button("知道了") { store.error = "" } } message: { Text(store.error) }
     }
     func uploadPhoto(_ item: PhotosPickerItem?) async {
@@ -110,8 +118,47 @@ struct AddDeviceView: View {
                 Section { Button { Task { if await store.add(link: link, name: name) { dismiss() } } } label: { HStack { Text("验证并连接"); Spacer(); if store.busy { ProgressView() } } }.disabled(store.busy || link.isEmpty) }
                 Section { Text("配对信息存入本机 Keychain，不通过 iCloud 同步。").font(.footnote).foregroundStyle(.secondary) }
             }.navigationTitle("连接 Mac").toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-              .sheet(isPresented: $scanner) { QRScanner { value in link = value; scanner = false }.ignoresSafeArea() }
+              .sheet(isPresented: $scanner) { QRScanner { value in
+                  link = value; scanner = false
+                  Task { if await store.add(link: value, name: name) { dismiss() } }
+              }.ignoresSafeArea() }
               .alert("连接提示", isPresented: Binding(get: { !store.error.isEmpty }, set: { if !$0 { store.error = "" } })) { Button("知道了") { store.error = "" } } message: { Text(store.error) }
+        }
+    }
+}
+
+struct CloudConsoleView: UIViewRepresentable {
+    @EnvironmentObject var store: ConnectionStore
+    static let home = URL(string: "https://test.xjiaoai.com/shengjian/api/v2/console")!
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
+        view.isInspectable = false
+        view.load(URLRequest(url: Self.home))
+        return view
+    }
+    func updateUIView(_ view: WKWebView, context: Context) {
+        if let url = store.cloudURL, context.coordinator.last != url {
+            context.coordinator.last = url
+            view.load(URLRequest(url: url))
+            DispatchQueue.main.async { if store.cloudURL == url { store.cloudURL = nil } }
+        }
+    }
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        var last: URL?
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            let url = navigationAction.request.url
+            let allowed = url?.scheme == "https" && url?.host == "test.xjiaoai.com" && url?.user == nil && url?.password == nil && url?.port == nil && (url?.path.hasPrefix("/shengjian/api/v2/") ?? false)
+            decisionHandler(allowed ? .allow : .cancel)
+        }
+        func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+            decisionHandler(origin.protocol == "https" && origin.host == "test.xjiaoai.com" && frame.isMainFrame && type == .microphone ? .prompt : .deny)
         }
     }
 }

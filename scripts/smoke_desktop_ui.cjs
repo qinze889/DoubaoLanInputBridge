@@ -45,6 +45,10 @@ const path = require('node:path');
   calls.push({path:u.pathname,method:req.method(),query:Object.fromEntries(u.searchParams),data});
   let result={ok:true}; let status=200;
   if(u.pathname==='/desktop/state')result={ok:true,version:'1.4.0',port:18700,key:'ui-fixture-only',mobile_url:'https://example.invalid',local_url:'http://192.168.1.8:18700/',host:'Windows',data_dir:'C:\\UI-Fixtures'};
+  else if(u.pathname==='/desktop/account')result={ok:true,authenticated:false};
+  else if(u.pathname==='/desktop/account/login')result={ok:true,authenticated:true};
+  else if(u.pathname==='/desktop/account/qr')result={ok:true,authenticated:true,url:'https://example.invalid/console#login=fixture-only',expires_at:Date.now()/1000+120};
+  else if(u.pathname==='/desktop/account/logout')result={ok:true,authenticated:false};
   else if(u.pathname==='/desktop/connections'){
    if(req.method()==='POST'){mode=data.mode;enabled=data.enabled;}
    result=state();
@@ -71,6 +75,12 @@ const path = require('node:path');
   await page.goto(process.env.SHENGJIAN_UI_URL || 'http://127.0.0.1:1420');
   await page.getByText('固定公网已就绪',{exact:true}).first().waitFor();
   await checkHeading('连接你的手机'); await assertNoOverflow();
+  await page.getByRole('textbox',{name:'用户名',exact:true}).fill('ui-test');
+  await page.getByLabel('密码',{exact:true}).fill('fixture-password-123');
+  await page.getByRole('button',{name:'登录',exact:true}).click();
+  await page.getByText('已登录，手机扫码即可对话',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'刷新语音二维码',exact:true}).click();
+  assert(calls.some(c=>c.path==='/desktop/account/qr'));
   await page.screenshot({path:path.join(output, 'connect-light.png')});
   await page.getByRole('button',{name:'局域网',exact:true}).click();
   await page.getByText('局域网已就绪',{exact:true}).first().waitFor();

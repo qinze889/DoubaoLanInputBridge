@@ -62,6 +62,26 @@ def test_desktop_state_requires_key_and_returns_runtime(monkeypatch):
         assert payload["mobile_url"].startswith(f"http://192.168.1.88:{port}/?key=")
 
 
+def test_cloud_account_requires_local_authenticated_client(monkeypatch):
+    calls = []
+    class Account:
+        def __init__(self, directory): pass
+        def perform(self, action, body=None):
+            calls.append(action)
+            return {'ok': True, 'authenticated': True}
+    monkeypatch.setattr(gui_app.cloud_account, 'CloudAccount', Account)
+    with running_server(monkeypatch) as port:
+        assert request(port, 'GET', '/desktop/account')[0] == 401
+        assert request(port, 'POST', '/desktop/account/login', {'username': 'test', 'password': 'secret'})[0] == 401
+        assert calls == []
+        assert request(port, 'GET', '/desktop/account?key=test-key', headers={'X-Bridge-Public': '1'})[0] == 403
+        assert request(port, 'POST', '/desktop/account/qr', {'key': 'test-key'}, headers={'CF-Ray': 'public-request'})[0] == 403
+        assert calls == []
+        assert request(port, 'GET', '/desktop/account?key=test-key')[1]['authenticated']
+        assert request(port, 'POST', '/desktop/account/qr', {'key': 'test-key'})[1]['authenticated']
+        assert calls == ['status', 'qr']
+
+
 def test_desktop_history_supports_global_filter_and_pagination(monkeypatch):
     records = [
         {"id": f"text-{index}", "type": "text", "text": f"内容 {index}", "chars": 4, "ts": index}

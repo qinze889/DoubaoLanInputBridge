@@ -20,6 +20,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>扫描 Mac 上的二维码以建立连接。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>在声笺中实时语音对话并向电脑发出任务。</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>通过局域网向你的 Mac 发送文字与文件。</string>
 	<key>NSAppTransportSecurity</key>

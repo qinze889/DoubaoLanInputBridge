@@ -21,6 +21,7 @@ import webbrowser
 import peer_share
 import mac_tunnel
 import relay_client
+import cloud_account
 import connection_modes
 from http.client import HTTPConnection
 from http import HTTPStatus
@@ -4229,6 +4230,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
     def handle_desktop_get(self, path: str, params: dict) -> None:
         port = int(self.server.server_port)
         active_key = self.active_access_key()
+        if path == '/desktop/account':
+            json_response(self, HTTPStatus.OK, cloud_account.CloudAccount(DATA_DIR).perform('status'))
+            return
         if path == '/desktop/connections':
             json_response(self, HTTPStatus.OK, {'ok': True, **self.server.connections.snapshot()})
             return
@@ -4363,6 +4367,10 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/files/share",
             "/files/paste",
             "/desktop/key/regenerate",
+            "/desktop/account/login",
+            "/desktop/account/register",
+            "/desktop/account/logout",
+            "/desktop/account/qr",
             "/desktop/publish",
             "/desktop/copy",
             "/desktop/diagnostics/copy",
@@ -4523,6 +4531,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def handle_desktop_post(self, path: str, data: dict) -> None:
         port = int(self.server.server_port)
+        if path.startswith('/desktop/account/'):
+            json_response(self, HTTPStatus.OK, cloud_account.CloudAccount(DATA_DIR).perform(path.rsplit('/', 1)[-1], data))
+            return
         if path == '/desktop/connections':
             result = self.server.connections.select(str(data.get('mode', '')), bool(data.get('enabled', True)))
             json_response(self, HTTPStatus.OK, {'ok': True, **result})

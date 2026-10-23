@@ -10,7 +10,7 @@
 - 服务器实际发现 `workbuddy/cn:deepseek-v4.1-flash` 及 `doubao-voice/asr`、`doubao-voice/tts`。模型回复、TTS 与测试音频的 ASR 均实际返回成功。登录 Cookie 留在现有网关账号池，声笺只持有限定来源和模型的服务凭据。
 - 桌面连接器主动连出 WebSocket，持久化领取任务 ID，串行在配置的工作目录中运行。DeepSeek Harness `0.2.1-rc.2` 的 headless JSON 引擎已实际通过 sub-buddy 完成文件写入；完整公网任务派发、事件补读、幂等提交和取消确认已实测。Codex 使用 App Server stdio；已用真实子进程协议夹具测试初始化、单次审批与停止进程，尚未宣称完成真实账号模型验收。
 - CPU、内存、工作目录所在磁盘、网络累计字节和 Agent 状态通过设备心跳上报。当前不声称具有进程级服务告警或系统推送。
-- iOS Foundation 客户端新增 HTTPS 固定中转链接的解析、POST 登录及 Cookie 转发，连接码不会出现在转发 URL。保留旧 LAN/CF 连接；P2P 使用网页。设备页提供 v2 网页入口。原生 v2 语音界面尚未接入。
+- iOS Foundation 客户端支持 HTTPS 固定中转链接的解析、POST 登录及 Cookie 转发，连接码不会出现在转发 URL。保留旧 LAN/CF 连接；P2P 使用网页。App 内“对话”页嵌入 v2 网页并复用持久 Cookie，扫码可直达；独立原生音频引擎尚未接入。
 - Mac 开发版独立 Bundle ID、名字和数据目录，正式构建强制 Developer ID + 公证，禁止自动退回临时签名。开发包及冻结的双向 WebRTC 文件传输已经验证。用户尚未开通 Apple Developer，正式身份升级及辅助权限复用验收仍被阻塞。
 
 屏幕视频、键鼠控制、Android scrcpy、iPhone 镜像接入、coturn 和原生手机连续语音仍属于后续阶段。连接器不声明这些未实现能力，设备页面也不把它们显示为可用。
@@ -76,7 +76,23 @@ python -m server.core_v2.admin backup --output /private/core-before-update.sqlit
 
 备份使用 SQLite backup API，包含 WAL 中已提交的数据。恢复前停止 v2 服务，保留当前数据库和 WAL 的副本，移走当前 WAL/SHM，再以相同权限和所有者恢复完整快照，启动后检查健康及账号隔离。不要把旧传输库、网关库或其他业务库当作 v2 恢复源。回滚服务版本不能撤销已经运行的电脑操作。
 
-当前 schema 为 v1；新功能尚未经过历史生产库迁移。后续改表必须增加明确迁移版本和升级前快照，不可仅修改建表语句。
+当前 schema 为 v2。启动时在事务内从 v1 增加登录会话的设备关联、一次性扫码票据表及索引，保留现有用户、邀请码、设备、任务和账本。升级前使用 SQLite backup API 保存快照；旧版程序不支持 v2 迁移语义，回滚需停止服务并恢复配套数据库快照。
+
+## App 登录与扫码
+
+Mac / Windows 的“连接手机”页新增账号登录、注册码注册和语音二维码。电脑凭据保存在 macOS 钥匙串或当前 Windows 用户的 DPAPI 加密文件中，密码不保存，界面不取得长期 token。下次打开检查云端会话，正常时直接显示语音二维码。旧文件传输二维码与网络选择继续独立使用。
+
+尚未登录电脑时也显示固定语音入口二维码，手机可以直接打开测试；手机已有登录态便自动恢复，否则需要先登录一次。电脑登录后二维码变为一次性免登录票据，两种二维码的提示会随状态切换。
+
+`POST /auth/qr` 使用已登录的电脑 token 生成 120 秒、一次性票据；刷新立即作废同一会话的旧票据。二维码只包含 `/console#login=...`，票据放 URL fragment，不进入 HTTP 请求 URL 或 Referer，页面读取后立即清除。`POST /auth/qr/redeem` 原子消费票据、登记无执行能力的手机设备，并签发独立登录 token；电脑退出后未兑换的票据失效，已登录手机可在设备页单独撤销。此二维码提供账号访问，请只让自己的手机扫描。
+
+网页登录使用 30 天 `Secure; HttpOnly; SameSite=Strict` Cookie，长期凭据不再写入 JS 持久存储。页面重开通过同源 `POST /auth/session` 恢复内存中的会话，用于现有 Bearer / WebSocket 协议；原有会话存储仅兼容旧页面。退出必须取得云端撤销回执，离线时明确报错并保留状态。认证入口拒绝跨站 Origin / Sec-Fetch-Site 请求。
+
+iOS 增加 App 内“对话”页，使用限定声笺域名的 WKWebView 与持久 Cookie；扫码识别到云端入口后直接切换此页。旧配对信息仍保存在 Keychain。首次语音需系统麦克风许可；这是 App 内网页语音，尚非独立原生音频引擎。完整 iOS 构建及真机权限、Cookie 冷启动验收仍需 Xcode 和签名环境。
+
+云端仍只有独立 `/var/lib/shengjian-core/core.sqlite3`：`users` 为用户表，`devices` 为设备表，`sessions` 为登录 token 表，`invites` 为注册码表，`qr_tickets` 为扫码票据表，另有任务、事件、用量和积分表。密码使用 Argon2id，token、注册码和票据仅保存哈希。手机设备撤销会删除关联会话；不会获得电脑连接器的任务、输入或屏幕能力。
+
+2026-10-23 验收：云端已升级至 `20261023-4c75935ada58`，schema v1 → v2，升级前快照已保留，外键检查无错误；公网 HTTPS 的登录、Cookie 恢复、扫码兑换、重放拒绝、设备撤销和退出通过。Mac 全量 343 项回归通过，开发版 DMG / ZIP 完成签名、架构及冻结 P2P 传输验证，并安装到 `/Applications/声笺开发版.app`；实际打包服务的账号端点正常。Windows UI 构建、检查与浏览器交互通过，DPAPI 真机验证因远程 SSH exec 通道失败未完成，新安装包尚未生成。iOS Foundation 检查通过，完整 Xcode 与真机验证仍待签名环境。此轮没有新增远端 CI 或推送。
 
 模型环境变量：`SHENGJIAN_MODEL_BASE_URL`、`SHENGJIAN_MODEL_API_KEY`、`SHENGJIAN_TEXT_MODEL`、可选 `SHENGJIAN_VISION_MODEL`。配置的模型必须实际出现在上游 `/models` 中；只有明确配置的视觉模型接受内联 PNG/JPEG。
 

@@ -370,7 +370,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       const response = await fetch("/shengjian/api/v2/tasks", {
         headers: {
           Authorization:
-            "Bearer " + sessionStorage.getItem("shengjian.session"),
+            "Bearer " + token,
         },
       });
       return (await response.json()).tasks[0].id;
@@ -475,9 +475,30 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       ),
     );
     assert.deepEqual(errors, []);
+    // Scan on another device, close/reopen, then revoke that device from desktop.
+    const ticket = await page.evaluate(async () => (await json('/auth/qr', {})).ticket);
+    let phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    let phone = await phoneContext.newPage();
+    await phone.goto(origin + '/shengjian/api/v2/console#login=' + ticket);
+    await phone.locator('#workspace').waitFor({ state: 'visible' });
+    assert.equal(new URL(phone.url()).hash, '');
+    assert.equal(await phone.evaluate(() => sessionStorage.getItem('shengjian.session')), null);
+    const phoneDevice = await page.evaluate(async () => (await json('/devices')).devices.find(d => d.name === '手机扫码登录').id);
+    const saved = await phoneContext.storageState();
+    await phoneContext.close();
+    phoneContext = await browser.newContext({ storageState: saved });
+    phone = await phoneContext.newPage();
+    await phone.goto(origin + '/shengjian/api/v2/console');
+    await phone.locator('#workspace').waitFor({ state: 'visible' });
+    await page.evaluate(async id => json('/devices/' + id, undefined, 'DELETE'), phoneDevice);
+    await phone.reload();
+    await phone.locator('#auth').waitFor({ state: 'visible' });
+    await phone.goto(origin + '/shengjian/api/v2/console#login=' + ticket);
+    await phone.getByText('二维码已使用或已过期，请在电脑上刷新后重新扫描。', { exact: true }).waitFor();
+    await phoneContext.close();
     await page.getByRole("button", { name: "退出登录" }).click();
     console.log(
-      "Core UI: real-time endpointing/two turns/interruption/mic reuse/offline, account isolation, voice queue/stop, task report, enrollment/grants, cancellation, light/dark and mobile passed",
+      "Core UI: QR redeem/replay/restart/revocation, real-time endpointing/two turns/interruption/mic reuse/offline, account isolation, voice queue/stop, task report, enrollment/grants, cancellation, light/dark and mobile passed",
     );
   } finally {
     if (browser) await browser.close();

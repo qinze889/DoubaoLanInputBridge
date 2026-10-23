@@ -10,7 +10,7 @@ import secrets
 import time
 from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,6 +30,11 @@ class Login(Input):
 
 class Register(Login):
     invite: str = Field(min_length=16, max_length=128)
+
+
+class QRLogin(Input):
+    ticket: str = Field(min_length=32, max_length=128)
+    name: str = Field(default='手机扫码登录', min_length=1, max_length=80)
 
 
 class Invite(Input):
@@ -130,6 +135,10 @@ def create_app(directory, admin_token=None, providers=None):
 
     @app.middleware('http')
     async def boundaries(request, call_next):
+        if request.url.path.startswith(PREFIX+'/auth/'):
+            origin = request.headers.get('origin')
+            if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and origin != str(request.base_url).rstrip('/')):
+                return JSONResponse({'ok': False, 'error': 'origin_denied'}, status_code=403)
         total, chunks = 0, []
         async for chunk in request.stream():
             total += len(chunk)
@@ -159,20 +168,48 @@ def create_app(directory, admin_token=None, providers=None):
         return {'ok': True, 'version': 2, 'providers': providers.readiness() if providers else {'models': False, 'voice': False}}
 
     @app.post(PREFIX+'/auth/register')
-    async def register(body: Register, request: Request):
+    async def register(body: Register, request: Request, response: Response):
         limiter.check(request.client.host)
         async with auth_slots:
-            return {'ok': True, **await asyncio.to_thread(store.register, body.username, body.password, body.invite)}
+            data = await asyncio.to_thread(store.register, body.username, body.password, body.invite)
+            return remember(response, data)
 
     @app.post(PREFIX+'/auth/login')
-    async def login(body: Login, request: Request):
+    async def login(body: Login, request: Request, response: Response):
         limiter.check(request.client.host)
         async with auth_slots:
-            return {'ok': True, **await asyncio.to_thread(store.login, body.username, body.password)}
+            data = await asyncio.to_thread(store.login, body.username, body.password)
+            return remember(response, data)
+
+    cookie_name = '__Secure-shengjian_session'
+
+    def remember(response, data):
+        response.set_cookie(cookie_name, data['token'], max_age=30*86400, secure=True, httponly=True, samesite='strict', path=PREFIX)
+        return {'ok': True, **data}
+
+    @app.post(PREFIX+'/auth/session')
+    async def resume(request: Request, response: Response):
+        token = request.cookies.get(cookie_name, '')
+        try:
+            owner = store.authenticate(token)
+        except Fault:
+            response.delete_cookie(cookie_name, path=PREFIX, secure=True, httponly=True, samesite='strict')
+            return {'ok': True, 'authenticated': False}
+        return {'ok': True, 'authenticated': True, 'token': token, 'user_id': owner['user_id']}
+
+    @app.post(PREFIX+'/auth/qr')
+    async def make_qr(uid=Depends(user), authorization: str | None = Header(default=None)):
+        return {'ok': True, **store.qr_ticket(token_from(authorization))}
+
+    @app.post(PREFIX+'/auth/qr/redeem')
+    async def redeem(body: QRLogin, request: Request, response: Response):
+        limiter.check('qr:'+request.client.host)
+        return remember(response, store.redeem_qr(body.ticket, body.name))
 
     @app.post(PREFIX+'/auth/logout')
-    async def logout(uid=Depends(user), authorization: str | None = Header(default=None)):
+    async def logout(response: Response, uid=Depends(user), authorization: str | None = Header(default=None)):
         store.logout(token_from(authorization))
+        response.delete_cookie(cookie_name, path=PREFIX, secure=True, httponly=True, samesite='strict')
         return {'ok': True}
 
     @app.post(PREFIX+'/admin/invites', dependencies=[Depends(admin)])

@@ -504,6 +504,7 @@ function ConnectionView({ apiGet, apiPost, ready, notify, onPublish, onRefresh, 
   const url = ready && connection?.ready ? connection.url : ''
   const modeTitle = connection?.modes.find(mode => mode.id === connection.mode)?.title || '连接'
   return <>
+    <CloudAccountPanel apiGet={apiGet} apiPost={apiPost} ready={ready} />
     <div className="connection-status-line"><span className={`status-pill ${url ? 'ready' : ''}`}><span />{url ? `${modeTitle}已就绪` : ready && connection?.enabled ? '正在准备连接' : '连接未就绪'}</span></div>
     <section className="connection-card" aria-label="手机连接">
       <div className="qr-layout">
@@ -523,6 +524,50 @@ function ConnectionView({ apiGet, apiPost, ready, notify, onPublish, onRefresh, 
     <p className="connection-footnote"><LockKeyhole size={12} />每台机器拥有独立连接码。同一域名按设备编号连接。</p>
     <button className="text-button local-page-link" disabled={!ready} onClick={onOpen}>打开本机页面<ArrowUpRight size={12} /></button>
   </>
+}
+
+type AccountReply = { authenticated: boolean; url?: string; expires_at?: number }
+function CloudAccountPanel({ apiGet, apiPost, ready }: { apiGet: <T>(path: string) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; ready: boolean }) {
+  const [account, setAccount] = useState<AccountReply>({ authenticated: false })
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [invite, setInvite] = useState('')
+  const [registering, setRegistering] = useState(false)
+  const [working, setWorking] = useState(false)
+  const [failure, setFailure] = useState('')
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
+  useEffect(() => {
+    let active = true
+    if (ready) void apiGet<AccountReply>('/desktop/account').then(async (data) => {
+      if (!active) return
+      if (data.authenticated) data = await apiPost<AccountReply>('/desktop/account/qr')
+      if (active) setAccount(data)
+    }).catch((reason: unknown) => { if (active) setFailure(reason instanceof Error ? reason.message : '无法连接云端') })
+    return () => { active = false }
+  }, [ready, apiGet, apiPost])
+  async function run(action: string) {
+    setWorking(true); setFailure('')
+    try {
+      let data = await apiPost<AccountReply>('/desktop/account/' + action, action === 'login' || action === 'register' ? { username, password, invite } : {})
+      if (action === 'login' || action === 'register') { setPassword(''); setInvite('') }
+      if (data.authenticated && !data.url) data = await apiPost<AccountReply>('/desktop/account/qr')
+      setAccount(data)
+    } catch (reason) { setFailure(reason instanceof Error ? reason.message : '账号操作失败') }
+    finally { setWorking(false) }
+  }
+  return <section className="cloud-account-panel" aria-label="声笺账号">
+    <h3>账号 · 实时语音与任务</h3>
+    {account.authenticated ? <div className="cloud-account-session">
+      {account.url && (account.expires_at || 0) * 1000 > now ? <div className="cloud-account-qr"><QRCodeSVG value={account.url} size={150} /></div> : <p>二维码已过期，请刷新</p>}
+      <div><strong>已登录，手机扫码即可对话</strong><p>登录保留 30 天。二维码两分钟有效、仅用一次，请只让自己的手机扫描。</p><div className="qr-actions"><button className="button secondary" disabled={working} onClick={() => void run('qr')}>刷新语音二维码</button><button className="text-button" disabled={working} onClick={() => void run('logout')}>退出账号</button></div></div>
+    </div> : <form onSubmit={(event) => { event.preventDefault(); void run(registering ? 'register' : 'login') }}>
+      <div className="cloud-account-session"><div className="cloud-account-qr"><QRCodeSVG value="https://test.xjiaoai.com/shengjian/api/v2/console" size={150} /></div><div><strong>手机扫码，直接测试实时对话</strong><p>手机已登录即可直接使用。也可在下方登录电脑，生成免登录二维码。下次打开自动复用登录态。</p></div></div>
+      <div className="cloud-account-fields"><input aria-label="用户名" placeholder="用户名" autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} required /><input aria-label="密码" placeholder="密码（至少 12 位）" type="password" autoComplete={registering ? 'new-password' : 'current-password'} minLength={12} value={password} onChange={event => setPassword(event.target.value)} required />{registering && <input aria-label="注册码" placeholder="注册码 / 邀请码" value={invite} onChange={event => setInvite(event.target.value)} required />}</div>
+      <div className="qr-actions"><button className="button primary" disabled={!ready || working}>{working ? '正在连接…' : registering ? '注册并登录' : '登录'}</button><button className="text-button" type="button" disabled={working} onClick={() => setRegistering(!registering)}>{registering ? '已有账号' : '使用注册码注册'}</button></div>
+    </form>}
+    {failure && <p role="alert">{failure}</p>}
+  </section>
 }
 
 function UpdateDialog({ update, installing, onClose, onInstall }: { update: UpdateResult; installing: boolean; onClose: () => void; onInstall: () => Promise<void> }) {

@@ -335,15 +335,7 @@ const {
     });
     await workletPage.bringToFront();
     await workletPage.goto(origin + "/shengjian/api/v2/console");
-    await workletPage
-      .getByLabel("用户名", { exact: true })
-      .fill("browser-test");
-    await workletPage
-      .getByLabel("密码", { exact: true })
-      .fill("browser-password-123");
-    await workletPage
-      .getByRole("button", { name: "登录", exact: true })
-      .click();
+    // A new tab restores the HttpOnly persistent session without another login.
     await workletPage.locator("#workspace").waitFor({ state: "visible" });
     await workletPage
       .getByRole("button", { name: "开始实时对话", exact: true })

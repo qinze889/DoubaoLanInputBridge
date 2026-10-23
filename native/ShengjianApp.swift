@@ -504,6 +504,7 @@ struct ConnectionView:View {
                     Spacer()
                     StatusPill(text:model.connectionLabel,color:model.connectionColor).padding(.top,7)
                 }
+                CloudAccountCard()
                 Card(padding:0) {
                     HStack(spacing:0) {
                         VStack(spacing:18) {
@@ -571,6 +572,75 @@ struct ConnectionView:View {
         Button(action: action) {
             Card(padding:20) { HStack(spacing:12) { SymbolTile(name:icon,color:color); VStack(alignment:.leading,spacing:4) { Text(title).font(.system(size:13,weight:.semibold)); Text(subtitle).font(.system(size:11)).foregroundStyle(.secondary) }; Spacer(minLength:0); Image(systemName:"arrow.up.right").font(.system(size:12,weight:.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }
         }.buttonStyle(.plain).accessibilityLabel(title).help(subtitle)
+    }
+}
+
+struct CloudAccountCard: View {
+    @EnvironmentObject var model: BridgeModel
+    @ViewState private var username = ""
+    @ViewState private var password = ""
+    @ViewState private var invitation = ""
+    @ViewState private var registering = false
+    @ViewState private var authenticated = false
+    @ViewState private var qr = ""
+    @ViewState private var expires = Date.distantPast
+    @ViewState private var working = false
+    @ViewState private var failure = ""
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("账号 · 实时语音与任务", systemImage: "person.crop.circle").font(.headline)
+                if authenticated {
+                    HStack(spacing: 24) {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            if context.date < expires && !qr.isEmpty {
+                                QRCode(value: qr).padding(12).frame(width: 168, height: 168).background(.white, in: RoundedRectangle(cornerRadius: 16))
+                            } else { Text("二维码已过期，请刷新").frame(width: 168, height: 168) }
+                        }
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("已登录，手机扫码即可对话").font(.subheadline.weight(.medium))
+                            Text("登录保留 30 天。二维码两分钟有效、仅可使用一次，请只让自己的手机扫描。").font(.caption).foregroundStyle(.secondary)
+                            Button("刷新语音二维码") { Task { await run("qr") } }.disabled(working)
+                            Button("退出账号") { Task { await run("logout") } }.disabled(working)
+                        }
+                    }
+                } else {
+                    HStack(spacing: 24) {
+                        QRCode(value: "https://test.xjiaoai.com/shengjian/api/v2/console").padding(12).frame(width: 168, height: 168).background(.white, in: RoundedRectangle(cornerRadius: 16))
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("手机扫码，直接测试实时对话").font(.subheadline.weight(.medium))
+                            Text("手机已登录即可直接使用。也可在下方登录电脑，生成免登录二维码。下次打开自动复用登录态。").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    TextField("用户名", text: $username).textContentType(.username)
+                    SecureField("密码（至少 12 位）", text: $password).textContentType(.password)
+                    if registering { TextField("注册码 / 邀请码", text: $invitation) }
+                    HStack {
+                        Button(registering ? "注册并登录" : "登录") { Task { await run(registering ? "register" : "login") } }.buttonStyle(.borderedProminent).disabled(working || username.isEmpty || password.isEmpty)
+                        Button(registering ? "已有账号" : "使用注册码注册") { registering.toggle() }.disabled(working)
+                    }
+                }
+                if working { ProgressView().controlSize(.small) }
+                if !failure.isEmpty { Text(failure).font(.caption).foregroundStyle(.red) }
+            }.textFieldStyle(.roundedBorder)
+        }.task { if model.online && !model.preview { await run("status") } }
+         .onChange(of: model.online) { _, online in if online { Task { await run("status") } } }
+    }
+    private func run(_ action: String) async {
+        guard !working else { return }
+        working = true; failure = ""; defer { working = false }
+        do {
+            let result: [String: Any]
+            if action == "status" { result = try await model.api("/desktop/account") }
+            else { result = try await model.api("/desktop/account/"+action, body: action == "login" || action == "register" ? ["username": username, "password": password, "invite": invitation] : [:]) }
+            if action == "login" || action == "register" { password = ""; invitation = "" }
+            authenticated = result["authenticated"] as? Bool ?? false
+            if authenticated {
+                let ticket = action == "qr" ? result : try await model.api("/desktop/account/qr", body: [:])
+                qr = ticket["url"] as? String ?? ""
+                expires = Date(timeIntervalSince1970: ticket["expires_at"] as? Double ?? 0)
+            } else { qr = "" }
+        } catch { failure = error.localizedDescription }
     }
 }
 

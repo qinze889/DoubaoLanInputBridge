@@ -271,3 +271,10 @@ nav { display: grid; gap: 3px; }
   .connection-toggle > span::after { background: ButtonText; }
   .qr-code { forced-color-adjust: none; }
 }
+.cloud-account-panel { background: var(--surface, Canvas); border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 20px; padding: 24px; margin-bottom: 24px; }
+.cloud-account-panel h3 { margin: 0 0 16px; font-size: 16px; }
+.cloud-account-panel p { font-size: 13px; opacity: .7; line-height: 1.6; }
+.cloud-account-fields { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.cloud-account-fields input { flex: 1; min-width: 160px; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); background: transparent; color: inherit; border-radius: 9px; padding: 10px 12px; }
+.cloud-account-session { display: flex; align-items: center; gap: 24px; }
+.cloud-account-qr { background: white; border-radius: 16px; padding: 14px; flex-shrink: 0; }

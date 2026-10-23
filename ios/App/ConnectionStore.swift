@@ -10,6 +10,8 @@ import ShengjianClient
     @Published var busy = false
     @Published var shared: [SharedItem] = []
     @Published var success = 0
+    @Published var cloudURL: URL?
+    @Published var cloudScanID = UUID()
     let service = "com.doubaolaninputbridge.ios.connections"
     var selected: BridgeConnection? { connections.first { $0.id == selectedID } }
     init() {
@@ -34,6 +36,13 @@ import ShengjianClient
         connections = values
     }
     func add(link: String, name: String) async -> Bool {
+        if let url = URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)),
+           url.scheme == "https", url.host == "test.xjiaoai.com", url.port == nil,
+           url.user == nil, url.password == nil, url.path == "/shengjian/api/v2/console", url.query == nil {
+            cloudURL = url
+            cloudScanID = UUID()
+            return true
+        }
         busy = true; defer { busy = false }
         do {
             guard let url = URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw ClientError.invalidConnection }
