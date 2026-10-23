@@ -63,7 +63,7 @@
     const owner = uid, version = epoch;
     for (const ident of entry.images || []) {
       if(entry.kind==='chat'){article.append(action('查看关联图片',()=>window.ShengjianVisual.useSaved(ident,entry.id)));continue;}
-      article.append(action('聊这张图',async()=>{if(await window.ShengjianVisual.useSaved(ident,entry.id))await window.ShengjianConversation?.openVisual(true);}));
+      article.append(action('聊这张图',async()=>{const preparing=window.ShengjianVisual.useSaved(ident,entry.id);await Promise.all([preparing,window.ShengjianConversation?.openVisual(true)]);}));
       const image = node('img'); image.alt = '生活照片'; image.loading = 'lazy'; article.append(image);
       io.fetchImage(ident).then(r => r.blob()).then(blob => {
         if (owner !== uid || version !== epoch || !image.isConnected) return;
