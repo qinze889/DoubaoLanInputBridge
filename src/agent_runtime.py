@@ -8,6 +8,7 @@ import subprocess
 import threading
 import secrets
 import sys
+import time
 
 from cloud_account import BASE, CloudAccount
 
@@ -52,10 +53,28 @@ class AgentRuntime:
                     'engine': 'DeepSeek Harness', 'version': VERSION, 'model': self.model,
                     'workspace': str(self.workspace), 'enabled': self.enabled_path.exists(),
                     'connected': bool(connector and connector.ws),
+                    'interaction_mode': 'background',
+                    'subagents': [{'id': ident, 'state': state} for engine in (list(connector.engines.values()) if connector else []) for ident, state in dict(getattr(engine, 'agents', {})).items()],
+                    'capabilities': {'subagents': True, 'max_subagents': 3, 'max_depth': 1, 'child_messages': True, 'skills': ['background-web', 'computer-report', 'task-workspace'], 'mcp_client': 'not_configured'},
                     'last_task': connector.last_task if connector else None,
                     'active_tasks': len(connector.active) if connector else 0}
 
-    def submit(self, prompt):
+    def personal(self, body=None):
+        from server.desktop_agent.personal import PersonalStore
+        if not self.config_path.exists(): raise RuntimeError('请先启用电脑 Agent。')
+        scope = json.loads(self.config_path.read_text())['device_id']
+        with PersonalStore(self.root/'personal', scope) as store:
+            if body is not None:
+                action = body.get('action')
+                if action == 'configure': store.configure(body.get('settings', {}))
+                elif action == 'remember': store.remember(body.get('text'))
+                elif action == 'forget': store.delete_memory(body.get('id'))
+                elif action == 'schedule': store.schedule(body.get('schedule', {}))
+                elif action == 'schedule_state': store.change_schedule(body.get('id'), body.get('enabled', False), body.get('deleted', False))
+                else: raise ValueError('unknown_personal_action')
+            return {'ok': True, 'settings': store.settings(), 'memories': store.memories(), 'schedules': store.schedules(), 'runs': store.runs()}
+
+    def submit(self, prompt, request_id=None, expires_in=None):
         if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 16000:
             raise RuntimeError('请输入 1 至 16000 字的任务。')
         if not self.connector or not self.connector.ws:
@@ -65,7 +84,26 @@ class AgentRuntime:
         token = account.vault.read()
         if not token:
             raise RuntimeError('请先登录声笺账号。')
-        return account.request('/assistant/turn', {'text': prompt.strip(), 'request_id': secrets.token_hex(16), 'device_id': config['device_id'], 'engine': 'harness'}, token)
+        body = {'text': prompt.strip(), 'request_id': request_id or secrets.token_hex(16), 'device_id': config['device_id'], 'engine': 'harness'}
+        if expires_in is not None: body['expires_in'] = expires_in
+        return account.request('/assistant/turn', body, token)
+
+    async def scheduler(self, connector):
+        store = connector.personal
+        store.recover_runs()
+        while True:
+            for run in store.claim_due():
+                if not connector.ws:
+                    store.finish_run(run['id'], run['slot'], 'missed')
+                    continue
+                try:
+                    result = await asyncio.to_thread(self.submit, run['prompt'], run['request_id'], 30)
+                    task = result.get('task') if result.get('action') == 'task' else None
+                    store.finish_run(run['id'], run['slot'], 'submitted' if task else 'missed', task['id'] if task else None)
+                except Exception:
+                    # A timed-out submission may have reached the server. Never retry it.
+                    store.finish_run(run['id'], run['slot'], 'unknown')
+            await asyncio.sleep(5)
 
     def resume(self):
         if self.enabled_path.exists() and self.config_path.exists():
@@ -173,7 +211,11 @@ class AgentRuntime:
                 if self.stopping:
                     self.connector.journal.close()
                     return
-                await self.connector.run()
+                scheduled = asyncio.create_task(self.scheduler(self.connector))
+                try: await self.connector.run()
+                finally:
+                    scheduled.cancel()
+                    await asyncio.gather(scheduled, return_exceptions=True)
             asyncio.run(connect())
         except asyncio.CancelledError:
             pass

@@ -4239,6 +4239,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if path == '/desktop/agent':
             json_response(self, HTTPStatus.OK, agent_runtime.manager(DATA_DIR).status())
             return
+        if path == '/desktop/agent/personal':
+            json_response(self, HTTPStatus.OK, agent_runtime.manager(DATA_DIR).personal())
+            return
         if path == '/desktop/connections':
             json_response(self, HTTPStatus.OK, {'ok': True, **self.server.connections.snapshot()})
             return
@@ -4380,6 +4383,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/desktop/agent/start",
             "/desktop/agent/stop",
             "/desktop/agent/task",
+            "/desktop/agent/personal",
             "/desktop/publish",
             "/desktop/copy",
             "/desktop/diagnostics/copy",
@@ -4540,6 +4544,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def handle_desktop_post(self, path: str, data: dict) -> None:
         port = int(self.server.server_port)
+        if path == '/desktop/agent/personal':
+            json_response(self, HTTPStatus.OK, agent_runtime.manager(DATA_DIR).personal(data))
+            return
         if path == '/desktop/agent/start':
             self.server.agent = agent_runtime.manager(DATA_DIR)
             json_response(self, HTTPStatus.OK, self.server.agent.start())

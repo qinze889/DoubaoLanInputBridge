@@ -333,6 +333,12 @@ class Store:
             row = db.execute("SELECT * FROM tasks WHERE device_id=? AND state='queued' AND dispatched IS NULL ORDER BY created LIMIT 1", (ident,)).fetchone()
             if not row:
                 return None
+            expiry = json.loads(row['specification']).get('expires_at')
+            if expiry is not None and time.time() > expiry:
+                db.execute("UPDATE tasks SET state='failed' WHERE id=?", (row['id'],))
+                self._event(db, row['id'], {'type': 'task.log', 'text': '定时任务已过期，没有执行。'})
+                self._event(db, row['id'], {'type': 'task.state', 'state': 'failed'})
+                return None
             db.execute('UPDATE tasks SET dispatched=? WHERE id=?', (time.time(), row['id']))
             return dict(row)
 

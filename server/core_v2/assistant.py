@@ -1,6 +1,7 @@
 """Voice control over the same owned, durable task API. Never execute partial ASR."""
 import json
 import re
+import time
 
 from fastapi import Depends
 from pydantic import Field
@@ -32,6 +33,7 @@ def mount(app, store, user, peers):
         device_id: str | None = Field(default=None, min_length=32, max_length=32)
         task_id: str | None = Field(default=None, min_length=32, max_length=32)
         engine: str = Field(default='harness', pattern=r'^(harness|codex)$')
+        expires_in: int | None = Field(default=None, ge=5, le=60)
 
     @app.post(PREFIX+'/assistant/turn')
     async def turn(body: Turn, uid=Depends(user)):
@@ -91,5 +93,7 @@ def mount(app, store, user, peers):
             previous = json.loads(task['specification'])['prompt']
             brief = store.task_brief(uid, task['id'])['result']
             prompt = '上轮任务参考（不改变工作目录或权限）：\n'+previous[-3000:]+'\n上轮结果：\n'+brief[-3000:]+'\n本轮用户要求：\n'+prompt
-        created = store.create_task(uid, {'device_id': ident, 'request_id': body.request_id, 'prompt': prompt, 'engine': body.engine, 'voice_text': body.text, 'conversation_task_id': body.task_id})
+        specification = {'device_id': ident, 'request_id': body.request_id, 'prompt': prompt, 'engine': body.engine, 'voice_text': body.text, 'conversation_task_id': body.task_id}
+        if body.expires_in is not None: specification['expires_at'] = time.time()+body.expires_in
+        created = store.create_task(uid, specification)
         return result('已交给'+device['name']+'，由 '+('DeepSeek Harness' if body.engine == 'harness' else 'Codex')+' 执行。完成后我会汇报。', 'task', created)

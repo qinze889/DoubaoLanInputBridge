@@ -26,6 +26,17 @@ def turn(client, auth, text, **values):
     return client.post(PREFIX+'/assistant/turn', headers=auth, json={'text': text, 'request_id': secrets.token_hex(16), **values})
 
 
+def test_scheduled_task_expires_without_dispatch_or_replay(agent, monkeypatch):
+    client, store, auth, device, _ = agent
+    created = turn(client, auth, '生成今日汇报', expires_in=5).json()['task']
+    expiry = json.loads(created['specification'])['expires_at']
+    monkeypatch.setattr('server.core_v2.store.time.time', lambda: expiry+1)
+    assert store.dispatch(device['id']) is None
+    task = store.task(created['user_id'], created['id'])
+    assert task['state'] == 'failed' and task['dispatched'] is None
+    assert store.dispatch(device['id']) is None
+
+
 def test_task_status_followup_and_idempotency(agent):
     client, store, auth, device, _ = agent
     created = turn(client, auth, '让电脑写一份测试说明').json()

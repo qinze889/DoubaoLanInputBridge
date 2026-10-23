@@ -43,6 +43,8 @@ $AgentNode = (Get-Command node -ErrorAction Stop).Source
     --add-data "$Assets;assets" `
     --paths "$ProjectRoot" `
     --add-data "$ProjectRoot\server\desktop_agent\dsh_approval.mjs;server/desktop_agent" `
+    --add-data "$ProjectRoot\server\desktop_agent\dsh_desktop.mjs;server/desktop_agent" `
+    --add-data "$ProjectRoot\server\desktop_agent\skills;server/desktop_agent/skills" `
     --add-data "$ProjectRoot\tools\dsh\node_modules;agent-runtime/node_modules" `
     --add-binary "$AgentNode;agent-runtime" `
     --add-data "$ProjectRoot\docs\cloudflared-LICENSE;." `

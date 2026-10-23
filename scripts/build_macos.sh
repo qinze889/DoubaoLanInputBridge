@@ -23,7 +23,7 @@ iconutil -c icns build/Shengjian.iconset -o build/Shengjian.icns
 TASK_STAGE="$(mktemp -d "$TASK_ROOT/build/native.XXXXXX")"
 TASK_APP="$TASK_STAGE/$TASK_NAME.app"
 mkdir -p "$TASK_APP/Contents/MacOS" "$TASK_APP/Contents/Resources"
-xcrun swiftc -O -parse-as-library native/ShareImport.swift native/ShengjianApp.swift -target arm64-apple-macos14.4 -o "$TASK_APP/Contents/MacOS/Shengjian" -framework SwiftUI -framework AppKit -framework CoreImage
+xcrun swiftc -O -parse-as-library native/ShareImport.swift native/DesktopControl.swift native/ShengjianApp.swift -target arm64-apple-macos14.4 -o "$TASK_APP/Contents/MacOS/Shengjian" -framework SwiftUI -framework AppKit -framework CoreImage
 cp packaging/Info-native.plist "$TASK_APP/Contents/Info.plist"
 cp build/Shengjian.icns "$TASK_APP/Contents/Resources/Shengjian.icns"
 TASK_EXTENSION="$TASK_APP/Contents/PlugIns/ShengjianShare.appex"

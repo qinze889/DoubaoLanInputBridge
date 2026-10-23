@@ -11,6 +11,7 @@ final class NativeInputBroker: @unchecked Sendable {
     let path = "/tmp/shengjian-input-\(UUID().uuidString).sock"
     let token = UUID().uuidString + UUID().uuidString
     private var descriptor: Int32 = -1
+    private let desktop = NativeDesktopControl()
     var environment: [String:String] { ["SHENGJIAN_NATIVE_INPUT_SOCKET":path, "SHENGJIAN_NATIVE_INPUT_TOKEN":token] }
 
     init() throws {
@@ -69,6 +70,7 @@ final class NativeInputBroker: @unchecked Sendable {
     }
     private func perform(_ request:[String:Any]) -> [String:Any] {
         let operation = request["operation"] as? String ?? ""
+        if operation == "desktop", let command = request["request"] as? [String: Any] { return desktop.perform(command) }
         if operation == "permission" { return ["ok":true,"allowed":AXIsProcessTrusted()] }
         if operation == "request-permission" {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String:true] as CFDictionary
@@ -776,6 +778,77 @@ struct PublishView:View {
     }
 }
 
+struct AgentPersonalView: View {
+    @EnvironmentObject var model: BridgeModel
+    @ViewState private var data: [String: Any] = [:]
+    @ViewState private var memory = ""
+    @ViewState private var schedulePrompt = "汇报今天电脑情况"
+    @ViewState private var clock = "09:00"
+    @ViewState private var message = ""
+    private var settings: [String: Any] { data["settings"] as? [String: Any] ?? [:] }
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("桌面操作与本地助理").font(.title2.bold())
+                Toggle("独立后台浏览器，不占用前台", isOn: Binding(get: { settings["browser_enabled"] as? Bool ?? true }, set: { enabled in Task { await change(["action": "configure", "settings": ["browser_enabled": enabled]]) } }))
+                Text("网页任务使用无界面的独立 Chrome / Edge 会话，不连接你的浏览器。登录态独立，需要本机已安装 Chrome 或 Edge。").font(.caption).foregroundStyle(.secondary)
+                Toggle("允许 Mac 应用后台控件操作（实验）", isOn: Binding(get: { settings["desktop_enabled"] as? Bool ?? false }, set: { enabled in Task { await change(["action": "configure", "settings": ["desktop_enabled": enabled]]) } }))
+                Text("当前范围：计算器、文本编辑、Safari；不会主动激活应用。部分应用不支持后台控件操作，这不等于完整虚拟桌面。").font(.caption).foregroundStyle(.secondary)
+                Button("汇报今天电脑情况") { Task {
+                    do { _ = try await model.api("/desktop/agent/task", body: ["prompt": "汇报今天电脑情况"]); message = "已提交汇报任务，手机可查看并听取结果。" }
+                    catch { message = error.localizedDescription }
+                } }
+                Divider()
+                Text("专属记忆").font(.headline)
+                Text("记忆保存在本机 SQLite。启用后，相关内容会作为任务上下文发送给模型。请勿保存密码或密钥。").font(.caption).foregroundStyle(.secondary)
+                Toggle("任务使用本地记忆", isOn: Binding(get: { settings["memory_context"] as? Bool ?? true }, set: { value in Task { await change(["action": "configure", "settings": ["memory_context": value]]) } }))
+                HStack {
+                    TextField("例如：回复请简洁，先讲结果", text: $memory).textFieldStyle(.roundedBorder)
+                    Button("保存") { Task { await change(["action": "remember", "text": memory]); memory = "" } }.disabled(memory.isEmpty)
+                }
+                ForEach(data["memories"] as? [[String: Any]] ?? [], id: \.selfID) { row in
+                    HStack { Text(row["text"] as? String ?? ""); Spacer(); Button("删除") { Task { await change(["action": "forget", "id": row["id"] ?? ""]) } } }
+                }
+                Text("手机也可以说“记住：回复请简洁”。").font(.caption).foregroundStyle(.secondary)
+                Divider()
+                Text("每日定时任务").font(.headline)
+                Text("本机运行声笺且 Agent 在线时触发；错过时间不补跑。异常中断不重复执行。时区：Asia/Shanghai。").font(.caption).foregroundStyle(.secondary)
+                TextField("任务内容", text: $schedulePrompt).textFieldStyle(.roundedBorder)
+                HStack {
+                    TextField("HH:mm", text: $clock).frame(width: 80).textFieldStyle(.roundedBorder)
+                    Button("添加并启用") { Task { await change(["action": "schedule", "schedule": ["title": String(schedulePrompt.prefix(40)), "prompt": schedulePrompt, "kind": "daily", "local_time": clock, "timezone": "Asia/Shanghai", "enabled": true]]) } }
+                }
+                ForEach(data["schedules"] as? [[String: Any]] ?? [], id: \.selfID) { row in
+                    HStack {
+                        Text((row["local_time"] as? String ?? "一次")+" · "+(row["title"] as? String ?? ""))
+                        Spacer()
+                        Button((row["enabled"] as? Int ?? 0) == 1 ? "暂停" : "启用") { Task { await change(["action": "schedule_state", "id": row["id"] ?? "", "enabled": (row["enabled"] as? Int ?? 0) == 0]) } }
+                        Button("删除") { Task { await change(["action": "schedule_state", "id": row["id"] ?? "", "deleted": true]) } }
+                    }
+                }
+                ForEach(Array((data["runs"] as? [[String: Any]] ?? []).prefix(5)), id: \.runID) { row in
+                    Text((row["title"] as? String ?? "")+"："+(row["state"] as? String ?? "")).font(.caption).foregroundStyle(.secondary)
+                }
+                if !message.isEmpty { Text(message).font(.caption).textSelection(.enabled) }
+            }
+        }.task {
+            while !Task.isCancelled {
+                do { data = try await model.api("/desktop/agent/personal") } catch { message = error.localizedDescription }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+    private func change(_ body: [String: Any]) async {
+        do { data = try await model.api("/desktop/agent/personal", body: body); message = "已保存到本机。" }
+        catch { message = error.localizedDescription }
+    }
+}
+
+private extension Dictionary where Key == String, Value == Any {
+    var selfID: String { self["id"] as? String ?? "" }
+    var runID: String { (self["schedule_id"] as? String ?? "")+"/"+(self["slot"] as? String ?? "") }
+}
+
 struct ComputerAgentView: View {
     @EnvironmentObject var model: BridgeModel
     @ViewState private var state: [String: Any] = [:]
@@ -790,6 +863,7 @@ struct ComputerAgentView: View {
             VStack(alignment: .leading, spacing: 24) {
                 Text("电脑 Agent").font(.system(size: 30, weight: .bold, design: .rounded))
                 Text("在手机开口，把任务交给这台 Mac。").foregroundStyle(.secondary)
+                AgentPersonalView()
                 Card {
                     VStack(alignment: .leading, spacing: 18) {
                         HStack { Label("DeepSeek Harness", systemImage: "brain.head.profile").font(.title2.bold()); Spacer(); StatusPill(text: connected ? "已连接" : ["starting": "正在启动", "installing": "正在安装", "running": "正在连接", "stopping": "正在停止", "error": "需要处理"][phase] ?? "未启用", color: connected ? .green : .secondary) }
@@ -804,6 +878,11 @@ struct ComputerAgentView: View {
                             Button("账号登录") { model.selected = "connect" }
                         }
                         Text("运行中任务：\(state["active_tasks"] as? Int ?? 0)").font(.caption).foregroundStyle(.secondary)
+                        Text("后台执行 · 子代理最多 3 个 · 委派深度 1 层").font(.caption).foregroundStyle(.secondary)
+                        Text("内置技能：后台网页、电脑日报、任务目录整理。MCP 连接器尚未配置。").font(.caption).foregroundStyle(.secondary)
+                        ForEach(state["subagents"] as? [[String: Any]] ?? [], id: \.selfID) { child in
+                            Text("子代理 \(String((child["id"] as? String ?? "").prefix(8))) · \(child["state"] as? String ?? "unknown")").font(.caption)
+                        }
                         TextField("也可以在这里输入电脑任务…", text: $prompt).textFieldStyle(.roundedBorder)
                         Button("交给 Harness 执行") { Task {
                             working = true; defer { working = false }
@@ -900,7 +979,10 @@ struct RootView:View {
     }
     func applicationWillTerminate(_ notification:Notification) { model?.shutdown() }
     func applicationDidFinishLaunching(_ notification:Notification) {
-        NSApp.activate(ignoringOtherApps:true)
+        if CommandLine.arguments.contains("--background") {
+            NSApp.setActivationPolicy(.accessory)
+            DispatchQueue.main.async { NSApp.windows.forEach { $0.orderOut(nil) } }
+        } else { NSApp.activate(ignoringOtherApps:true) }
         if let index = CommandLine.arguments.firstIndex(of:"--snapshot"), CommandLine.arguments.count > index+1 {
             let path = CommandLine.arguments[index+1]
             DispatchQueue.main.asyncAfter(deadline:.now()+2) {
