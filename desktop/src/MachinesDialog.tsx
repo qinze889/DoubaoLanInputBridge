@@ -21,8 +21,8 @@ function bytes(value: number) {
   return `${(value / 1024 ** 2).toFixed(1)} MB`
 }
 
-export default function MachinesDialog({ apiGet, apiPost, notify, onClose }: {
-  apiGet: ApiGet; apiPost: ApiPost; notify: (message: string) => void; onClose: () => void
+export default function MachinesDialog({ apiGet, apiPost, notify, onClose, embedded = false }: {
+  apiGet: ApiGet; apiPost: ApiPost; notify: (message: string) => void; onClose: () => void; embedded?: boolean
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [invitation, setInvitation] = useState('')
@@ -45,10 +45,11 @@ export default function MachinesDialog({ apiGet, apiPost, notify, onClose }: {
     return () => window.clearInterval(timer)
   }, [refresh])
   useEffect(() => {
+    if (embedded) return
     const handler = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
+  }, [embedded, onClose])
   async function run(action: () => Promise<void>) {
     setBusy(true); setError('')
     try { await action(); await refresh() }
@@ -66,9 +67,9 @@ export default function MachinesDialog({ apiGet, apiPost, notify, onClose }: {
   const tunnel = snapshot?.network.tunnel
   const validInvitation = invitation && now < expiresAt
   const endpoint = snapshot?.network.endpoint || ''
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-    <section className="dialog dialog-wide machines-dialog" role="dialog" aria-modal="true" aria-labelledby="machines-title">
-      <header><div><h2 id="machines-title">机器共享</h2><p>Mac 与 Windows 配对后，直接互传文件。</p></div><button className="icon-button" title="关闭" onClick={onClose}><X size={19} /></button></header>
+  return <div className={embedded ? 'machines-page' : 'modal-backdrop'} onMouseDown={(event) => !embedded && event.target === event.currentTarget && onClose()}>
+    <section className={embedded ? 'machines-content' : 'dialog dialog-wide machines-dialog'} role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : true} aria-label="机器共享">
+      {!embedded && <header><div><h2>机器共享</h2><p>Mac 与 Windows 配对后，直接互传文件。</p></div><button className="icon-button" title="关闭" onClick={onClose}><X size={19} /></button></header>}
       <ConnectionPanel apiGet={apiGet} apiPost={apiPost} />
       <div className="machine-network"><strong>{snapshot?.device.name || '本机'}</strong><span>文件使用接收方当前的连接方式</span></div>
       {tunnel?.error && <p className="machine-error" role="status">{tunnel.error}</p>}
@@ -91,7 +92,7 @@ export default function MachinesDialog({ apiGet, apiPost, notify, onClose }: {
         {snapshot?.jobs.map((job) => <article className="machine-job" key={job.id}><div><strong>{job.name}</strong><small>{job.direction === 'send' ? '发送到' : '接收自'} {job.peer_name}</small></div>{job.status === 'complete' ? <span className="machine-complete"><Check size={16} />校验成功</span> : <span>{bytes(job.sent)} / {bytes(job.total)}</span>}{job.status !== 'complete' && <progress max={Math.max(job.total, 1)} value={job.sent} aria-label={`${job.name} 传输进度`} />}{job.status === 'error' && <p className="machine-error">{job.error}</p>}</article>)}
         {!snapshot?.jobs.length && <p className="machine-empty">传输完成后会校验完整文件。</p>}
       </section>
-      <footer className="dialog-actions"><button className="button secondary" onClick={() => void run(async () => { await apiPost('/desktop/open-folder', { target: 'received' }) })}><FolderOpen size={17} />接收文件夹</button><button className="button secondary" onClick={onClose}>完成</button></footer>
+      <footer className="dialog-actions"><button className="button secondary" onClick={() => void run(async () => { await apiPost('/desktop/open-folder', { target: 'received' }) })}><FolderOpen size={17} />接收文件夹</button>{!embedded && <button className="button secondary" onClick={onClose}>完成</button>}</footer>
     </section>
   </div>
 }

@@ -58,14 +58,6 @@ def test_history_category_filter_uses_full_hit_area_buttons():
     assert "justify-content: center" in styles
 
 
-def test_history_title_is_short_and_consistent():
-    source = APP_SOURCE.read_text(encoding="utf-8")
-
-    assert '<span>史记</span>' in source
-    assert '<h1 className="history-title">史记</h1>' in source
-    assert "语音桥历史" not in source
-
-
 def test_manage_tools_use_real_result_endpoints_and_show_status():
     source = APP_SOURCE.read_text(encoding="utf-8")
 
@@ -82,39 +74,6 @@ def test_file_row_folder_button_opens_containing_directory_not_default_app():
     assert "mode: 'folder'" in source
     assert "record.type === 'text' ? activateRecord(record) : openRecordFolder(record)" in source
     assert "打开所在目录" in source
-
-
-def test_history_heading_uses_compact_ink_banner_without_helper_copy():
-    source = APP_SOURCE.read_text(encoding="utf-8")
-    styles = (ROOT / "desktop" / "src" / "App.css").read_text(encoding="utf-8")
-
-    assert "本机内容归档" not in source
-    assert "双击文字复制，双击文件使用默认应用打开。" not in source
-    assert 'className="history-banner"' in source
-    assert 'className="history-title"' in source
-    assert 'className="history-seal"' in source
-    assert ".history-banner" in styles
-    assert "background: #10241f" in styles
-    assert ".history-title" in styles
-    assert 'font-family: "STXingkai"' in styles
-    assert "font-size: 40px" in styles
-    assert ".history-seal" in styles
-
-
-def test_history_banner_moves_actions_to_sidebar_and_uses_decorative_art():
-    source = APP_SOURCE.read_text(encoding="utf-8")
-    styles = APP_STYLES.read_text(encoding="utf-8")
-
-    banner = source[source.index('<header className="history-banner">'):source.index("</header>", source.index('<header className="history-banner">'))]
-    assert "连接手机" not in banner
-    assert "刷新" not in banner
-    assert 'className="history-banner-art"' in banner
-    assert 'className="history-banner-wave"' in banner
-    assert 'className="nav-item active" onClick={() => void loadHistory(false)}' in source
-    assert 'className="nav-trailing"' in source
-    assert ".history-banner::after" not in styles
-    assert ".history-banner-art" in styles
-    assert "@keyframes banner-breathe" in styles
 
 
 def test_history_list_loads_next_page_automatically_near_scroll_end():

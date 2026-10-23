@@ -6,6 +6,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { QRCodeSVG } from 'qrcode.react'
 import {
   Archive,
+  ArrowUpRight,
   Check,
   ClipboardCopy,
   File,
@@ -13,9 +14,11 @@ import {
   FolderOpen,
   Image,
   LoaderCircle,
+  Link,
+  LockKeyhole,
+  MessageSquare,
   MonitorSmartphone,
   Play,
-  QrCode,
   RefreshCw,
   Search,
   Send,
@@ -24,6 +27,7 @@ import {
   Square,
   Upload,
   Video,
+  Wifi,
   X,
 } from 'lucide-react'
 import './App.css'
@@ -146,7 +150,9 @@ function App() {
   const [category, setCategory] = useState('all')
   const [loading, setLoading] = useState(true)
   const loadingMoreRef = useRef(false)
-  const [modal, setModal] = useState<'qr' | 'publish' | 'manage' | 'machines' | null>(null)
+  const [page, setPage] = useState<'connect' | 'history' | 'machines' | 'settings'>('connect')
+  const [modal, setModal] = useState<'publish' | null>(null)
+  const [publishFiles, setPublishFiles] = useState(false)
   const [notice, setNotice] = useState('')
   const [availableUpdate, setAvailableUpdate] = useState<UpdateResult | null>(null)
   const [autoUpdating, setAutoUpdating] = useState(false)
@@ -324,13 +330,34 @@ function App() {
   }
 
   const openQrDialog = async () => {
+    setPage('connect')
     try {
       await loadBridgeState()
-      setModal('qr')
     } catch (error) {
       notify(error instanceof Error ? error.message : '无法刷新手机连接地址')
     }
   }
+
+  const openPublish = useCallback((files = false) => {
+    setPublishFiles(files)
+    setModal('publish')
+  }, [])
+
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.altKey || event.shiftKey || modal) return
+      const pages = { '1': 'connect', '2': 'history', '3': 'machines', '4': 'settings', ',': 'settings' } as const
+      if (event.key in pages) {
+        event.preventDefault()
+        setPage(pages[event.key as keyof typeof pages])
+      } else if (event.key.toLowerCase() === 'n' && bridge) {
+        event.preventDefault()
+        openPublish()
+      }
+    }
+    window.addEventListener('keydown', shortcut)
+    return () => window.removeEventListener('keydown', shortcut)
+  }, [bridge, modal, openPublish])
 
   const activateRecord = async (record: HistoryRecord) => {
     try {
@@ -372,14 +399,13 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <img src="/app-icon.png" alt="" />
-          <div><strong>声笺</strong><span>桌面版 v{bridge?.version || '—'}</span></div>
+          <div><strong>声笺</strong><span>让想法自在流动</span></div>
         </div>
         <nav aria-label="主导航">
-          <button className="nav-item active" onClick={() => void loadHistory(false)}><Archive size={19} /><span>史记</span><RefreshCw className="nav-trailing" size={15} /></button>
-          <button className="nav-item" onClick={() => void openQrDialog()}><QrCode size={19} /><span>连接手机</span></button>
-          <button className="nav-item" onClick={() => setModal('publish')}><Send size={19} /><span>发布给手机</span></button>
-          <button className="nav-item" onClick={() => setModal('machines')}><MonitorSmartphone size={19} /><span>机器共享</span></button>
-          <button className="nav-item" onClick={() => setModal('manage')}><Settings size={19} /><span>管理</span></button>
+          <button className={`nav-item ${page === 'connect' ? 'active' : ''}`} aria-current={page === 'connect' ? 'page' : undefined} onClick={() => void openQrDialog()}><MonitorSmartphone size={18} /><span>连接设备</span></button>
+          <button className={`nav-item ${page === 'history' ? 'active' : ''}`} aria-current={page === 'history' ? 'page' : undefined} onClick={() => setPage('history')}><Archive size={18} /><span>传输记录</span></button>
+          <button className={`nav-item ${page === 'machines' ? 'active' : ''}`} aria-current={page === 'machines' ? 'page' : undefined} onClick={() => setPage('machines')}><MonitorSmartphone size={18} /><span>机器共享</span></button>
+          <button className={`nav-item ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}><Settings size={18} /><span>设置</span></button>
         </nav>
         {availableUpdate && (
           <button className="update-indicator" disabled={autoUpdating} onClick={() => void installAvailableUpdate()}>
@@ -390,23 +416,30 @@ function App() {
             </span>
           </button>
         )}
-        <div className={`service-summary ${runtime.running ? 'online' : ''}`}>
+        <div className="sidebar-footer">
+        <div className={`service-summary ${bridge ? 'online' : ''}`}>
           <span className="status-dot" />
-          <div><strong>{runtime.running ? '服务运行中' : '服务已停止'}</strong><span>{runtime.running ? '手机可以连接' : '点击启动恢复连接'}</span></div>
+          <div><strong>{bridge ? 'Windows 已就绪' : runtime.running ? '正在启动…' : '服务已停止'}</strong><span>桌面版 v{bridge?.version || '—'}</span></div>
           <button className="icon-button" title={runtime.running ? '停止服务' : '启动服务'} onClick={toggleService}>
             {runtime.running ? <Square size={16} /> : <Play size={16} />}
           </button>
         </div>
+        <p className="privacy-caption"><LockKeyhole size={12} />你的内容，只在你的设备</p>
+        </div>
       </aside>
 
       <main className="workspace">
-        <header className="history-banner">
-          <div className="history-banner-title"><span className="history-banner-icon"><Archive size={20} /></span><h1 className="history-title">史记</h1><span className="history-seal" aria-hidden="true">录</span></div>
-          <div className="history-banner-art" aria-hidden="true">
-            <div className="history-banner-wave"><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
+        <div className="workspace-toolbar"><button className="button toolbar-share" disabled={!bridge} onClick={() => openPublish()}><Upload size={16} />分享</button></div>
+        <div className={`page-content page-${page}`}>
+        <header className="page-heading">
+          <div>
+            <h1>{page === 'connect' ? '连接你的手机' : page === 'history' ? '传输记录' : page === 'machines' ? '机器共享' : '设置'}</h1>
+            <p>{page === 'connect' ? '想法在手机，落笔在电脑。' : page === 'history' ? '每一次传递，都好好收着。' : page === 'machines' ? '各自在线，彼此相连。' : '让声笺更合你的习惯。'}</p>
           </div>
+          {page === 'history' && <button className="button primary" disabled={!bridge} onClick={() => openPublish()}><Upload size={16} />分享内容</button>}
         </header>
-
+        {page === 'connect' && <ConnectionView apiGet={apiGet} apiPost={apiPost} ready={Boolean(bridge)} notify={notify} onPublish={openPublish} onRefresh={async () => { const result = await apiPost<{ key: string; mobile_url: string }>('/desktop/key/regenerate'); setRuntime((current) => ({ ...current, key: result.key })); await loadBridgeState(); notify('二维码和访问密钥已刷新') }} onOpen={() => { if (bridge) void openUrl(bridge.local_url) }} />}
+        {page === 'history' && <>
         <section className="filter-bar" aria-label="历史筛选">
           <div className="search-field"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文字、文件名、路径或类型" />{query && <button onClick={() => setQuery('')} title="清除搜索"><X size={16} /></button>}</div>
           <div className="category-tabs" role="group" aria-label="内容类型">
@@ -438,15 +471,17 @@ function App() {
               <button className="icon-button row-action" title={record.type === 'text' ? '复制' : '打开所在目录'} onClick={() => void (record.type === 'text' ? activateRecord(record) : openRecordFolder(record))}>{record.type === 'text' ? <ClipboardCopy size={17} /> : <FolderOpen size={17} />}</button>
             </article>
           ))}
-          {!records.length && !loading && <div className="empty-state"><Archive size={34} /><strong>没有匹配的历史内容</strong><span>调整搜索条件，或从手机发送新的内容。</span></div>}
+          {!records.length && !loading && <div className="empty-state"><Archive size={44} strokeWidth={1} /><strong>{query || category !== 'all' ? '没有找到相关记录' : '等一条来自手机的消息'}</strong><span>发送过的文字和文件，会出现在这里。</span></div>}
           {loading && <div className="loading-state"><LoaderCircle className="spin" size={22} />正在读取历史...</div>}
         </section>
+        <p className="storage-caption">{total} 条记录 · 保存在这台 Windows 电脑</p>
+        </>}
+        {page === 'machines' && (bridge ? <MachinesDialog embedded apiGet={apiGet} apiPost={apiPost} notify={notify} onClose={() => setPage('connect')} /> : <div className="empty-state"><MonitorSmartphone size={40} /><strong>本机服务尚未就绪</strong><span>启动服务后即可添加电脑和传输文件。</span></div>)}
+        {page === 'settings' && (bridge ? <SettingsView apiGet={apiGet} apiPost={apiPost} currentVersion={bridge.version} onConnect={() => setPage('connect')} notify={notify} /> : <div className="empty-state"><Settings size={40} /><strong>本机服务尚未就绪</strong><button className="button primary" onClick={() => void toggleService()}>启动服务</button></div>)}
+        </div>
       </main>
 
-      {modal === 'qr' && bridge && <QrDialog apiGet={apiGet} apiPost={apiPost} bridge={bridge} onClose={() => setModal(null)} onRefresh={async () => { const result = await apiPost<{ key: string; mobile_url: string }>('/desktop/key/regenerate'); setRuntime((current) => ({ ...current, key: result.key })); await loadBridgeState(); notify('二维码和访问密钥已刷新') }} onOpen={() => void openUrl(bridge.local_url)} />}
-      {modal === 'publish' && <PublishDialog onClose={() => setModal(null)} onPublish={async (text, paths) => { await apiPost('/desktop/publish', { text, paths }); notify('内容已发布到手机缓冲区'); setModal(null); await loadHistory(false) }} />}
-      {modal === 'manage' && <ManageDialog apiGet={apiGet} apiPost={apiPost} currentVersion={bridge?.version || '0.12.2'} onClose={() => setModal(null)} notify={notify} />}
-      {modal === 'machines' && <MachinesDialog apiGet={apiGet} apiPost={apiPost} notify={notify} onClose={() => setModal(null)} />}
+      {modal === 'publish' && <PublishDialog fileMode={publishFiles} onClose={() => setModal(null)} onPublish={async (text, paths) => { await apiPost('/desktop/publish', { text, paths }); notify('已分享，在手机的“来自电脑”中查看'); setModal(null); await loadHistory(false) }} />}
       {availableUpdate && <UpdateDialog update={availableUpdate} installing={autoUpdating} onClose={() => { dismissedUpdateVersionRef.current = availableUpdate.version; setAvailableUpdate(null) }} onInstall={installAvailableUpdate} />}
       {notice && <div className="toast"><Check size={17} />{notice}</div>}
     </div>
@@ -462,11 +497,32 @@ function DialogFrame({ title, subtitle, onClose, children, wide = false }: { tit
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className={`dialog ${wide ? 'dialog-wide' : ''}`} role="dialog" aria-modal="true"><header><div><h2>{title}</h2><p>{subtitle}</p></div><button className="icon-button" title="关闭" onClick={onClose}><X size={19} /></button></header>{children}</section></div>
 }
 
-function QrDialog({ bridge, apiGet, apiPost, onClose, onRefresh, onOpen }: { bridge: BridgeState; apiGet: <T>(path: string, params?: Record<string, string | number>) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; onClose: () => void; onRefresh: () => Promise<void>; onOpen: () => void }) {
+function ConnectionView({ apiGet, apiPost, ready, notify, onPublish, onRefresh, onOpen }: { apiGet: <T>(path: string, params?: Record<string, string | number>) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; ready: boolean; notify: (message: string) => void; onPublish: (files?: boolean) => void; onRefresh: () => Promise<void>; onOpen: () => void }) {
   const [refreshing, setRefreshing] = useState(false)
   const [connection, setConnection] = useState<ConnectionState | null>(null)
-  const url = connection?.ready ? connection.url : ''
-  return <DialogFrame title="扫码连接手机" subtitle="选择连接方式，待就绪后使用手机扫码。" onClose={onClose} wide><ConnectionPanel apiGet={apiGet} apiPost={apiPost} onState={setConnection} /><div className="qr-layout"><div className="qr-code">{url ? <QRCodeSVG value={url} size={232} level="M" /> : <span>连接就绪后显示二维码</span>}</div><div className="qr-status"><strong>{connection?.ready ? '连接码可用' : '等待连接'}</strong><p>每台机器使用独立连接码。同一域名按设备编号连接。</p><p>当前版本 {bridge.version} · 刷新后旧连接码失效。</p></div></div><footer className="dialog-actions"><button className="button secondary" onClick={onOpen}><MonitorSmartphone size={17} />打开本机页面</button><button className="button primary" disabled={refreshing} onClick={async () => { setRefreshing(true); try { await onRefresh() } finally { setRefreshing(false) } }}><RefreshCw className={refreshing ? 'spin' : ''} size={17} />刷新二维码</button></footer></DialogFrame>
+  useEffect(() => { if (!ready) setConnection(null) }, [ready])
+  const url = ready && connection?.ready ? connection.url : ''
+  const modeTitle = connection?.modes.find(mode => mode.id === connection.mode)?.title || '连接'
+  return <>
+    <div className="connection-status-line"><span className={`status-pill ${url ? 'ready' : ''}`}><span />{url ? `${modeTitle}已就绪` : ready && connection?.enabled ? '正在准备连接' : '连接未就绪'}</span></div>
+    <section className="connection-card" aria-label="手机连接">
+      <div className="qr-layout">
+        <div className="qr-code">{url ? <QRCodeSVG value={url} size={218} level="M" /> : <div className="qr-placeholder"><MonitorSmartphone size={48} strokeWidth={1} /><span>{ready ? '开启连接后显示二维码' : '等待本机服务就绪'}</span></div>}</div>
+        <p className="qr-caption"><Wifi size={14} />{connection?.mode === 'lan' ? '同一 Wi-Fi，扫一扫' : '用手机相机扫一扫'}</p>
+        <div className="qr-actions">
+          <button className="text-button" disabled={!url} onClick={() => void navigator.clipboard.writeText(url).then(() => notify('连接已复制')).catch(() => notify('无法复制连接，请重试'))}><Link size={14} />复制连接</button>
+          <button className="text-button" disabled={!url || refreshing} onClick={async () => { setRefreshing(true); try { await onRefresh() } catch (reason) { notify(reason instanceof Error ? reason.message : '刷新连接失败') } finally { setRefreshing(false) } }}><RefreshCw className={refreshing ? 'spin' : ''} size={14} />刷新</button>
+        </div>
+      </div>
+      {ready ? <ConnectionPanel apiGet={apiGet} apiPost={apiPost} onState={setConnection} /> : <div className="connection-waiting"><MonitorSmartphone size={28} /><h3>把手机和电脑连起来</h3><p>本机服务就绪后，选择一种连接方式。</p></div>}
+    </section>
+    <div className="feature-grid">
+      <button className="feature-card" disabled={!ready} onClick={() => onPublish()}><span className="symbol-tile"><MessageSquare size={21} /></span><span><strong>发送文字</strong><small>写下内容，发送到手机</small></span><ArrowUpRight size={15} /></button>
+      <button className="feature-card" disabled={!ready} onClick={() => onPublish(true)}><span className="symbol-tile purple"><Image size={21} /></span><span><strong>照片、文件，随手传</strong><small>拖入文件，或从电脑选择</small></span><ArrowUpRight size={15} /></button>
+    </div>
+    <p className="connection-footnote"><LockKeyhole size={12} />每台机器拥有独立连接码。同一域名按设备编号连接。</p>
+    <button className="text-button local-page-link" disabled={!ready} onClick={onOpen}>打开本机页面<ArrowUpRight size={12} /></button>
+  </>
 }
 
 function UpdateDialog({ update, installing, onClose, onInstall }: { update: UpdateResult; installing: boolean; onClose: () => void; onInstall: () => Promise<void> }) {
@@ -482,25 +538,29 @@ function UpdateDialog({ update, installing, onClose, onInstall }: { update: Upda
   </DialogFrame>
 }
 
-function PublishDialog({ onClose, onPublish }: { onClose: () => void; onPublish: (text: string, paths: string[]) => Promise<void> }) {
+function PublishDialog({ fileMode, onClose, onPublish }: { fileMode: boolean; onClose: () => void; onPublish: (text: string, paths: string[]) => Promise<void> }) {
   const [text, setText] = useState('')
   const [paths, setPaths] = useState<string[]>([])
   const [publishing, setPublishing] = useState(false)
+  const [error, setError] = useState('')
   useEffect(() => {
     let unlisten: (() => void) | undefined
+    let disposed = false
     getCurrentWebviewWindow().onDragDropEvent((event) => {
       if (event.payload.type === 'drop') {
         const droppedPaths = event.payload.paths
         setPaths((current) => Array.from(new Set([...current, ...droppedPaths])))
       }
-    }).then((dispose) => { unlisten = dispose })
-    return () => unlisten?.()
+    }).then((dispose) => { if (disposed) dispose(); else unlisten = dispose }).catch(reason => {
+      if (!disposed) setError(reason instanceof Error ? reason.message : '拖放暂不可用，请点击选择文件')
+    })
+    return () => { disposed = true; unlisten?.() }
   }, [])
   const chooseFiles = async () => {
     const selected = await open({ multiple: true, directory: false })
     if (selected) setPaths((current) => Array.from(new Set([...current, ...(Array.isArray(selected) ? selected : [selected])])))
   }
-  return <DialogFrame title="发布给手机" subtitle="文字与文件可以在一次操作中同时发布。" onClose={onClose} wide><div className="publish-grid"><label className="publish-text"><span>文字内容</span><textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="输入需要在手机上复制的文字..." /></label><div className="drop-zone" onClick={() => void chooseFiles()}><Upload size={28} /><strong>拖入文件，或点击选择</strong><span>支持图片、视频、Word、PDF 和其他小文件</span></div></div>{paths.length > 0 && <div className="selected-files"><div><strong>已选择 {paths.length} 个文件</strong><button onClick={() => setPaths([])}>全部清除</button></div>{paths.map((path) => <p key={path}><File size={15} /><span>{path.split(/[\\/]/).pop()}</span><button title="移除" onClick={() => setPaths((current) => current.filter((item) => item !== path))}><X size={14} /></button></p>)}</div>}<footer className="dialog-actions"><button className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={publishing || (!text.trim() && !paths.length)} onClick={async () => { setPublishing(true); await onPublish(text, paths).finally(() => setPublishing(false)) }}>{publishing ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}发布到手机</button></footer></DialogFrame>
+  return <DialogFrame title="分享内容" subtitle="文字、照片和文件，都可以传到手机。" onClose={onClose} wide><div className="publish-grid"><label className="publish-text"><span>文字内容</span><textarea autoFocus={!fileMode} value={text} onChange={(event) => setText(event.target.value)} placeholder="写下想分享的内容…" /></label><button className="drop-zone" autoFocus={fileMode} onClick={() => void chooseFiles().catch(reason => setError(reason instanceof Error ? reason.message : '无法选择文件'))}><Upload size={28} /><strong>拖入文件，或点击选择</strong><span>支持图片、视频、Word、PDF 和其他小文件</span></button></div>{paths.length > 0 && <div className="selected-files"><div><strong>已选择 {paths.length} 个文件</strong><button onClick={() => setPaths([])}>全部清除</button></div>{paths.map((path) => <p key={path}><File size={15} /><span>{path.split(/[\\/]/).pop()}</span><button title="移除" onClick={() => setPaths((current) => current.filter((item) => item !== path))}><X size={14} /></button></p>)}</div>}{error && <p className="machine-error" role="alert">{error}</p>}<footer className="dialog-actions"><button className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={publishing || (!text.trim() && !paths.length)} onClick={async () => { setPublishing(true); setError(''); try { await onPublish(text, paths) } catch (reason) { setError(reason instanceof Error ? reason.message : '分享失败，请重试') } finally { setPublishing(false) } }}>{publishing ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}发送到手机</button></footer></DialogFrame>
 }
 
 function TunnelPanel({ apiGet, apiPost, notify }: { apiGet: <T>(path: string, params?: Record<string, string | number>) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; notify: (message: string) => void }) {
@@ -615,14 +675,14 @@ function TunnelPanel({ apiGet, apiPost, notify }: { apiGet: <T>(path: string, pa
   )
 }
 
-function ManageDialog({ apiGet, apiPost, currentVersion, onClose, notify }: { apiGet: <T>(path: string, params?: Record<string, string | number>) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; currentVersion: string; onClose: () => void; notify: (message: string) => void }) {
+function SettingsView({ apiGet, apiPost, currentVersion, onConnect, notify }: { apiGet: <T>(path: string, params?: Record<string, string | number>) => Promise<T & { ok: boolean }>; apiPost: <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>; currentVersion: string; onConnect: () => void; notify: (message: string) => void }) {
   const [config, setConfig] = useState<ConfigResponse | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [checking, setChecking] = useState(false)
   const [installing, setInstalling] = useState(false)
   const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null)
   const [toolResult, setToolResult] = useState('')
-  useEffect(() => { void apiGet<ConfigResponse>('/desktop/config').then(setConfig) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void apiGet<ConfigResponse>('/desktop/config').then(setConfig).catch(error => notify(error instanceof Error ? error.message : '读取配置失败')) }, [apiGet, notify])
   const checkUpdate = async () => {
     setChecking(true)
     try {
@@ -672,9 +732,9 @@ function ManageDialog({ apiGet, apiPost, currentVersion, onClose, notify }: { ap
       notify(message)
     }
   }
-  return <DialogFrame title="管理" subtitle="低频配置集中在这里，日常使用无需进入。" onClose={onClose} wide>
+  return <section className="settings-page">
     <div className="manage-sections">
-      <ConnectionPanel apiGet={apiGet} apiPost={apiPost} />
+      <button className="settings-link" onClick={onConnect}><span className="symbol-tile"><MonitorSmartphone size={21} /></span><span><strong>连接设备</strong><small>在连接页切换四种方式、管理连接码</small></span><ArrowUpRight size={16} /></button>
       <details><summary>已有 Cloudflare 命名隧道（高级）</summary><TunnelPanel apiGet={apiGet} apiPost={apiPost} notify={notify} /></details>
       <section>
         <h3>更新与模型</h3>
@@ -703,7 +763,8 @@ function ManageDialog({ apiGet, apiPost, currentVersion, onClose, notify }: { ap
         {toolResult && <div className="tool-result" role="status"><Check size={15} /><span>{toolResult}</span></div>}
       </section>
     </div>
-  </DialogFrame>
+    <footer className="about-caption"><img src="/app-icon.png" alt="" /><strong>声笺 {currentVersion}</strong><span>想法，自在流动。</span></footer>
+  </section>
 }
 
 export default App
