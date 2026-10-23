@@ -83,7 +83,7 @@ class HarnessEngine(CodexEngine):
         options = {'start_new_session': True} if os.name != 'nt' else {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
         final = False
         try:
-            self.process = await asyncio.create_subprocess_exec(*self.command, 'headless', '--patch', str(overlay), '--json', '-',
+            await self.spawn(*self.command, 'headless', '--patch', str(overlay), '--json', '-',
                 cwd=self.workspace, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL, limit=2*1024*1024, **options)
             self.process.stdin.write(prompt.encode())

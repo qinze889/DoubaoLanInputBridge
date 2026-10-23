@@ -25,6 +25,17 @@ class CodexEngine:
         self.reader = None
         self.write_lock = asyncio.Lock()
 
+    async def spawn(self, *command, **options):
+        # Cancellation can arrive after the OS spawned a child but before asyncio
+        # returns its handle. Always obtain that handle before acknowledging stop.
+        launch = asyncio.create_task(asyncio.create_subprocess_exec(*command, **options))
+        try:
+            self.process = await asyncio.shield(launch)
+        except asyncio.CancelledError:
+            self.process = await launch
+            await self.close()
+            raise
+
     async def write(self, message):
         async with self.write_lock:
             self.process.stdin.write((json.dumps(message, ensure_ascii=False) + '\n').encode())
@@ -96,7 +107,7 @@ class CodexEngine:
 
     async def run(self, prompt):
         options = {'start_new_session': True} if os.name != 'nt' else {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
-        self.process = await asyncio.create_subprocess_exec(
+        await self.spawn(
             *self.command, 'app-server', '--stdio', cwd=self.workspace,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, limit=2 * 1024 * 1024, **options)

@@ -48,9 +48,13 @@ class Connector:
 
     def metrics(self):
         network = psutil.net_io_counters()
+        try:
+            disk = psutil.disk_usage(str(self.workspace)).percent
+        except OSError:
+            disk = None
         return {'cpu_percent': psutil.cpu_percent(), 'memory_percent': psutil.virtual_memory().percent,
-                'disk_percent': psutil.disk_usage(str(self.workspace)).percent,
-                'network_sent': network.bytes_sent, 'network_received': network.bytes_recv,
+                'disk_percent': disk,
+                'network_sent': network.bytes_sent if network else 0, 'network_received': network.bytes_recv if network else 0,
                 'agent_status': 'running' if self.active else 'idle',
                 'screen_available': False, 'input_available': False}
 
@@ -93,10 +97,11 @@ class Connector:
 
     async def cancel(self, ident):
         task = self.active.get(ident)
-        if task:
+        if task and self.journal.task_state(ident) not in {'succeeded','failed','cancelled','unknown'}:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            await self.emit(ident, {'type':'task.state','state':'cancelled'})
+            if task.cancelled():
+                await self.emit(ident, {'type':'task.state','state':'cancelled'})
         # A completed or unknown operation is never retroactively labelled cancelled.
 
     async def session(self):

@@ -27,6 +27,10 @@ class Journal:
     def state(self, ident, state):
         self.db.execute('UPDATE tasks SET state=? WHERE id=?', (state, ident))
 
+    def task_state(self, ident):
+        row = self.db.execute('SELECT state FROM tasks WHERE id=?', (ident,)).fetchone()
+        return row[0] if row else None
+
     def event(self, ident, body):
         event_id = uuid.uuid4().hex
         self.db.execute('INSERT INTO events(id,task_id,body,created) VALUES(?,?,?,?)',

@@ -130,3 +130,35 @@ print(json.dumps({'type':'final','text':'finished'}),flush=True)
         assert events[-1]=={'type':'task.result','text':'finished'}
         assert 'fixture-secret-123' not in (tmp_path/'runtime/shengjian.patch.json').read_text()
     asyncio.run(check())
+
+
+@pytest.mark.skipif(os.name=='nt',reason='POSIX subprocess fixture')
+def test_cancellation_during_process_creation_cannot_lose_child_handle(tmp_path,monkeypatch):
+    script=tmp_path/'startup-race.py';script.write_text('import time\ntime.sleep(60)\n')
+    original=asyncio.create_subprocess_exec
+    async def delayed(*command,**kwargs):
+        await asyncio.sleep(.05)
+        return await original(*command,**kwargs)
+    monkeypatch.setattr(asyncio,'create_subprocess_exec',delayed)
+    async def check():
+        async def emit(body):pass
+        engine=CodexEngine([sys.executable,str(script)],tmp_path,emit)
+        task=asyncio.create_task(engine.run('fixture'))
+        await asyncio.sleep(.01);task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+        assert engine.process is not None and engine.process.returncode is not None
+    asyncio.run(check())
+
+
+def test_late_cancel_cannot_overwrite_completed_result_waiting_for_send(tmp_path):
+    from server.desktop_agent.__main__ import Connector
+    workspace=tmp_path/'workspace';workspace.mkdir()
+    async def check():
+        connector=Connector({'server':'https://fixture.invalid/shengjian/api/v2','token':'x'*48,'workspace':str(workspace)},tmp_path/'journal')
+        task={'task_id':'already-completed','engine':'codex','prompt':'fixture'}
+        connector.journal.claim(task);connector.journal.state(task['task_id'],'succeeded')
+        pending=asyncio.create_task(asyncio.sleep(60));connector.active[task['task_id']]=pending
+        await connector.cancel(task['task_id'])
+        assert not pending.done() and connector.journal.task_state(task['task_id'])=='succeeded'
+        pending.cancel();await asyncio.gather(pending,return_exceptions=True);connector.journal.close()
+    asyncio.run(check())
