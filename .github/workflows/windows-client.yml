@@ -10,6 +10,32 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  ui:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - run: npx playwright install chromium
+        working-directory: desktop
+      - run: npm run lint
+        working-directory: desktop
+      - run: npm run build
+        working-directory: desktop
+      - run: npm run test:ui
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Shengjian-windows-ui
+          path: build/windows-ui-check/
+          retention-days: 14
   windows:
     runs-on: windows-2025
     timeout-minutes: 30
