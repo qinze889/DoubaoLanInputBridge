@@ -20,7 +20,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: python -m pip install -r server/requirements-v2.txt -r server/requirements-agent.txt pytest aiohttp==3.14.5
       - name: Verify ownership, task recovery, approvals and usage settlement
-        run: python -m pytest tests/test_voice_agent.py tests/test_app_agent_runtime.py tests/test_cloud_login.py tests/test_core_v2.py tests/test_core_providers.py tests/test_gateway_voice.py tests/test_official_voice.py tests/test_desktop_agent.py tests/test_stream_voice.py tests/test_gateway_stream_adapter.py -q
+        run: python -m pytest tests/test_harness_chat.py tests/test_visual_chat.py tests/test_voice_agent.py tests/test_app_agent_runtime.py tests/test_cloud_login.py tests/test_core_v2.py tests/test_core_providers.py tests/test_gateway_voice.py tests/test_official_voice.py tests/test_desktop_agent.py tests/test_stream_voice.py tests/test_gateway_stream_adapter.py -q
       - name: Install audio decoder
         run: sudo apt-get install -y ffmpeg
       - name: Verify decoder latency without truncating audio
@@ -33,6 +33,7 @@ jobs:
         run: |
           node scripts/smoke_core_ui.cjs
           node scripts/smoke_stream_voice.cjs
+          node scripts/smoke_harness_chat.cjs
           node scripts/test_voice_dsp.cjs
       - uses: actions/upload-artifact@v4
         with:

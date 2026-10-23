@@ -54,7 +54,27 @@ async def agent_online(ident: str):
     class FixturePeer:
         async def close(self, **kwargs): pass
     app.state.peers[ident] = FixturePeer()
+    if os.getenv('SHENGJIAN_FIXTURE_HARNESS'):
+        app.state.store.heartbeat(ident,{'harness_chat':True})
+        asyncio.create_task(harness_fixture(ident))
     return {'ok': True}
+
+async def harness_fixture(device_id):
+    store=app.state.store
+    while device_id in app.state.peers:
+        t=store.dispatch(device_id)
+        if not t:
+            await asyncio.sleep(.05);continue
+        spec=json.loads(t['specification']);ident=t['id']
+        if not spec.get('assistant_chat'):raise RuntimeError('Expected unified Harness Chat')
+        store.device_event(device_id,ident,{'type':'task.state','state':'running'},'running')
+        first='图中有绿色方块。' if spec['life_images'] else '这是第一句实时回答。'
+        second='可以继续问这张图。' if spec['life_images'] else '这是稍后才生成的第二句。'
+        store.device_event(device_id,ident,{'type':'task.delta','text':first},'delta-1')
+        await asyncio.sleep(1)
+        store.device_event(device_id,ident,{'type':'task.delta','text':second},'delta-2')
+        store.device_event(device_id,ident,{'type':'task.result','text':first+second},'result')
+        store.device_event(device_id,ident,{'type':'task.state','state':'succeeded'},'done')
 
 app.state.store.register('browser-test','browser-password-123',app.state.store.invite(1000 if os.getenv('SHENGJIAN_FIXTURE_VISUAL') else 100))
 app.state.store.register('browser-second','browser-password-456',app.state.store.invite(1000 if os.getenv('SHENGJIAN_FIXTURE_VISUAL') else 100))

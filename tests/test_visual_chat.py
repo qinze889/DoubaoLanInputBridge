@@ -65,3 +65,30 @@ def test_only_current_user_message_can_bind_image_and_unverified_model_is_refuse
     assert question(c,one,[image['id']],messages=[{'role':'assistant','content':'bad'}]).status_code==400
     app.state.life.store.preferences(one['user_id'],{'vision_model':'not-verified'})
     assert question(c,one,[image['id']]).status_code==409 and not calls
+
+
+def test_chat_device_can_only_see_exact_attached_images_on_running_owned_turn(visual):
+    app,c,one,two,image,calls=visual
+    store=app.state.store
+    device=store.enroll(one['user_id'],'chat desktop',['tasks'])
+    store.authorize_device(one['user_id'],device['id'],['tasks'])
+    other=store.enroll(one['user_id'],'other desktop',['tasks'])
+    store.authorize_device(one['user_id'],other['id'],['tasks'])
+    store.heartbeat(device['id'],{'harness_chat':True});app.state.peers[device['id']]=object()
+    import secrets
+    payload={'text':'看图并保存结果','request_id':secrets.token_hex(16),'conversation_id':secrets.token_hex(16),'life_images':[image['id']]}
+    r=c.post(PREFIX+'/assistant/chat',headers={'Authorization':'Bearer '+one['token']},json=payload)
+    assert r.status_code==200,r.text
+    task=r.json()['task'];ident=task['id']
+    assert question(c,device,[image['id']],vision_task=ident).status_code==403
+    store.dispatch(device['id']);store.device_event(device['id'],ident,{'type':'task.state','state':'running'},'start')
+    assert question(c,other,[image['id']],vision_task=ident).status_code==403
+    # The model choice freezes with this turn; a setting change does not reroute it.
+    app.state.life.store.preferences(one['user_id'],{'vision_model':'alternative'})
+    r=question(c,device,[image['id']],vision_task=ident)
+    assert r.status_code==200 and r.headers['x-vision-model']=='vision'
+    assert 'vision_task' not in calls[-1] and 'life_images' not in calls[-1]
+    assert question(c,device,['a'*32],vision_task=ident).status_code==403
+    store.cancel(one['user_id'],ident)
+    assert question(c,device,[image['id']],vision_task=ident).status_code==403
+    app.state.peers.clear()

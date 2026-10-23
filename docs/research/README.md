@@ -38,3 +38,5 @@
 - [WorkBuddy 识图模型双图验证与可选列表](VISION-MODEL-VALIDATION.md) · [脱敏结果](VISION-MODEL-VALIDATION.json)
 
 - [豆包实时视觉对话：安装包证据、公开机制与边界](DOUBAO-LIVE-VISION.md) · [WorkBuddy 图片流式验证](VISION-STREAM-VALIDATION.json)
+
+- [统一本机 Harness Chat / Work](../HARNESS-CHAT.md)与[真实识图执行验收](HARNESS-CHAT-VALIDATION.json)：豆包仅提供 ASR/TTS，DeepSeek 持久化会话负责对话和工作，视觉模型作为本轮附件工具。原账号更新后钥匙串确认仍待用户处理；隔离账号真实电脑执行及390项回归通过。

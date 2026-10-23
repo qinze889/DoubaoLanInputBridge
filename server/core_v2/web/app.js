@@ -17,6 +17,7 @@ let token = sessionStorage.getItem("shengjian.session") || "",
   voiceController = null;
 let authEpoch = 0;
 let agentMode = false, computerDevices = [];
+let chatOwner="", harnessInterrupted=false;
 let reportEpoch = 0, agentAckPending = false, reportSpeaking = false;
 const labels = {
   queued: "排队中",
@@ -49,6 +50,9 @@ const errors = {
   tts_login_required: "豆包登录态已失效，需要在服务器更新登录。",
   audio_rejected: "语音请求被拒绝，请稍后重试。",
   audio_result_unknown: "语音来源未确认结果，额度暂时预留，请勿反复重试。",
+  select_computer_for_chat: "请先启用电脑 Agent；有多台电脑时请在发送目标中选择一台。",
+  chat_computer_offline: "会话绑定的电脑离线，请打开声笺并启用 Agent。",
+  chat_agent_update_required: "电脑 Agent 需要更新后才能接收统一 Chat 对话。",
   model_result_unknown: "模型未确认结果，请查看任务状态后再操作。",
   model_provider_not_configured: "对话来源尚未配置。",
   model_discovery_failed: "暂时无法连接对话来源。",
@@ -102,6 +106,7 @@ function showPage(id) {
   if (id === "life") window.ShengjianLife?.refresh();
 }
 function logoutLocal() {
+  replyController?.abort();replyController=null;
   window.ShengjianVisual?.deactivate();
   window.ShengjianLife?.deactivate();
   reportEpoch++;
@@ -121,6 +126,7 @@ function logoutLocal() {
   token = "";
   agentMode = false;
   computerDevices = [];
+  chatOwner="";harnessInterrupted=false;
   $("agent-mode").setAttribute("aria-pressed", "false");
   sessionStorage.removeItem("shengjian.session");
   if (stream) stream.close();
@@ -191,9 +197,10 @@ async function refresh() {
   $("balance").textContent = `可用 ${me.balance} 积分 · 预留 ${me.reserved}`;
   window.ShengjianVisual?.activate(me.user_id, {json, fetchImage:id=>api('/life/images/'+id)});
   window.ShengjianLife?.activate(me.user_id, { json, image: (blob, id) => api('/life/images', blob, 'POST', {raw: true, requestId: id}), fetchImage: id => api('/life/images/'+id) });
+  chatOwner=me.user_id;
   computerDevices = devices.devices.filter(d => !d.revoked && d.grants.includes("tasks"));
   const selected = $("destination").value;
-  $("destination").replaceChildren(new Option("语音对话", "chat"));
+  $("destination").replaceChildren(new Option("Chat · 本机 DeepSeek Harness", "chat"));
   $("device-list").replaceChildren();
   devices.devices
     .filter((d) => !d.revoked)
@@ -432,15 +439,7 @@ function agentReport(text) {
   play();
 }
 $("agent-mode").onclick = () => {
-  if (live) stopLive();
-  agentMode = !agentMode;
-  if (agentMode) {
-    const selected = computerDevices.find(d => d.id === $("destination").value) || computerDevices.find(d => d.online);
-    if (selected) $("destination").value = selected.id;
-    else notice("请在电脑声笺的“电脑 Agent”页启用 DeepSeek Harness，再回来刷新。");
-  } else $("destination").value = "chat";
-  $("agent-mode").setAttribute("aria-pressed", String(agentMode));
-  $("voice-note").textContent = agentMode ? "直接说出电脑任务；可说“汇报进度”“取消当前任务”“查看电脑状态”。停止播报不会取消任务。" : "开启实时对话即可连续交谈，随时开口打断。也可说“让电脑帮我…”派任务。";
+  notice("当前 Chat 已直接连接本机 DeepSeek Harness，聊天、看图和执行工作使用同一会话。停止播报不会取消已运行的工作。");
 };
 $("compose").onsubmit = (e) => {
   e.preventDefault();
@@ -456,6 +455,7 @@ async function submitPrompt(prompt) {
     $("prompt").value = "";
     return;
   }
+  replyController?.abort();
   const owner = token,
     operation = ++composeEpoch;
   busy = true;
@@ -465,6 +465,13 @@ async function submitPrompt(prompt) {
   stopSpeech();
   try {
     const selected = $("destination").value;
+    if ($("engine").value === "harness" || selected === "chat") {
+      const visual=await window.ShengjianVisual?.snapshot(prompt) || {images:[]};
+      if(owner!==token || operation!==composeEpoch)return;
+      message("user",prompt,visual.images);
+      await streamHarness(prompt,visual.images,owner,operation,selected);
+      return;
+    }
     if ((live || agentMode || selected === "chat") && ShengjianAgent.shouldRoute(prompt, agentMode || selected !== "chat", window.ShengjianVisual?.hasContext() && !/任务|电脑|agent|harness/i.test(prompt) ? null : currentTask)) {
       message("user", prompt);
       const data = await json("/assistant/turn", { text: prompt, request_id: crypto.randomUUID(), device_id: selected === "chat" ? null : selected, task_id: currentTask || null, engine: $("engine").value });
@@ -494,51 +501,10 @@ async function submitPrompt(prompt) {
       $("prompt").value = "";
       await openTask(d.task.id);
       if (owner === token && operation === composeEpoch) await refresh();
-    } else {
-      const visual=await window.ShengjianVisual?.snapshot(prompt) || {images:[]};
-      if(owner!==token || operation!==composeEpoch)return;
-      message("user", prompt,visual.images);
-      const models = live?.models || (await json("/models")),
-        model = models.data.find((m) => m.input_modalities.includes("text"));
-      if (owner !== token || operation !== composeEpoch) return;
-      if (!model) throw new Error("尚未配置对话模型");
-      const history = [...messages, { role: "user", content: prompt }].slice(
-        -20,
-      );
-      if (live?.capabilities?.streaming_audio) {
-        await streamChat(history, model.id, owner, operation, visual.images);
-        return;
-      }
-      const r = await api("/model/v1/chat/completions", {
-        model: model.id,
-        ...(visual.images.length?{life_images:visual.images}:{}),
-        messages:
-          live && $("destination").value === "chat"
-            ? [
-                {
-                  role: "system",
-                  content:
-                    "你正在进行中文实时语音对话。回答自然、简短，通常两三句话；除非用户要求详细解释，不要列长清单。",
-                },
-                ...history,
-              ]
-            : history,
-        max_tokens: live ? 512 : 2048,
-        stream: false,
-      });
-      const d = await r.json();
-      if (owner !== token || operation !== composeEpoch) return;
-      if (d.error) throw new Error("模型响应未完成");
-      const text = d.choices?.[0]?.message?.content;
-      if (typeof text !== "string") throw new Error("没有收到文字回复");
-      messages = [...history, { role: "assistant", content: text }];
-      message("assistant", text,visual.images);
-      if (owner !== token || operation !== composeEpoch) return;
-      $("prompt").value = "";
-      if ($("speak").checked) await speak(text);
     }
     if (owner === token && operation === composeEpoch) await refresh();
   } catch (e) {
+    if(e.name==="AbortError")return;
     if (owner === token && operation === composeEpoch) {
       if (live) stopLive("对话请求未完成，请确认后重新开启");
       error(e);
@@ -732,85 +698,71 @@ async function speakStreaming(text) {
   speech.push(text);
   await speech.done();
 }
-async function streamChat(history, model, owner, operation, images=[]) {
-  const controller = new AbortController();
-  replyController = controller;
-  const session = live;
-  session.replyStart = performance.now();
-  const turn = {
-    history,
-    images,
-    text: "",
-    voiced: $("speak").checked,
-    complete: false,
-    speechEnd: session.utterance?.speechEnd,
-  };
-  session.replyTurn = turn;
-  const speech = turn.voiced ? speechPipeline(turn) : null;
-  const node = el("div", "", "message assistant");
-  $("messages").append(node);
-  turn.node = node;
-  let text = "",
-    complete = false;
-  messages = history;
-  try {
-    const response = await api(
-      "/model/v1/chat/completions",
-      {
-        model,
-        ...(images.length?{life_images:images}:{}),
-        messages: [
-          {
-            role: "system",
-            content:
-              "你正在进行中文实时语音对话。回答自然简短，通常两三句话，先直接回答。避免 Markdown 和长列表。",
-          },
-          ...history,
-        ],
-        max_tokens: 512,
-        reasoning_effort: session.capabilities.reasoning_effort || undefined,
-        stream: true,
-      },
-      "POST",
-      { signal: controller.signal },
-    );
-    await readEvents(
-      response,
-      "sse",
-      (event) => {
-        if (owner !== token || operation !== composeEpoch) return;
-        if (event.error) throw new Error("model_result_unknown");
-        if (event.done) {
-          complete = true;
-          return;
-        }
-        const delta = event.choices?.[0]?.delta?.content;
-        if (typeof delta !== "string" || !delta) return;
-        if (!text)
-          session.metrics = {
-            ...session.metrics,
-            first_token_ms: Math.round(performance.now() - session.replyStart),
-          };
-        text += delta;
-        turn.text = text;
-        node.textContent = text;
-        messages = [...history, { role: "assistant", content: text }];
-        $("messages").scrollTop = $("messages").scrollHeight;
-        speech?.push(delta);
-      },
-      controller.signal,
-    );
-    if (owner !== token || operation !== composeEpoch) return;
-    if (!complete || !text) throw new Error("model_result_unknown");
-    window.ShengjianLife?.capture('assistant', text,images);
-    turn.lifeRecorded = true;
-    $("prompt").value = "";
-    await speech?.done();
-    turn.complete = true;
-    if (owner === token && operation === composeEpoch) await refresh();
-  } finally {
-    if (replyController === controller) replyController = null;
+async function streamHarness(prompt,images,owner,operation,selected) {
+  const terminal=new Set(["succeeded","failed","cancelled","unknown"]);
+  const key="shengjian.chat."+chatOwner+"."+selected;
+  let conversation=sessionStorage.getItem(key);
+  if(!conversation){conversation=crypto.randomUUID().replaceAll("-","");sessionStorage.setItem(key,conversation);}
+  const interrupted=harnessInterrupted;harnessInterrupted=false;
+  const data=await json("/assistant/chat",{text:prompt,request_id:crypto.randomUUID(),conversation_id:conversation,
+    device_id:selected==="chat"?null:selected,task_id:currentTask||null,life_images:images,interrupted});
+  if(owner!==token || operation!==composeEpoch)return;
+  $("prompt").value="";
+  if(data.action!=="chat") {
+    message("assistant",data.reply);
+    if($("speak").checked)await speak(data.reply);
+    return;
   }
+  const id=data.task.id;
+  currentTask=id;
+  $("messages").append(button("查看本轮工作与确认",()=>openTask(id)));
+  const controller=new AbortController();replyController=controller;
+  const session=live;
+  if(session)session.replyStart=performance.now();
+  const turn={history:[...messages,{role:"user",content:prompt}],images,text:"",voiced:$("speak").checked,complete:false,speechEnd:session?.utterance?.speechEnd,harness:true};
+  if(session)session.replyTurn=turn;
+  const speech=session && turn.voiced?speechPipeline(turn):null;
+  const node=el("div","正在连接本机 DeepSeek Harness…","message assistant");turn.node=node;$("messages").append(node);
+  let cursor=0, socket, result="", settled=false, approvalSeen=new Set();
+  try {
+    await new Promise((resolve,reject)=>{
+      const finish=(failure)=>{if(settled)return;settled=true;socket?.close();controller.signal.removeEventListener("abort",abort);failure?reject(failure):resolve();};
+      const abort=()=>{harnessInterrupted=true;finish(new DOMException("Interrupted","AbortError"));};
+      controller.signal.addEventListener("abort",abort,{once:true});
+      function connect(){
+        if(settled || controller.signal.aborted)return;
+        socket=new WebSocket(location.origin.replace(/^http/,"ws")+base+"/tasks/"+id+"/stream");
+        socket.onopen=()=>{if(settled){socket.close();return;}socket.send(JSON.stringify({token:owner,after:cursor}));};
+        socket.onmessage=e=>{
+          if(settled || owner!==token || operation!==composeEpoch)return;
+          const item=JSON.parse(e.data);if(!item.seq||item.seq<=cursor)return;cursor=item.seq;
+          if(item.type==="task.delta"){
+            if(!turn.text && session)session.metrics={...session.metrics,first_token_ms:Math.round(performance.now()-session.replyStart)};
+            turn.text+=item.text||"";node.textContent=turn.text;speech?.push(item.text||"");
+          } else if(item.type==="task.result")result=item.text||"";
+          else if(item.type==="task.approval" && !approvalSeen.has(item.approval_id)){
+            approvalSeen.add(item.approval_id);notice("电脑需要确认，请打开本轮工作卡片；也可说允许本次操作或拒绝本次操作。");
+            // Keep listening while the owned work waits; a new spoken control goes through the same task API.
+            busy=false;$("compose").querySelector("[type=submit]").disabled=false;
+          } else if(item.type==="task.state" && terminal.has(item.state)) {
+            if(item.state!=="succeeded")return finish(new Error("本轮"+(labels[item.state]||item.state)+"，请查看工作记录；不会自动重试操作。"));
+            if(!turn.text){turn.text=result;node.textContent=result;speech?.push(result);}
+            finish();
+          }
+          $("messages").scrollTop=$("messages").scrollHeight;
+        };
+        socket.onclose=()=>{if(!settled)setTimeout(connect,1000);};
+      }
+      connect();
+    });
+    if(owner!==token || operation!==composeEpoch)return;
+    if(!turn.text)throw new Error("本机未返回对话结果，请查看工作记录。");
+    messages=[...turn.history,{role:"assistant",content:result||turn.text}].slice(-20);
+    window.ShengjianLife?.capture("assistant",result||turn.text,images);turn.lifeRecorded=true;
+    if(speech)await speech.done();else if(turn.voiced)await speak(result||turn.text);
+    turn.complete=true;
+    await refresh();
+  } finally {socket?.close();if(replyController===controller)replyController=null;}
 }
 function stopAgentSpeech() { reportEpoch++; stopSpeech(); }
 $("stop-speech").onclick = stopAgentSpeech;
@@ -924,6 +876,7 @@ function interruptReply(session = live) {
   const turn = session?.replyTurn;
   if (turn && !turn.complete && !turn.interrupted) {
     turn.interrupted = true;
+    if(turn.harness)harnessInterrupted=true;
     const heard = turn.voiced ? turn.player?.heard() || "" : turn.text;
     if (!turn.lifeRecorded && heard) { window.ShengjianLife?.capture('assistant', heard+'（已打断）',turn.images || []); turn.lifeRecorded = true; }
     messages = [
@@ -941,7 +894,7 @@ function interruptReply(session = live) {
   replyController = null;
   stopSpeech();
   // Discard late model/TTS results; never replay or cancel a computer task here.
-  if ($("destination").value === "chat") {
+  if ($("destination").value === "chat" || turn?.harness) {
     composeEpoch++;
     busy = false;
     $("compose").querySelector("[type=submit]").disabled = false;
@@ -965,7 +918,7 @@ function stopLive(reason = "实时对话已结束") {
     session.context?.close().catch(() => {});
     stopSpeech();
     // Ignore results from a conversation that the user ended.
-    if (session.owner === token && session.destination === "chat")
+    if (session.owner === token && (session.destination === "chat" || session.replyTurn?.harness))
       interruptReply(session);
   }
   $("realtime").textContent = "开始实时对话";

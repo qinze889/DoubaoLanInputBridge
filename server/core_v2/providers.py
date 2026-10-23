@@ -132,16 +132,26 @@ class Providers:
                 data=await request.json()
             except ValueError:
                 raise Fault('invalid_json') from None
-            if not isinstance(data,dict) or set(data)-{'model','messages','max_tokens','max_completion_tokens','temperature','stream','stream_options','tools','tool_choice','parallel_tool_calls','reasoning_effort','life_images'}:
+            if not isinstance(data,dict) or set(data)-{'model','messages','max_tokens','max_completion_tokens','temperature','stream','stream_options','tools','tool_choice','parallel_tool_calls','reasoning_effort','life_images','vision_task'}:
                 raise Fault('unsupported_model_request')
             image_ids=data.pop('life_images',[])
+            vision_task=data.pop('vision_task',None)
+            if vision_task is not None and (not isinstance(vision_task,str) or len(vision_task)!=32 or not image_ids):raise Fault('invalid_vision_task')
             if not isinstance(image_ids,list) or len(image_ids)>2 or any(not isinstance(i,str) or len(i)!=32 for i in image_ids):raise Fault('invalid_life_images')
             models=await self.models()
             if image_ids:
-                # Task-scoped device credentials do not grant access to private life photos.
-                if user(request.headers.get('authorization'))!=uid:raise Fault('unauthorized',403)
                 life=app.state.life
-                selected=life.vision_choice(uid)
+                if vision_task:
+                    identity=store.authenticate(request.headers.get('authorization','')[7:],device=True)
+                    task=store.task(uid,vision_task)
+                    spec=json.loads(task['specification'])
+                    if identity['id']!=task['device_id'] or task['state']!='running' or task['cancel_requested'] or not spec.get('assistant_chat') or image_ids!=spec.get('life_images'):
+                        raise Fault('vision_task_not_authorized',403)
+                    selected=spec.get('vision_model')
+                else:
+                    # Generic task tokens cannot browse an account's life photos.
+                    if user(request.headers.get('authorization'))!=uid:raise Fault('unauthorized',403)
+                    selected=life.vision_choice(uid)
                 if not selected or selected not in self.discovered_ids:raise Fault('vision_model_not_available',503)
                 data['model']=selected
                 if selected!=self.config.text_model:data.pop('reasoning_effort',None)

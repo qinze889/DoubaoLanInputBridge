@@ -121,6 +121,8 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
         }
       });
     });
+    // UI-only plain response stub; real unified task/session protocol is covered by smoke_harness_chat.
+    await page.route('**/shengjian/api/v2/assistant/chat', route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,action:'status',reply:'已收到你的消息。'})}));
     await page.goto(origin + "/shengjian/api/v2/console");
     await page.getByLabel("用户名", { exact: true }).fill("browser-test");
     await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
@@ -347,6 +349,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     await page
       .locator("#destination")
       .selectOption({ label: "测试电脑 · 离线" });
+    await page.locator("#engine").selectOption("codex");
     await page.locator("#prompt").fill("整理测试资料");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await page
@@ -442,7 +445,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       navigator.mediaDevices.getUserMedia = window.agentGetUserMedia;
       window.Audio = window.agentAudio;
     });
-    await page.getByRole('button', { name: '电脑 Agent · DeepSeek Harness', exact: true }).click();
+    await page.getByRole('button', { name: 'Chat / Work · DeepSeek Harness', exact: true }).click();
     await page.getByRole('button', { name: '开始实时对话', exact: true }).click();
     await page.waitForFunction(() => live?.processor);
     async function sayAgent(text) {
@@ -469,7 +472,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     await sayAgent('取消当前任务');
     assert.equal(await page.evaluate(async () => (await json('/tasks/' + currentTask)).task.state), 'cancelled');
     await page.evaluate(() => stopLive());
-    await page.getByRole('button', { name: '电脑 Agent · DeepSeek Harness', exact: true }).click();
+    await page.getByRole('button', { name: 'Chat / Work · DeepSeek Harness', exact: true }).click();
     voiceText = null;
     await page.evaluate(() => { window.AudioContext = window.savedAudioContext; navigator.mediaDevices.getUserMedia = window.savedGetUserMedia; window.Audio = window.originalAudio; });
     // A response begun under the old account must never appear after logout.
@@ -477,7 +480,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     const replyGate = new Promise((resolve) => (releaseReply = resolve));
     const requestStarted = new Promise((resolve) => (markStarted = resolve));
     await page.route(
-      "**/shengjian/api/v2/model/v1/chat/completions",
+      "**/shengjian/api/v2/assistant/chat",
       async (route) => {
         markStarted();
         await replyGate;
@@ -485,7 +488,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
-            choices: [{ message: { content: "private-old-reply" } }],
+            action: "status", reply: "private-old-reply",
           }),
         });
       },

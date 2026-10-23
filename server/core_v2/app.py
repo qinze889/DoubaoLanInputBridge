@@ -71,7 +71,7 @@ class Task(Input):
 
 
 class DeviceEvent(Input):
-    type: Literal['task.state', 'task.log', 'task.result', 'task.approval']
+    type: Literal['task.state', 'task.log', 'task.result', 'task.approval', 'task.delta']
     state: Literal['running', 'awaiting_user', 'succeeded', 'failed', 'cancelled', 'unknown'] | None = None
     text: str | None = Field(default=None, max_length=24000)
     approval_id: str | None = Field(default=None, max_length=128)
@@ -318,7 +318,7 @@ def create_app(directory, admin_token=None, providers=None):
                     await ws.send_json(event)
                     cursor = event['seq']
                 await ws.send_json({'type': 'heartbeat', 'after': cursor})
-                await asyncio.sleep(1)
+                await asyncio.sleep(.1)
         except (Fault, ValueError, KeyError, WebSocketDisconnect, asyncio.TimeoutError):
             await ws.close(code=1008)
 
@@ -365,6 +365,8 @@ def create_app(directory, admin_token=None, providers=None):
                     metrics = {k: v for k, v in data.get('metrics', {}).items() if k in {'cpu_percent','memory_percent','disk_percent','network_sent','network_received','agent_status','screen_available','input_available'}}
                     if 'metrics' not in json.loads(principal['grants']):
                         metrics = {}
+                    if 'tasks' in json.loads(principal['grants']) and data.get('metrics',{}).get('harness_chat') is True:
+                        metrics['harness_chat']=True
                     if len(json.dumps(metrics)) > 4096:
                         raise Fault('metrics_too_large')
                     store.heartbeat(ident, metrics)

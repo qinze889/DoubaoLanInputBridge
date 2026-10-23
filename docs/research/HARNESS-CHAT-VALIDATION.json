@@ -1,0 +1,36 @@
+{
+  "engine": "DeepSeek Harness",
+  "mode": "isolated account, real Mac connector and cloud models",
+  "turns": [
+    {
+      "first_text_seconds": 4.18,
+      "deltas": 23,
+      "elapsed_seconds": 4.44
+    },
+    {
+      "first_text_seconds": 12.29,
+      "deltas": 46,
+      "elapsed_seconds": 12.55
+    },
+    {
+      "first_text_seconds": 4.98,
+      "deltas": 41,
+      "elapsed_seconds": 5.51
+    }
+  ],
+  "ok": true,
+  "same_session_recalled_code": true,
+  "photo_tool_called": true,
+  "image_to_actual_local_file": true,
+  "followup_read_and_recall": true,
+  "file": "isolated-test-workspace/picture-result.txt",
+  "user_account_keychain_confirmation": "pending, isolated account passed independently",
+  "file_sha256": "e7d57c59505c96b5d616fd40de7e703ba4807a9ba8764d2e3c0bffcc8c3824fd",
+  "full_regression_passed": 390,
+  "browser_suites": [
+    "core console, QR and ownership",
+    "streaming ASR/TTS, barge-in and AudioWorklet",
+    "unified Harness Chat, photo and camera"
+  ],
+  "cloud_release": "20261023-1840fe1e20ca"
+}

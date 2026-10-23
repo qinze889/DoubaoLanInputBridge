@@ -43,7 +43,7 @@ const {
     process.env.SHENGJIAN_TEST_PYTHON || path.resolve(".venv/bin/python"),
     ["tests/fixtures/core_ui_server.py", directory, String(port)],
     {
-      env: { ...process.env, SHENGJIAN_FIXTURE_STREAM: "1" },
+      env: { ...process.env, SHENGJIAN_FIXTURE_STREAM: "1", SHENGJIAN_FIXTURE_HARNESS: "1" },
       stdio: ["ignore", "ignore", "pipe"],
     },
   );
@@ -114,6 +114,7 @@ const {
     await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.locator("#workspace").waitFor({ state: "visible" });
+    await page.evaluate(async()=>{const d=await json('/devices',{name:'Fixture Harness',capabilities:['tasks']});await json('/devices/'+d.id,{grants:['tasks']},'PATCH');await fetch('/__test/agent-online/'+d.id,{method:'POST'});await refresh();});
     await page.evaluate(() => {
       window.grants = 0;
       window.audioStarts = 0;
@@ -220,7 +221,7 @@ const {
     await page.waitForTimeout(50);
     assert(
       await page.evaluate(() => oldTurn.signal.aborted),
-      "barge-in aborts model generation",
+      "barge-in detaches reply without cancelling background work",
     );
     assert(
       await page.evaluate(() => oldPlayer.stopped),

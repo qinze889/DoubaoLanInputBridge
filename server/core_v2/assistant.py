@@ -35,6 +35,55 @@ def mount(app, store, user, peers):
         engine: str = Field(default='harness', pattern=r'^(harness|codex)$')
         expires_in: int | None = Field(default=None, ge=5, le=60)
 
+    class Chat(Input):
+        text: str = Field(min_length=1, max_length=16000)
+        request_id: str = Field(min_length=16, max_length=128)
+        conversation_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+        device_id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
+        task_id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
+        life_images: list[str] = Field(default_factory=list, max_length=2)
+        interrupted: bool = False
+
+    @app.post(PREFIX+'/assistant/chat')
+    async def chat(body: Chat, uid=Depends(user)):
+        if intent(body.text) != 'task':
+            return await turn(Turn(text=body.text, request_id=body.request_id, device_id=body.device_id,
+                                   task_id=body.task_id), uid)
+        old = store.task_by_request(uid, body.request_id)
+        if old:
+            spec = json.loads(old['specification'])
+            if any(spec.get(k) != v for k,v in {
+                'voice_text': body.text, 'conversation_id': body.conversation_id,
+                'life_images': body.life_images, 'interrupted': body.interrupted}.items()) or (body.device_id and body.device_id != old['device_id']):
+                raise Fault('idempotency_conflict', 409)
+            return {'ok': True, 'action': 'chat', 'task': old, 'conversation_id': body.conversation_id}
+        with store.lock:
+            known = store.db.execute('SELECT * FROM assistant_conversations WHERE id=?', (body.conversation_id,)).fetchone()
+        if known:
+            binding = store.conversation(uid, body.conversation_id, body.device_id)
+            ident = binding['device_id']
+        else:
+            choices = [d for d in store.devices(uid) if not d['revoked'] and 'tasks' in d['grants'] and d['id'] in peers]
+            ident = body.device_id or (choices[0]['id'] if len(choices)==1 else None)
+            if not ident: raise Fault('select_computer_for_chat', 409)
+        device = store.device(uid, ident)
+        if device['revoked'] or 'tasks' not in device['grants']: raise Fault('capability_not_granted', 403)
+        if ident not in peers: raise Fault('chat_computer_offline', 409)
+        if not device['metrics'].get('harness_chat'): raise Fault('chat_agent_update_required', 409)
+        life = app.state.life
+        for image in body.life_images:
+            if not re.fullmatch(r'[a-f0-9]{32}', image): raise Fault('invalid_life_images')
+            life.store.image(uid, image)
+        model = life.vision_choice(uid) if body.life_images else None
+        if body.life_images and not model: raise Fault('vision_model_not_available', 503)
+        store.conversation(uid, body.conversation_id, ident)
+        spec = {'device_id': ident, 'request_id': body.request_id, 'prompt': body.text,
+                'voice_text': body.text, 'engine': 'harness', 'conversation_id': body.conversation_id,
+                'assistant_chat': True, 'life_images': body.life_images, 'vision_model': model,
+                'interrupted': body.interrupted}
+        created = store.create_task(uid, spec)
+        return {'ok': True, 'action': 'chat', 'task': created, 'conversation_id': body.conversation_id}
+
     @app.post(PREFIX+'/assistant/turn')
     async def turn(body: Turn, uid=Depends(user)):
         action = intent(body.text)

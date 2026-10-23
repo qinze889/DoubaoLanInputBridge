@@ -63,6 +63,8 @@ class Store:
           dispatched REAL, cancel_requested INTEGER NOT NULL DEFAULT 0, UNIQUE(user_id,request_id));
         CREATE TABLE IF NOT EXISTS events(task_id TEXT NOT NULL REFERENCES tasks(id), seq INTEGER NOT NULL, event_id TEXT NOT NULL,
           body TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(task_id,seq), UNIQUE(task_id,event_id));
+        CREATE TABLE IF NOT EXISTS assistant_conversations(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+          device_id TEXT NOT NULL REFERENCES devices(id), created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS usage(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), amount INTEGER NOT NULL,
           actual INTEGER, state TEXT NOT NULL, fingerprint TEXT NOT NULL, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS grants(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), amount INTEGER NOT NULL);
@@ -277,6 +279,18 @@ class Store:
         sequence = db.execute('SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE task_id=?', (task_id,)).fetchone()[0]
         db.execute('INSERT INTO events VALUES(?,?,?,?,?)', (task_id, sequence, event_id or secrets.token_hex(16), encode(body), time.time()))
         return sequence
+
+    def conversation(self, uid, ident, device_id=None):
+        with self.tx() as db:
+            row = db.execute('SELECT * FROM assistant_conversations WHERE id=?', (ident,)).fetchone()
+            if row:
+                if row['user_id'] != uid: raise Fault('conversation_not_found', 404)
+                if device_id and row['device_id'] != device_id: raise Fault('conversation_device_mismatch', 409)
+                return dict(row)
+            if not device_id: raise Fault('conversation_not_found', 404)
+            self.device(uid, device_id)
+            db.execute('INSERT INTO assistant_conversations VALUES(?,?,?,?)', (ident, uid, device_id, time.time()))
+            return {'id': ident, 'user_id': uid, 'device_id': device_id}
 
     def create_task(self, uid, specification):
         with self.tx() as db:
