@@ -216,6 +216,7 @@ small {
   display: none !important;
 }
 @media (max-width: 700px) {
+  nav button { flex: 1; min-width: 0; padding: 10px 5px; white-space: nowrap; }
   header {
     height: 76px;
     padding: 0 20px;
