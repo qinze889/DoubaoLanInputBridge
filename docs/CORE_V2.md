@@ -6,7 +6,7 @@
 
 - Windows 的 Mac 风格 UI 与交互 CI 已合入 PR #6；Mac 分享修复已合入 PR #5。稳定版发布仍等待实际 Windows 安装、升级、托盘及设备互传验收。
 - 邀请码注册、Argon2id 密码登录、会话退出、设备登记与撤销、按设备授权、任务与递增事件、一次性审批、积分预留及结算。
-- 手机网页登录、文字对话、录音识别、语音回复、停止播报、电脑派任务、进度和取消。当前录音采用“说完一句后识别”；不会声称已有流式 ASR 中间结果或已通过连续 30 分钟验收。
+- 手机网页登录、文字对话、录音识别、语音回复、停止播报、电脑派任务、进度和取消。长回复按最多 1000 字分段播报，完成的电脑任务可语音汇报；停止播报会阻止后续合成请求，不会取消任务。当前录音采用“说完一句后识别”；不会声称已有流式 ASR 中间结果或已通过连续 30 分钟验收。
 - 服务器实际发现 `workbuddy/cn:deepseek-v4.1-flash` 及 `doubao-voice/asr`、`doubao-voice/tts`。模型回复、TTS 与测试音频的 ASR 均实际返回成功。登录 Cookie 留在现有网关账号池，声笺只持有限定来源和模型的服务凭据。
 - 桌面连接器主动连出 WebSocket，持久化领取任务 ID，串行在配置的工作目录中运行。DeepSeek Harness `0.2.1-rc.2` 的 headless JSON 引擎已实际通过 sub-buddy 完成文件写入；完整公网任务派发、事件补读、幂等提交和取消确认已实测。Codex 使用 App Server stdio；已用真实子进程协议夹具测试初始化、单次审批与停止进程，尚未宣称完成真实账号模型验收。
 - CPU、内存、工作目录所在磁盘、网络累计字节和 Agent 状态通过设备心跳上报。当前不声称具有进程级服务告警或系统推送。
@@ -82,7 +82,7 @@ node scripts/smoke_core_ui.cjs
 swift run --package-path ios ClientChecks
 ```
 
-完整 XCTest 和 iOS 模拟器构建需要完整 Xcode；本机只有 Command Line Tools，因此本机执行 Foundation 自检，完整构建交由 Apple CI。Git SSH 连接失败时停止推送链路，不换账号、不生成 SSH 密钥；当前新改动在本地等待远端恢复。
+完整 XCTest 和 iOS 模拟器构建需要完整 Xcode；本机只有 Command Line Tools，因此本机执行 Foundation 自检，完整构建交由 Apple CI。Git SSH 连接失败时停止推送链路，不换账号、不生成 SSH 密钥；新代码已在本地提交，等待远端恢复后推送。
 
 ## 来源与边界
 

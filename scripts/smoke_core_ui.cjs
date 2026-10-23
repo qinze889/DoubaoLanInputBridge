@@ -73,6 +73,57 @@ for (const rate of [16000, 44100, 48000]) {
     await page.locator("#prompt").fill("测试对话");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await page.getByText("已收到你的消息。", { exact: true }).waitFor();
+    const speechBodies = [];
+    let speechDelay = 0;
+    await page.route("**/shengjian/api/v2/voice/speech", async (route) => {
+      speechBodies.push(route.request().postDataJSON());
+      if (speechDelay)
+        await new Promise((resolve) => setTimeout(resolve, speechDelay));
+      await route.fulfill({
+        status: 200,
+        contentType: "audio/mpeg",
+        body: "fixture-audio",
+      });
+    });
+    await page.evaluate(() => {
+      window.originalAudio = window.Audio;
+      window.Audio = class {
+        constructor(src) {
+          this.src = src;
+          this.ended = false;
+        }
+        play() {
+          setTimeout(() => {
+            this.ended = true;
+            this.onended?.();
+          }, 3);
+          return Promise.resolve();
+        }
+        pause() {
+          this.onpause?.();
+        }
+      };
+    });
+    await page.evaluate(() => speak("a".repeat(2501)));
+    assert.deepEqual(
+      speechBodies.map((body) => body.input.length),
+      [1000, 1000, 501],
+    );
+    assert.equal(new Set(speechBodies.map((body) => body.request_id)).size, 3);
+    speechBodies.length = 0;
+    speechDelay = 100;
+    await page.evaluate(async () => {
+      const speaking = speak("a".repeat(1501));
+      setTimeout(stopSpeech, 0);
+      await speaking;
+    });
+    assert.equal(
+      speechBodies.length,
+      1,
+      "stopping speech prevents the next synthesis request",
+    );
+    speechDelay = 0;
+    speechBodies.length = 0;
     await page.getByRole("button", { name: "设备", exact: true }).click();
     await page.getByText("登记电脑连接器", { exact: true }).click();
     await page.getByLabel("设备名称").fill("测试电脑");
@@ -99,6 +150,55 @@ for (const rate of [16000, 44100, 48000]) {
       .locator("#task-detail")
       .getByText("已取消", { exact: true })
       .waitFor();
+    await page.getByRole("button", { name: "对话", exact: true }).click();
+    await page.locator("#speak").check();
+    await page.locator("#prompt").fill("语音汇报测试");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await page
+      .locator("#task-detail")
+      .getByRole("heading", { name: "语音汇报测试" })
+      .waitFor();
+    const taskId = await page.evaluate(async () => {
+      const response = await fetch("/shengjian/api/v2/tasks", {
+        headers: {
+          Authorization:
+            "Bearer " + sessionStorage.getItem("shengjian.session"),
+        },
+      });
+      return (await response.json()).tasks[0].id;
+    });
+    const complete = await page.request.post(
+      origin + "/__test/complete/" + taskId,
+    );
+    assert(complete.ok());
+    await page
+      .locator("#task-detail")
+      .getByText("已完成", { exact: true })
+      .waitFor();
+    for (
+      let i = 0;
+      i < 100 &&
+      !speechBodies.some((body) => body.input === "voice-task-report");
+      i++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    assert(
+      speechBodies.some((body) => body.input === "voice-task-report"),
+      "completed task speaks its result",
+    );
+    assert(
+      await page
+        .locator("#task-detail")
+        .getByRole("button", { name: "取消任务", exact: true })
+        .isDisabled(),
+    );
+    await page
+      .locator("#task-detail")
+      .getByRole("button", { name: "停止播报", exact: true })
+      .click();
+    await page.evaluate(() => {
+      window.Audio = window.originalAudio;
+    });
     await page.getByRole("button", { name: "对话", exact: true }).click();
     const out = path.resolve("artifacts/core-ui");
     fs.mkdirSync(out, { recursive: true });

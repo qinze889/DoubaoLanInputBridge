@@ -262,6 +262,17 @@ async function openTask(id) {
   cursor = 0;
   showPage("tasks");
   const d = await json("/tasks/" + id);
+  const terminal = new Set(["succeeded", "failed", "cancelled", "unknown"]);
+  const stateLine = el("p", labels[d.task.state] || d.task.state, "muted");
+  const cancelButton = button("取消任务", async () => {
+    const reply = await json("/tasks/" + id + "/cancel", {});
+    notice(
+      terminal.has(reply.task.state)
+        ? "任务状态：" + labels[reply.task.state]
+        : "已请求取消，等待电脑确认。",
+    );
+  });
+  cancelButton.disabled = terminal.has(d.task.state);
   $("task-detail").replaceChildren(
     el(
       "h2",
@@ -270,12 +281,13 @@ async function openTask(id) {
         : d.task.specification
       )?.prompt || "任务进度",
     ),
-    el("p", labels[d.task.state] || d.task.state, "muted"),
-    button("取消任务", async () => {
-      await json("/tasks/" + id + "/cancel", {});
-      notice("已请求取消，等待电脑确认。");
-    }),
+    stateLine,
+    cancelButton,
+    button("停止播报", stopSpeech),
   );
+  let resultText = "",
+    spoken = false;
+  const approvals = new Map();
   function connect() {
     if (currentTask !== id || epoch !== taskEpoch || !token) return;
     stream = new WebSocket(
@@ -295,8 +307,22 @@ async function openTask(id) {
       const text =
         event.text ||
         (event.state ? labels[event.state] || event.state : event.type);
-      $("task-detail").append(el("pre", text));
+      if (event.type === "task.state") {
+        stateLine.textContent = labels[event.state] || event.state;
+        if (terminal.has(event.state)) {
+          cancelButton.disabled = true;
+          for (const actions of approvals.values()) actions.remove();
+        }
+        if (event.state === "succeeded" && resultText && !spoken) {
+          spoken = true;
+          if ($("speak").checked) speak(resultText).catch(error);
+        }
+      } else $("task-detail").append(el("pre", text));
+      if (event.type === "task.result") resultText = event.text || "";
+      if (event.type === "approval.decision")
+        approvals.get(event.approval_id)?.remove();
       if (event.type === "task.approval") {
+        stateLine.textContent = labels.awaiting_user;
         const actions = el("div", undefined, "actions");
         for (const allow of [true, false])
           actions.append(
@@ -307,6 +333,7 @@ async function openTask(id) {
               actions.remove();
             }),
           );
+        approvals.set(event.approval_id, actions);
         $("task-detail").append(actions);
       }
     };
@@ -327,6 +354,7 @@ $("compose").onsubmit = async (e) => {
   const prompt = $("prompt").value.trim();
   if (!prompt) return;
   busy = true;
+  notice();
   const submit = e.target.querySelector("[type=submit]");
   submit.disabled = true;
   stopSpeech();
@@ -372,7 +400,8 @@ $("compose").onsubmit = async (e) => {
     submit.disabled = false;
   }
 };
-let speechEpoch = 0;
+let speechEpoch = 0,
+  playbackDone = null;
 function stopSpeech() {
   speechEpoch++;
   if (playback) {
@@ -380,23 +409,50 @@ function stopSpeech() {
     URL.revokeObjectURL(playback.src);
     playback = null;
   }
+  if (playbackDone) {
+    playbackDone();
+    playbackDone = null;
+  }
 }
 async function speak(text) {
-  const epoch = ++speechEpoch;
-  const r = await api("/voice/speech", {
-    input: text.slice(0, 1000),
-    request_id: crypto.randomUUID(),
-  });
-  const blob = await r.blob();
-  if (epoch !== speechEpoch) return;
-  playback = new Audio(URL.createObjectURL(blob));
-  playback.onended = () => stopSpeech();
-  try {
-    await playback.play();
-  } catch {
-    notice(
-      "点击停止播报旁的录音按钮可继续对话；浏览器可能需要先允许播放声音。",
-    );
+  stopSpeech();
+  const epoch = speechEpoch;
+  const characters = Array.from(text);
+  for (let offset = 0; offset < characters.length; offset += 1000) {
+    if (epoch !== speechEpoch) return;
+    const r = await api("/voice/speech", {
+      input: characters.slice(offset, offset + 1000).join(""),
+      request_id: crypto.randomUUID(),
+    });
+    const blob = await r.blob();
+    if (epoch !== speechEpoch) return;
+    const audio = new Audio(URL.createObjectURL(blob));
+    playback = audio;
+    let failed = false;
+    await new Promise((resolve) => {
+      playbackDone = resolve;
+      audio.onended = resolve;
+      audio.onpause = () => {
+        if (!audio.ended && epoch === speechEpoch) speechEpoch++;
+        resolve();
+      };
+      audio.onerror = () => {
+        failed = true;
+        resolve();
+      };
+      audio.play().catch(() => {
+        failed = true;
+        if (epoch === speechEpoch)
+          notice("浏览器暂停了声音播放，请先允许播放声音后重试。");
+        resolve();
+      });
+    });
+    if (playback === audio) {
+      playbackDone = null;
+      playback = null;
+    }
+    URL.revokeObjectURL(audio.src);
+    if (failed) return;
   }
 }
 $("stop-speech").onclick = stopSpeech;
