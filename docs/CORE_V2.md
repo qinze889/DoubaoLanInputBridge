@@ -56,6 +56,8 @@
 
 ## 运行与维护
 
+2026-10-23 后续延迟验收：三次公网接口测得 ASR 完成控制至首批回复 PCM 为 2819、3108、3610 ms，中位数 3108 ms；其中模型首字分别为 1931、1825、2386 ms，测试均完整结束且没有残留预留额度。这些数字不包含手机约 450 ms 的断句等待，不能当成手机听感或稳定低于 3 秒的承诺。回声和接续已通过仿真、跨采样率及浏览器验证，真实免提、房间混响和长会话仍等待手机验收。
+
 ```sh
 python -m pip install -r server/requirements-v2.txt
 python -m server.core_v2 --data /var/lib/shengjian-core --port 18767
