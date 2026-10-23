@@ -25,6 +25,7 @@ class ProviderConfig:
     voice_key: str = ''
     audio_base: str = ''
     audio_key: str = ''
+    audio_stream: bool = False
     asr_resource: str = 'volc.seedasr.sauc.duration'
     tts_resource: str = 'seed-tts-2.0'
     speaker: str = ''
@@ -35,6 +36,7 @@ class ProviderConfig:
         return cls(model_base=os.getenv('SHENGJIAN_MODEL_BASE_URL','').rstrip('/'), model_key=os.getenv('SHENGJIAN_MODEL_API_KEY',''),
                    text_model=os.getenv('SHENGJIAN_TEXT_MODEL',''), vision_model=os.getenv('SHENGJIAN_VISION_MODEL',''),
                    audio_base=os.getenv('SHENGJIAN_AUDIO_BASE_URL','').rstrip('/'), audio_key=os.getenv('SHENGJIAN_AUDIO_API_KEY',''),
+                   audio_stream=os.getenv('SHENGJIAN_AUDIO_STREAM','')=='1',
                    voice_key=os.getenv('SHENGJIAN_DOUBAO_API_KEY',''), speaker=os.getenv('SHENGJIAN_DOUBAO_SPEAKER',''),
                    asr_resource=os.getenv('SHENGJIAN_DOUBAO_ASR_RESOURCE','volc.seedasr.sauc.duration'),
                    tts_resource=os.getenv('SHENGJIAN_DOUBAO_TTS_RESOURCE','seed-tts-2.0'))
@@ -60,6 +62,7 @@ class Providers:
                 'voice': bool(self.config.audio_base and self.config.audio_key) or bool(self.config.voice_key and self.config.speaker),
                 'asr': bool(self.config.audio_base and self.config.audio_key) or bool(self.config.voice_key),
                 'tts': bool(self.config.audio_base and self.config.audio_key) or bool(self.config.voice_key and self.config.speaker),
+                'streaming_asr': self.config.audio_stream, 'streaming_tts': self.config.audio_stream,
                 'voice_source': 'rev-gateway' if self.config.audio_base and self.config.audio_key else 'official' if self.config.voice_key else 'unconfigured'}
 
     def client(self):
@@ -222,6 +225,16 @@ class Providers:
                         await client.aclose()
             return StreamingResponse(generate(),media_type='text/event-stream' if data.get('stream') else 'application/json',headers={'X-Usage-ID':usage_id})
 
+        @app.get(PREFIX+'/voice/capabilities')
+        async def voice_capabilities(uid=Depends(user)):
+            return {'partial_results': self.config.audio_stream, 'streaming_audio': self.config.audio_stream,
+                    'asr_path': '/voice/asr/stream' if self.config.audio_stream else '/voice/asr', 'sample_rate': 24000}
+
+        @app.post(PREFIX+'/voice/speech/stream')
+        async def stream_speech(body: Speech, uid=Depends(user)):
+            from .stream_voice import streaming_speech
+            return await streaming_speech(self, store, uid, body)
+
         @app.post(PREFIX+'/voice/speech')
         async def speech(body: Speech, uid=Depends(user)):
             if not self.readiness()['tts']:
@@ -263,5 +276,7 @@ class Providers:
         if self.config.audio_base and self.config.audio_key:
             from .gateway_voice import mount_gateway_asr
             mount_gateway_asr(app, store, self)
+            from .stream_voice import mount_stream_asr
+            mount_stream_asr(app, store, self)
         else:
             mount_asr(app,store,self.config)

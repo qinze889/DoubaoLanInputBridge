@@ -25,7 +25,7 @@ class VoiceEndpoint {
       while (this.preLength > 6400 && this.pre.length > 1)
         this.preLength -= this.pre.shift().length;
       this.voiced = voice ? this.voiced + pcm.length : 0;
-      if (this.voiced < 2880) return; // 180 ms prevents a click from opening ASR.
+      if (this.voiced < 2240) return; // 140 ms prevents a click from opening ASR.
       this.active = true;
       this.length = this.preLength;
       this.callbacks.start(this.pre);
@@ -36,7 +36,7 @@ class VoiceEndpoint {
     this.length += pcm.length;
     this.silence = voice ? 0 : this.silence + pcm.length;
     this.callbacks.data(pcm);
-    if (this.silence >= 14400 || this.length >= 25 * 16000) {
+    if (this.silence >= 10400 || this.length >= 25 * 16000) {
       this.reset();
       this.callbacks.end();
     }

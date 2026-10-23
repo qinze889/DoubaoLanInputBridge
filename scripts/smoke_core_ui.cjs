@@ -243,7 +243,10 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
         asrConnections,
     );
     await page.evaluate(() => feedLive(false, 46));
-    await page.getByText("连续对话第1句", { exact: true }).waitFor();
+    await page
+      .locator("#messages")
+      .getByText("连续对话第1句", { exact: true })
+      .waitFor();
     await page.waitForFunction(() => live && !live.processing, null, {
       timeout: 15000,
     });
@@ -290,7 +293,10 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       };
       feedLive(false, 46);
     });
-    await page.getByText("连续对话第2句", { exact: true }).waitFor();
+    await page
+      .locator("#messages")
+      .getByText("连续对话第2句", { exact: true })
+      .waitFor();
     await page.waitForFunction(() => live && !live.processing, null, {
       timeout: 15000,
     });

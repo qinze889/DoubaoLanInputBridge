@@ -12,7 +12,9 @@ let token = sessionStorage.getItem("shengjian.session") || "",
   busy = false,
   messages = [],
   taskEpoch = 0,
-  composeEpoch = 0;
+  composeEpoch = 0,
+  replyController = null,
+  voiceController = null;
 const labels = {
   queued: "排队中",
   running: "执行中",
@@ -57,10 +59,16 @@ function error(e) {
   const text = e.message || String(e);
   notice(errors[text] || text);
 }
-async function api(path, body, method = body === undefined ? "GET" : "POST") {
+async function api(
+  path,
+  body,
+  method = body === undefined ? "GET" : "POST",
+  options = {},
+) {
   const requestToken = token;
   const r = await fetch(base + path, {
     method,
+    signal: options.signal,
     headers: {
       Authorization: "Bearer " + requestToken,
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
@@ -415,6 +423,10 @@ async function submitPrompt(prompt) {
       const history = [...messages, { role: "user", content: prompt }].slice(
         -20,
       );
+      if (live?.capabilities?.streaming_audio) {
+        await streamChat(history, model.id, owner, operation);
+        return;
+      }
       const r = await api("/model/v1/chat/completions", {
         model: model.id,
         messages:
@@ -459,6 +471,8 @@ let speechEpoch = 0,
   playbackDone = null;
 function stopSpeech() {
   speechEpoch++;
+  voiceController?.abort();
+  voiceController = null;
   if (playback) {
     playback.pause();
     URL.revokeObjectURL(playback.src);
@@ -470,6 +484,7 @@ function stopSpeech() {
   }
 }
 async function speak(text) {
+  if (live?.capabilities?.streaming_audio) return speakStreaming(text);
   stopSpeech();
   const epoch = speechEpoch;
   const characters = Array.from(text);
@@ -535,6 +550,147 @@ async function speak(text) {
     }
     URL.revokeObjectURL(audio.src);
     if (failed) return;
+  }
+}
+
+async function streamAudio(text, epoch, player) {
+  if (epoch !== speechEpoch || !text.trim()) return;
+  const controller = new AbortController();
+  voiceController = controller;
+  let audioDone = false;
+  try {
+    const response = await api(
+      "/voice/speech/stream",
+      { input: text, request_id: crypto.randomUUID() },
+      "POST",
+      { signal: controller.signal },
+    );
+    await readEvents(
+      response,
+      "ndjson",
+      async (event) => {
+        if (event.type === "error") throw new Error(event.error);
+        if (event.type === "audio.chunk" && epoch === speechEpoch)
+          await player.push(event.data);
+        if (event.type === "audio.finished") audioDone = true;
+      },
+      controller.signal,
+    );
+    if (!audioDone) throw new Error("audio_result_unknown");
+  } finally {
+    if (voiceController === controller) voiceController = null;
+  }
+}
+function speechPipeline() {
+  const epoch = speechEpoch,
+    session = live;
+  const player = new PCMPlayback(session.context, () => {
+    if (live === session && epoch === speechEpoch) {
+      playback = player;
+      if (!session.metrics?.first_audio_ms && session.replyStart) {
+        session.metrics = {
+          ...session.metrics,
+          first_audio_ms: Math.round(performance.now() - session.replyStart),
+        };
+      }
+      liveState("正在播报 · 开口即可打断");
+    }
+  });
+  // Register before the first audio arrives so pending synthesis can also be stopped.
+  playback = player;
+  let chain = Promise.resolve(),
+    failure = null;
+  const sentences = new VoiceSentences((text) => {
+    chain = chain
+      .then(async () => {
+        if (epoch === speechEpoch) await streamAudio(text, epoch, player);
+      })
+      .catch((e) => {
+        if (epoch === speechEpoch) {
+          failure = e;
+          replyController?.abort();
+        }
+      });
+  });
+  return {
+    push: (text) => sentences.push(text),
+    async done() {
+      sentences.flush();
+      await chain;
+      if (failure) throw failure;
+      if (epoch === speechEpoch) await player.drain();
+      if (playback === player) playback = null;
+    },
+  };
+}
+async function speakStreaming(text) {
+  stopSpeech();
+  const speech = speechPipeline();
+  speech.push(text);
+  await speech.done();
+}
+async function streamChat(history, model, owner, operation) {
+  const controller = new AbortController();
+  replyController = controller;
+  const session = live;
+  session.replyStart = performance.now();
+  const speech = $("speak").checked ? speechPipeline() : null;
+  const node = el("div", "", "message assistant");
+  $("messages").append(node);
+  let text = "",
+    complete = false;
+  messages = history;
+  try {
+    const response = await api(
+      "/model/v1/chat/completions",
+      {
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "你正在进行中文实时语音对话。回答自然简短，通常两三句话，先直接回答。避免 Markdown 和长列表。",
+          },
+          ...history,
+        ],
+        max_tokens: 512,
+        stream: true,
+      },
+      "POST",
+      { signal: controller.signal },
+    );
+    await readEvents(
+      response,
+      "sse",
+      (event) => {
+        if (owner !== token || operation !== composeEpoch) return;
+        if (event.error) throw new Error("model_result_unknown");
+        if (event.done) {
+          complete = true;
+          return;
+        }
+        const delta = event.choices?.[0]?.delta?.content;
+        if (typeof delta !== "string" || !delta) return;
+        if (!text)
+          session.metrics = {
+            ...session.metrics,
+            first_token_ms: Math.round(performance.now() - session.replyStart),
+          };
+        text += delta;
+        node.textContent = text;
+        messages = [...history, { role: "assistant", content: text }];
+        $("messages").scrollTop = $("messages").scrollHeight;
+        speech?.push(delta);
+      },
+      controller.signal,
+    );
+    if (owner !== token || operation !== composeEpoch) return;
+    if (!complete || !text) throw new Error("model_result_unknown");
+    $("prompt").value = "";
+    await speech?.done();
+    if (owner === token && operation === composeEpoch) await refresh();
+  } finally {
+    if (replyController === controller) replyController = null;
   }
 }
 $("stop-speech").onclick = stopSpeech;
@@ -644,6 +800,8 @@ function liveState(text) {
   $("live-state").textContent = text;
 }
 function interruptReply() {
+  replyController?.abort();
+  replyController = null;
   stopSpeech();
   // Discard late model/TTS results; never replay or cancel a computer task here.
   if ($("destination").value === "chat") {
@@ -659,7 +817,10 @@ function stopLive(reason = "实时对话已结束") {
     session.closed = true;
     clearTimeout(session.timeout);
     session.ws?.close();
+    $("live-transcript").textContent = "";
+    $("live-transcript").hidden = true;
     session.processor?.disconnect();
+    session.processor?.port?.close();
     session.source?.disconnect();
     session.media?.getTracks().forEach((track) => track.stop());
     session.context?.close().catch(() => {});
@@ -683,8 +844,16 @@ function liveFailure(session, failure) {
 }
 function startUtterance(session, chunks) {
   if (live !== session) return;
+  if (session.utterance && !session.utterance.final) {
+    session.utterance.abandoned = true;
+    session.ws?.close();
+  }
   interruptReply();
   session.processing = true;
+  session.firstPartial = false;
+  $("live-transcript").textContent = "";
+  $("live-transcript").hidden = false;
+  session.utteranceStart = performance.now();
   const utterance = {
     pending: [...chunks],
     ended: false,
@@ -694,7 +863,9 @@ function startUtterance(session, chunks) {
   session.utterance = utterance;
   liveState("正在听，停顿后自动发送…");
   const socket = new WebSocket(
-    location.origin.replace(/^http/, "ws") + base + "/voice/asr",
+    location.origin.replace(/^http/, "ws") +
+      base +
+      (session.capabilities?.asr_path || "/voice/asr"),
   );
   session.ws = socket;
   clearTimeout(session.timeout);
@@ -724,7 +895,19 @@ function startUtterance(session, chunks) {
         utterance.pending = [];
         if (utterance.ended) socket.send(JSON.stringify({ type: "finish" }));
       }
+      if (reply.type === "asr.partial") {
+        $("live-transcript").textContent = reply.text || "";
+        if (!session.firstPartial) {
+          session.firstPartial = true;
+          session.metrics = {
+            first_partial_ms: Math.round(
+              performance.now() - session.utteranceStart,
+            ),
+          };
+        }
+      }
       if (reply.type === "asr.final" && !utterance.final) {
+        $("live-transcript").textContent = reply.text || "";
         utterance.final = true;
         clearTimeout(session.timeout);
         socket.close();
@@ -749,11 +932,15 @@ function startUtterance(session, chunks) {
     }
   };
   socket.onerror = () => {
-    if (session.utterance === utterance)
+    if (session.utterance === utterance && !utterance.abandoned)
       liveFailure(session, new Error("voice_connection_ended"));
   };
   socket.onclose = () => {
-    if (!utterance.final && session.utterance === utterance)
+    if (
+      !utterance.final &&
+      !utterance.abandoned &&
+      session.utterance === utterance
+    )
       liveFailure(session, new Error("voice_connection_ended"));
   };
 }
@@ -795,6 +982,8 @@ $("realtime").onclick = async () => {
   $("live-state").hidden = false;
   liveState("正在开启麦克风…");
   try {
+    session.context = new AudioContext();
+    const resumed = session.context.resume();
     session.media = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -807,8 +996,8 @@ $("realtime").onclick = async () => {
       session.media.getTracks().forEach((track) => track.stop());
       return;
     }
-    session.context = new AudioContext();
-    await session.context.resume();
+    await resumed;
+    session.capabilities = await json("/voice/capabilities");
     if (live !== session) return;
     const resampler = new PCMResampler(session.context.sampleRate);
     session.detector = new VoiceEndpoint({
@@ -822,16 +1011,36 @@ $("realtime").onclick = async () => {
       },
     });
     session.source = session.context.createMediaStreamSource(session.media);
-    session.processor = session.context.createScriptProcessor(2048, 1, 1);
-    session.processor.onaudioprocess = (event) => {
+    const acceptSamples = (samples) => {
       if (live !== session) return;
-      // Keep the microphone, but serialize ASR and synthesis on the rev source.
-      // During actual playback, a new utterance can interrupt the local reply.
-      if (session.processing && !session.detector.active && !playback) return;
-      session.detector.push(
-        resampler.push(event.inputBuffer.getChannelData(0)),
-      );
+      if (
+        !session.capabilities?.partial_results &&
+        session.processing &&
+        !session.detector.active &&
+        !playback
+      )
+        return;
+      session.detector.push(resampler.push(samples));
     };
+    if (
+      session.context.audioWorklet &&
+      typeof AudioWorkletNode === "function"
+    ) {
+      await session.context.audioWorklet.addModule(
+        base + "/console/capture-worklet.js",
+      );
+      if (live !== session) return;
+      session.processor = new AudioWorkletNode(
+        session.context,
+        "shengjian-capture",
+        { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] },
+      );
+      session.processor.port.onmessage = (event) => acceptSamples(event.data);
+    } else {
+      session.processor = session.context.createScriptProcessor(512, 1, 1);
+      session.processor.onaudioprocess = (event) =>
+        acceptSamples(event.inputBuffer.getChannelData(0));
+    }
     session.source.connect(session.processor);
     session.processor.connect(session.context.destination);
     session.media
@@ -848,7 +1057,11 @@ $("realtime").onclick = async () => {
           new Error("音频已被系统暂停，请返回页面重新开启。"),
         );
     };
-    liveState("正在聆听，请直接说…");
+    liveState(
+      session.capabilities.partial_results
+        ? "正在聆听 · 实时识别，可随时打断"
+        : "正在聆听，请直接说…",
+    );
   } catch (failure) {
     liveFailure(session, failure);
   }
