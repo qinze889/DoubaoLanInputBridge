@@ -56,8 +56,9 @@ class VoiceSentences {
           break;
         }
       }
-      if (!cut && Array.from(this.pending).length >= 64)
-        cut = Array.from(this.pending).slice(0, 64).join("").length;
+      const maximum = this.first ? 32 : 64;
+      if (!cut && Array.from(this.pending).length >= maximum)
+        cut = Array.from(this.pending).slice(0, maximum).join("").length;
       if (!cut) return;
       const piece = this.pending.slice(0, cut);
       this.pending = this.pending.slice(cut);

@@ -416,7 +416,7 @@ async function submitPrompt(prompt) {
       if (owner === token && operation === composeEpoch) await refresh();
     } else {
       message("user", prompt);
-      const models = await json("/models"),
+      const models = live?.models || (await json("/models")),
         model = models.data.find((m) => m.input_modalities.includes("text"));
       if (owner !== token || operation !== composeEpoch) return;
       if (!model) throw new Error("尚未配置对话模型");
@@ -997,7 +997,12 @@ $("realtime").onclick = async () => {
       return;
     }
     await resumed;
-    session.capabilities = await json("/voice/capabilities");
+    const [capabilities, models] = await Promise.all([
+      json("/voice/capabilities"),
+      session.destination === "chat" ? json("/models") : Promise.resolve(null),
+    ]);
+    session.capabilities = capabilities;
+    session.models = models;
     if (live !== session) return;
     const resampler = new PCMResampler(session.context.sampleRate);
     session.detector = new VoiceEndpoint({

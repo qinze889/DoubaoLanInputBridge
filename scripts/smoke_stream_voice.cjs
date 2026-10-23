@@ -291,7 +291,7 @@ const {
       await new Promise((resolve) => setTimeout(resolve, 100));
     assert(
       captured > 0,
-      "real AudioWorklet captures and resamples browser fake microphone",
+      "real AudioWorklet captures and resamples the browser audio graph",
     );
     await workletPage
       .getByRole("button", { name: "结束实时对话", exact: true })
