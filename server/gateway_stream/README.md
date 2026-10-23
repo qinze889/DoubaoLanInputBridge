@@ -16,6 +16,6 @@ app.include_router(audio_stream.router)
 
 依赖现有网关 Python 环境中的 aiohttp、anyio、FastAPI 以及 FFmpeg。开发验证使用服务器已安装的 aiohttp 3.14.5。
 
-上线时复制已知网关 release 到新目录，仅新增本模块和 import；先以禁用后台调度的临时 loopback 实例验收。正式切换前备份数据库与 systemd 配置，读取运行队列，等现有请求完成，再使用正常 service 入口启动新 release。旧接口行为不变。检查失败恢复原 WorkingDirectory 并重启；不回滚用户模型调用或覆盖现有账号库。
+上线时复制已知网关 release 到新目录，仅新增本模块和 import；先以禁用后台调度的临时 loopback 实例验收。正式切换前备份数据库与 systemd 配置，读取运行队列，等现有请求完成，再使用正常 service 入口启动新 release。旧接口行为不变。systemd 的多份 drop-in 按名字排序，应检查最终 WorkingDirectory 及 `/proc/<MainPID>/cwd`，不能只用模型目录 HTTP 200 判断新版本已生效。切换可临时使用不强杀的优雅退出，完成后恢复原停止超时。检查失败恢复原 WorkingDirectory 并重启；不回滚用户模型调用或覆盖现有账号库。
 
 声笺侧启用 `SHENGJIAN_AUDIO_STREAM=1`；仅在两个实际端点验收成功后开启。关闭此配置会恢复原有整句识别模式，旧 `/voice/asr`、`/voice/speech` 始终保留。
