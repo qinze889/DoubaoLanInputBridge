@@ -38,6 +38,10 @@ class LifeStore:
         if 'request_id' not in {r[1] for r in self.db.execute('PRAGMA table_info(images)')}:
             self.db.execute('ALTER TABLE images ADD COLUMN request_id TEXT')
         self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS image_request ON images(uid,request_id)')
+        for table,column,definition in [('preferences','vision_model',"TEXT DEFAULT ''"),('jobs','vision_model',"TEXT DEFAULT ''"),('images','caption_model',"TEXT DEFAULT ''")]:
+            if column not in {r[1] for r in self.db.execute('PRAGMA table_info('+table+')')}:
+                self.db.execute('ALTER TABLE '+table+' ADD COLUMN '+column+' '+definition)
+        self.db.execute('CREATE TABLE IF NOT EXISTS image_captions(image_id TEXT REFERENCES images(id) ON DELETE CASCADE,model TEXT NOT NULL,text TEXT NOT NULL,created REAL NOT NULL,PRIMARY KEY(image_id,model))')
         # An interrupted model request may already have been billed; never replay it automatically.
         self.db.execute("UPDATE jobs SET state='unknown',error='service_restarted',updated=? WHERE state='running'", (time.time(),))
 
@@ -59,7 +63,8 @@ class LifeStore:
         with self.tx() as db:
             db.execute('INSERT OR IGNORE INTO preferences(uid) VALUES(?)', (uid,))
             if values is not None:
-                if set(values)-{'auto','capture','clock','timezone'}: raise Fault('invalid_life_settings')
+                if set(values)-{'auto','capture','clock','timezone','vision_model'}: raise Fault('invalid_life_settings')
+                if 'vision_model' in values and (not isinstance(values['vision_model'],str) or len(values['vision_model'])>256):raise Fault('invalid_vision_model')
                 if any(k in values and type(values[k]) is not bool for k in ('auto','capture')): raise Fault('invalid_life_settings')
                 if 'clock' in values and (not isinstance(values['clock'],str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', values['clock'])): raise Fault('invalid_life_time')
                 if 'timezone' in values:
@@ -72,6 +77,17 @@ class LifeStore:
         with self.lock: row=self.db.execute('SELECT * FROM images WHERE id=? AND uid=?',(ident,uid)).fetchone()
         if not row: raise Fault('image_not_found',404)
         return dict(row)
+
+    def caption(self, uid, ident, model, text=None):
+        self.image(uid,ident)
+        if text is None:
+            with self.lock:row=self.db.execute('SELECT text FROM image_captions WHERE image_id=? AND model=?',(ident,model)).fetchone()
+            return row['text'] if row else ''
+        with self.tx() as db:
+            # The source may have been removed during the model request.
+            if not db.execute('SELECT 1 FROM images WHERE id=? AND uid=?',(ident,uid)).fetchone():raise Fault('image_not_found',404)
+            db.execute('INSERT INTO image_captions VALUES(?,?,?,?) ON CONFLICT(image_id,model) DO UPDATE SET text=excluded.text,created=excluded.created',(ident,model,text,time.time()))
+            db.execute('UPDATE images SET caption=?,caption_model=? WHERE id=? AND uid=?',(text,model,ident,uid))
 
     def add_image(self, uid, raw, width, height, request_id):
         with self.tx() as db:
@@ -107,23 +123,24 @@ class LifeStore:
             db.execute('INSERT INTO entries(id,uid,request_id,kind,role,text,images,created,updated) VALUES(?,?,?,?,?,?,?,?,?)',(ident,uid,values['request_id'],values['kind'],values['role'],values['text'],encode(images),stamp,now))
             return dict(db.execute('SELECT * FROM entries WHERE id=?',(ident,)).fetchone())
 
-    def entries(self, uid, before=None, search='', before_id='ffffffffffffffffffffffffffffffff'):
+    def entries(self, uid, before=None, search='', before_id='ffffffffffffffffffffffffffffffff', caption_model=None):
         with self.lock:
             stamp=before if before is not None else time.time()+301
             rows=self.db.execute('SELECT * FROM entries WHERE uid=? AND deleted=0 AND (created<? OR (created=? AND id<?)) AND text LIKE ? ORDER BY created DESC,id DESC LIMIT 50',(uid,stamp,stamp,before_id,'%'+search+'%')).fetchall()
-            return [self.describe_entry(uid,row) for row in rows]
+            return [self.describe_entry(uid,row,caption_model) for row in rows]
 
-    def describe_entry(self, uid, row):
-        images=json.loads(row['images']);captions=[]
+    def describe_entry(self, uid, row, caption_model=None):
+        images=json.loads(row['images']);captions=[];models=[]
         for ident in images:
             image=self.image(uid,ident)
-            if image['caption']:captions.append(image['caption'])
-        return {**dict(row),'images':images,'photo_descriptions':captions}
+            caption=self.caption(uid,ident,caption_model) if caption_model else image['caption']
+            if caption:captions.append(caption);models.append(caption_model or image['caption_model'])
+        return {**dict(row),'images':images,'photo_descriptions':captions,'photo_description_models':models}
 
-    def entry(self, uid, ident):
+    def entry(self, uid, ident, caption_model=None):
         with self.lock:row=self.db.execute('SELECT * FROM entries WHERE uid=? AND id=? AND deleted=0',(uid,ident)).fetchone()
         if not row:raise Fault('life_record_not_found',404)
-        return self.describe_entry(uid,row)
+        return self.describe_entry(uid,row,caption_model)
 
     def delete_entry(self, uid, ident):
         with self.tx() as db:
@@ -155,8 +172,13 @@ class LifeStore:
         revision=hashlib.sha256(encode([(r['id'],r['updated']) for r in rows]).encode()).hexdigest()
         return rows,revision
 
-    def claim(self, uid, day, force=False):
+    @staticmethod
+    def model_revision(revision, model):
+        return hashlib.sha256(encode([revision,model]).encode()).hexdigest() if model else revision
+
+    def claim(self, uid, day, force=False, vision_model=''):
         rows,revision=self.day(uid,day)
+        revision=self.model_revision(revision,vision_model)
         if not rows: raise Fault('no_life_records')
         with self.tx() as db:
             previous=db.execute('SELECT * FROM jobs WHERE uid=? AND day=? AND revision=?',(uid,day,revision)).fetchone()
@@ -165,8 +187,15 @@ class LifeStore:
                 db.execute('DELETE FROM jobs WHERE id=?',(previous['id'],))
             if db.execute("SELECT 1 FROM jobs WHERE uid=? AND state='running'",(uid,)).fetchone(): raise Fault('life_consolidation_busy',409)
             ident=secrets.token_hex(16); now=time.time()
-            db.execute("INSERT INTO jobs(id,uid,day,revision,state,created,updated) VALUES(?,?,?,?,'running',?,?)",(ident,uid,day,revision,now,now))
+            db.execute("INSERT INTO jobs(id,uid,day,revision,state,created,updated,vision_model) VALUES(?,?,?,?,'running',?,?,?)",(ident,uid,day,revision,now,now,vision_model))
             return dict(db.execute('SELECT * FROM jobs WHERE id=?',(ident,)).fetchone()),True,rows
+
+    def recorded_version(self, uid, day):
+        _,revision=self.day(uid,day)
+        with self.lock:
+            for row in self.db.execute('SELECT * FROM jobs WHERE uid=? AND day=? ORDER BY created DESC',(uid,day)):
+                if self.model_revision(revision,row['vision_model'])==row['revision']:return dict(row)
+        return None
 
     def memories(self, uid, deleted=False):
         with self.lock:
@@ -185,6 +214,7 @@ class LifeStore:
 
     def finish(self, job, output):
         rows,revision=self.day(job['uid'],job['day'])
+        revision=self.model_revision(revision,job.get('vision_model',''))
         valid={r['id'] for r in rows if r['role']=='user'}; candidates=output.get('memories')
         if not isinstance(output.get('summary'),str) or len(output['summary'])>6000 or not isinstance(candidates,list) or len(candidates)>20: raise Fault('invalid_memory_output',502)
         for value in candidates:
@@ -193,6 +223,7 @@ class LifeStore:
         with self.tx() as db:
             # Recompute under the write lock too, so deletion cannot race memory publication.
             _,current=self.day(job['uid'],job['day'])
+            current=self.model_revision(current,job.get('vision_model',''))
             if revision!=job['revision'] or current!=revision:
                 db.execute("UPDATE jobs SET state='obsolete',summary='',updated=? WHERE id=?",(time.time(),job['id']));return
             for value in candidates:

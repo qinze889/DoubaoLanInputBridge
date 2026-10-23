@@ -1,0 +1,791 @@
+{
+  "date": "2026-10-23",
+  "timezone": "Asia/Shanghai",
+  "candidate_count": 49,
+  "verified_count": 24,
+  "method": "Two synthetic PNGs with different colors, shapes, counts and random printed strings; two concurrent calls; 38s timeout; max_tokens=250; low effort when advertised. Position/count manually reviewed for all 24 passing IDs.",
+  "scope": "Observed through existing WorkBuddy gateway; does not assert native visual architecture or complex-photo quality. HTTP 503 may be temporary source failure/cooldown.",
+  "models": [
+    {
+      "id": "workbuddy/cn:fast-model",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 2.96,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.77,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:balanced-model",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 5.5,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.44,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deep-model",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 13.61,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 4.97,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:auto",
+      "passed": false,
+      "declared_native_modality": "router",
+      "trials": [
+        {
+          "status": null,
+          "seconds": 38.01,
+          "passed": false,
+          "error": "ReadTimeout"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hy3",
+      "passed": true,
+      "declared_native_modality": "text",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 2.6,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 2.73,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hy3-b",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.09,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.01,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hy3-c",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.24,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 2.54,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hy3-x",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 2.39,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.42,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hy4-preview",
+      "passed": true,
+      "declared_native_modality": "text",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.72,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.67,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hy4-preview-ctrl",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 4.46,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.12,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hy4-preview-x",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.91,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:minimax-m2.5",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.62,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hy4-preview-exp",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 4.43,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.91,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:glm-5v-turbo",
+      "passed": true,
+      "declared_native_modality": "multimodal",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 2.19,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 2.53,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:glm-5.3",
+      "passed": true,
+      "declared_native_modality": "text",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.51,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.08,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:glm-5.3-flash",
+      "passed": true,
+      "declared_native_modality": "multimodal",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 2.96,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.1,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:glm-5.3-flashx",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.52,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 2.82,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:glm-5.2",
+      "passed": true,
+      "declared_native_modality": "text",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.27,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 2.57,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:glm-5.0-turbo",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 2.32,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:glm-4.6v",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.94,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2.8-preview",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 5.96,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 4.44,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:kimi-k3-2",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 5.22,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 6.39,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2.6",
+      "passed": true,
+      "declared_native_modality": "multimodal",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.11,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 2.3,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2.7",
+      "passed": true,
+      "declared_native_modality": "multimodal",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 4.82,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 5.01,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2-thinking",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.82,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2.5",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 2.19,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 2.47,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:minimax-m2.7",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.52,
+          "passed": false,
+          "error": "image_input_not_understood"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:glm-4.6",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.83,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:minimax-m3-pay",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 2.39,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 2.5,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v4.1-flash",
+      "passed": true,
+      "declared_native_modality": "multimodal",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 2.01,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 2.04,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v4-flash",
+      "passed": true,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 2.94,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.23,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v3-2-volc",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.18,
+          "passed": false,
+          "error": "image_input_not_understood"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v3-1-volc",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.67,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v4-pro",
+      "passed": true,
+      "declared_native_modality": "text",
+      "trials": [
+        {
+          "status": 200,
+          "seconds": 3.34,
+          "passed": true,
+          "error": ""
+        },
+        {
+          "status": 200,
+          "seconds": 3.07,
+          "passed": true,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v3-1-lkeap",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 1.21,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v3-1",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.87,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v3-0324-lkeap",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.78,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2-instruct-taiji",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.0,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:default-1.1",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.0,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:default-1.2",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.0,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hunyuan-2.0-instruct",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.0,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:hunyuan-chat",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.0,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:step-5-preview",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.0,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:space-bunny",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.0,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:deepseek-r1-0528-lkeap",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.69,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:mimo-v2.6-pro",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 400,
+          "seconds": 1.24,
+          "passed": false,
+          "error": "http_400"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:kimi-k3-1",
+      "passed": false,
+      "declared_native_modality": "multimodal",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.0,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:minimax-m3",
+      "passed": false,
+      "declared_native_modality": "multimodal",
+      "trials": [
+        {
+          "status": 503,
+          "seconds": 0.0,
+          "passed": false,
+          "error": "http_503"
+        }
+      ]
+    },
+    {
+      "id": "workbuddy/cn:minimax-m3.1-flash",
+      "passed": false,
+      "declared_native_modality": "unknown",
+      "trials": [
+        {
+          "status": 400,
+          "seconds": 2.32,
+          "passed": false,
+          "error": "http_400"
+        }
+      ]
+    }
+  ]
+}

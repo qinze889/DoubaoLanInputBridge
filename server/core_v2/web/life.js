@@ -1,7 +1,7 @@
 "use strict";
 (() => {
   const $ = id => document.getElementById(id);
-  let uid = '', io = null, captureEnabled = true, sending = false, epoch = 0, timer = null, last = null, urls = [];
+  let uid = '', io = null, captureEnabled = true, sending = false, epoch = 0, timer = null, last = null, urls = [], savingVision = false, lastVision = '';
   function node(tag, text, cls) { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; }
   function status(text) { $('life-status').textContent = text; }
   function action(text, run) { const b = node('button', text); b.type = 'button'; b.onclick = () => Promise.resolve(run()).catch(fail); return b; }
@@ -57,7 +57,7 @@
         const url = URL.createObjectURL(blob); urls.push(url); image.src = url;
       }).catch(() => { image.alt = '照片暂时无法读取'; });
     }
-    for(const caption of entry.photo_descriptions || [])article.append(node('p','照片描述：'+caption,'muted'));
+    for(const [index,caption] of (entry.photo_descriptions || []).entries()){const source=entry.photo_description_models?.[index]?.replace('workbuddy/cn:','');article.append(node('p','照片描述'+(source?'（'+source+'）':'')+'：'+caption,'muted'));}
     article.append(action('删除记录', async () => { await io.json('/life/entries/'+entry.id, undefined, 'DELETE'); await refresh(); }));
     return article;
   }
@@ -67,14 +67,26 @@
     last = data.entries.at(-1) || null; $('life-more').hidden = data.entries.length < 50;
     if (!$('life-timeline').children.length) $('life-timeline').append(node('p','还没有记录。写下一句话，或拍下今天的第一张照片。','muted'));
     if (append) return;
+    const selector=$('life-vision-model'), choices=data.vision_models || [], selected=data.settings.vision_model || '';
+    const catalog=JSON.stringify([choices,selected]);
+    if(!savingVision && document.activeElement!==selector){
+      if(selector.dataset.catalog!==catalog){
+        selector.replaceChildren(new Option('默认（'+(choices.find(x=>x.id===data.default_vision_model)?.name || '未配置')+'）',''));
+        for(const choice of choices)selector.add(new Option(choice.name+' · 已验证',choice.id));
+        if(selected&&!choices.some(x=>x.id===selected)){const unavailable=new Option(selected+'（暂不可用，请重新选择）',selected);unavailable.disabled=true;selector.add(unavailable);}
+        selector.dataset.catalog=catalog;
+      }
+      selector.value=selected;lastVision=selected;
+    }
+    selector.disabled=!choices.length || savingVision;
     $('life-jobs').replaceChildren();
     for (const job of data.jobs.slice(0,5)) {
       const names = {running:'整理中',succeeded:'已沉淀',failed:'整理失败',unknown:'结果未知，未自动重试',obsolete:'来源已变化'};
-      const row=node('article'); row.append(node('h3',job.day+' · '+(names[job.state] || job.state)));
+      const row=node('article'); row.append(node('h3',job.day+' · '+(names[job.state] || job.state)));if(job.vision_model)row.append(node('small','本次识图：'+job.vision_model.replace('workbuddy/cn:',''),'muted'));
       if(job.summary)row.append(node('p',job.summary));if(job.error)row.append(node('small',job.error,'muted'));$('life-jobs').append(row);
     }
     if (!data.jobs.length) $('life-jobs').append(node('p','今晚会把当天记录整理成摘要与有来源的记忆。','muted'));
-    if(data.vision_ready)$('life-jobs').append(node('p',data.vision_model==='workbuddy/cn:glm-5v-turbo'?'照片理解：WorkBuddy · GLM-5V Turbo。照片随当天记录一起整理。':'图像理解已启用，照片随当天记录一起整理。','muted'));
+    if(data.vision_ready)$('life-jobs').append(node('p','当前识图模型：'+(data.vision_models?.find(x=>x.id===data.vision_model)?.name || data.vision_model)+'。照片随当天记录一起整理。','muted'));
     if (!data.vision_ready) $('life-jobs').append(node('p','当前图像模型尚未配置：照片会保存，但尚不能自动看图提炼记忆。','muted'));
     if($('life-memories').querySelector('textarea[data-dirty]'))return;
     $('life-memories').replaceChildren();
@@ -113,6 +125,13 @@
     for(const file of files){const blob=await compress(file);if(owner!==uid)return;await queue(text,'user','photo',blob);}
     if(owner===uid)$('life-note').value='';
   }
+  $('life-vision-model').onchange=async()=>{
+    const owner=uid,version=epoch,api=io,selector=$('life-vision-model'),selected=selector.value;
+    savingVision=true;selector.disabled=true;
+    try{await api.json('/life/settings',{vision_model:selected},'PATCH');if(owner!==uid||version!==epoch)return;lastVision=selected;status('识图模型已保存，下次整理时使用。');}
+    catch(error){if(owner===uid&&version===epoch){selector.value=lastVision;fail(error);}}
+    finally{if(owner===uid&&version===epoch){savingVision=false;selector.disabled=false;}}
+  };
   $('life-files').onchange=e=>{photos([...e.target.files]).catch(fail).finally(()=>{e.target.value='';});};
   $('life-camera').onchange=e=>{photos([...e.target.files]).catch(fail).finally(()=>{e.target.value='';});};
   $('life-compose').onsubmit=async e=>{
@@ -131,14 +150,14 @@
     }catch(error){fail(error);}
   };
   $('life-settings').onsubmit=async e=>{e.preventDefault();const owner=uid,version=epoch;try{await io.json('/life/settings',{auto:$('life-auto').checked,capture:$('life-capture').checked,clock:$('life-clock').value,timezone:$('life-timezone').value},'PATCH');if(owner!==uid||version!==epoch)return;captureEnabled=$('life-capture').checked;status('设置已保存。');}catch(error){fail(error);}};
-  async function consolidate(force){const day=$('life-day').value;if(!day)return;await io.json('/life/consolidate',{day,force});status('已开始整理，完成后会更新摘要和记忆。');await refresh();}
+  async function consolidate(force){const day=$('life-day').value;if(!day)return;const result=await io.json('/life/consolidate',{day,force});status(result.job.state==='running'?'已开始整理，完成后会更新摘要和记忆。':result.job.state==='succeeded'?'该记录版本已有所选模型的整理结果。如需再次生成记忆，请点“重新整理”。':'该版本此前未完成，未自动重试。需要再次调用时请点“重新整理”。');await refresh();}
   $('life-consolidate').onclick=()=>consolidate(false).catch(fail);$('life-reconsolidate').onclick=()=>consolidate(true).catch(fail);
   $('life-more').onclick=()=>refresh(true).catch(fail);let searchTimer;$('life-search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>refresh().catch(fail),250);};
   $('life-day').value=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   window.addEventListener('online',()=>void flush());
   window.ShengjianLife={
     activate(owner,api){if(typeof owner!=='string'||!owner)return;io=api;if(uid===owner){void flush();return;}uid=owner;epoch++;void refresh().catch(fail);void flush();clearInterval(timer);timer=setInterval(()=>{void flush();if(!$('life').hidden)void refresh().catch(fail);},10000);},
-    deactivate(){uid='';io=null;epoch++;clearInterval(timer);release();for(const id of ['life-timeline','life-memories','life-jobs','life-source'])$(id).replaceChildren();$('life-note').value='';delete $('life-settings').dataset.loaded;status('');},
+    deactivate(){uid='';io=null;epoch++;savingVision=false;lastVision='';$('life-vision-model').replaceChildren(new Option('正在载入已验证的模型…',''));$('life-vision-model').disabled=true;delete $('life-vision-model').dataset.catalog;clearInterval(timer);release();for(const id of ['life-timeline','life-memories','life-jobs','life-source'])$(id).replaceChildren();$('life-note').value='';delete $('life-settings').dataset.loaded;status('');},
     capture(role,text){if(uid&&captureEnabled&&text)void queue(String(text).slice(0,16000),role,'chat').catch(fail);},
     refresh(){return refresh().catch(fail);}
   };

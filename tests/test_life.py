@@ -132,10 +132,65 @@ def test_nightly_respects_clock_timezone_and_auto_opt_out(tmp_path,monkeypatch):
     service=module.LifeService(tmp_path,None,None)
     service.store.preferences('enabled');service.store.preferences('disabled',{'auto':False})
     service.store.preferences('later',{'clock':'23:59'})
-    calls=[];service.launch=lambda uid,day:calls.append((uid,day))
+    calls=[];service.launch=lambda uid,day,**options:calls.append((uid,day))
     async def stop(_):raise asyncio.CancelledError()
     monkeypatch.setattr(module,'datetime',Fixed);monkeypatch.setattr(module.asyncio,'sleep',stop)
     with pytest.raises(asyncio.CancelledError):asyncio.run(service.nightly())
     assert ('enabled','2026-10-23') in calls and ('enabled','2026-10-22') in calls
     assert all(uid!='disabled' for uid,_ in calls) and ('later','2026-10-23') not in calls
     service.store.close()
+
+
+def test_vision_choice_is_verified_account_scoped_and_persistent(tmp_path,monkeypatch):
+    monkeypatch.setenv('SHENGJIAN_LIFE_VISION_MODELS','["vision-a","vision-b"]')
+    provider=Providers(ProviderConfig(model_base='https://model.invalid/v1',model_key='test-key',text_model='text',vision_model='vision-a'))
+    app=create_app(tmp_path,admin_token='x'*40,providers=provider)
+    a=app.state.store.register('choice-a','isolated-password-123',app.state.store.invite(100));b=app.state.store.register('choice-b','isolated-password-123',app.state.store.invite(100))
+    headers={'Authorization':'Bearer '+a['token']};other={'Authorization':'Bearer '+b['token']}
+    with TestClient(app) as c:
+        assert c.patch(PREFIX+'/life/settings',json={'vision_model':'unverified'},headers=headers).status_code==400
+        assert c.patch(PREFIX+'/life/settings',json={'vision_model':'vision-b'},headers=headers).status_code==200
+        state=c.get(PREFIX+'/life',headers=headers).json()
+        assert state['vision_model']=='vision-b' and state['default_vision_model']=='vision-a'
+        assert {m['id'] for m in state['vision_models']}=={'vision-a','vision-b'}
+        assert c.get(PREFIX+'/life',headers=other).json()['vision_model']=='vision-a'
+        assert c.patch(PREFIX+'/life/settings',json={'vision_model':''},headers=headers).status_code==200
+        assert c.get(PREFIX+'/life',headers=headers).json()['vision_model']=='vision-a'
+    s=LifeStore(tmp_path);assert s.preferences(a['user_id'])['vision_model']=='';s.close()
+
+
+def test_model_change_creates_new_revision_and_captions_do_not_cross_models(tmp_path):
+    s=LifeStore(tmp_path);r=record(s);j,_,_=s.claim('a',today(),vision_model='vision-a');s.finish(j,output(r))
+    assert not s.claim('a',today(),vision_model='vision-a')[1]
+    k,claimed,_=s.claim('a',today(),vision_model='vision-b');assert claimed and k['id']!=j['id'] and k['vision_model']=='vision-b'
+    s.finish(k,output(r));assert s.jobs('a')[0]['state']=='succeeded'
+    assert s.recorded_version('a',today())['id']==k['id']
+    im=s.add_image('a',b'image',1,1,'image-caption-test-123')
+    s.caption('a',im['id'],'vision-a','来自A的描述');assert not s.caption('a',im['id'],'vision-b')
+    s.caption('a',im['id'],'vision-b','来自B的描述');assert s.caption('a',im['id'],'vision-a')=='来自A的描述'
+    with pytest.raises(Fault):s.caption('b',im['id'],'vision-a')
+    photo=record(s,images=[im['id']])
+    assert s.entry('a',photo['id'],caption_model='vision-a')['photo_descriptions']==['来自A的描述']
+    assert s.entry('a',photo['id'],caption_model='vision-b')['photo_descriptions']==['来自B的描述']
+    s.delete_entry('a',photo['id']);assert s.db.execute('SELECT COUNT(*) FROM image_captions').fetchone()[0]==0
+    s.close()
+
+
+def test_selected_model_reaches_upstream_even_when_not_in_general_chat_picker(tmp_path,monkeypatch):
+    monkeypatch.setenv('SHENGJIAN_LIFE_VISION_MODELS','["vision-a","vision-b"]')
+    calls=[];entry=None
+    def upstream(req):
+        if req.method=='GET':return httpx.Response(200,json={'data':[{'id':x} for x in ['text','vision-a','vision-b']]})
+        body=json.loads(req.content);calls.append(body['model'])
+        content='蓝色方块' if body['model']=='vision-b' else json.dumps(output(entry))
+        return httpx.Response(200,json={'choices':[{'message':{'content':content}}],'usage':{'total_tokens':2}})
+    provider=Providers(ProviderConfig(model_base='https://model.invalid/v1',model_key='test-key',text_model='text',vision_model='vision-a'),transport=httpx.MockTransport(upstream))
+    app=create_app(tmp_path,admin_token='x'*40,providers=provider);a=app.state.store.register('routing-test','isolated-password-123',app.state.store.invite(100));s=app.state.life.store
+    im=s.add_image(a['user_id'],b'jpeg-test',1,1,'image-selection-test-123');entry=record(s,a['user_id'],images=[im['id']]);s.preferences(a['user_id'],{'vision_model':'vision-b'})
+    job,_,rows=s.claim(a['user_id'],today(),vision_model='vision-b')
+    # A settings change during execution must not replace the captured task model.
+    s.preferences(a['user_id'],{'vision_model':'vision-a'});asyncio.run(app.state.life.consolidate(job,rows))
+    assert calls==['vision-b','text'] and s.jobs(a['user_id'])[0]['state']=='succeeded'
+    assert app.state.life.launch(a['user_id'],today(),scheduled=True)['id']==job['id']
+    assert 'vision-b' not in {m['id'] for m in asyncio.run(provider.models())}
+    s.close();app.state.store.close()

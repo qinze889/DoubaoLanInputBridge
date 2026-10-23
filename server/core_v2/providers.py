@@ -57,6 +57,7 @@ class Providers:
         if config.voice_effort not in {'', 'low'}:
             raise ValueError('Voice effort must be empty or an upstream-verified low profile')
         self.cached_models = None
+        self.discovered_ids = set()
         self.models_at = 0
         self.discovery_lock = asyncio.Lock()
 
@@ -97,6 +98,7 @@ class Providers:
             selected={m for m in [self.config.text_model,self.config.vision_model] if m}
             if not selected <= ids:
                 raise Fault('configured_model_not_available', 503)
+            self.discovered_ids = ids
             self.cached_models=[{'id':m,'object':'model','input_modalities':['text','image'] if m==self.config.vision_model else ['text']} for m in sorted(selected)]
             self.models_at=asyncio.get_running_loop().time()
             return self.cached_models

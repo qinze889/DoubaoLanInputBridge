@@ -34,3 +34,5 @@
 直接采用开放且已核对 MIT 许可的 DSH 子代理/消息/技能模块，保留其许可证；CDP 使用公开协议，声笺工具桥、存储与原生控件自己实现。第三方安装包源模块、账号令牌、私有认证端点和未知 ABI helper 不加入声笺安装包。
 
 暂不整体启用 DSH experimental-agent-team：它另有团队成员、共享任务及 revision 语义，不能与当前父子代理状态混用。连接器 OAuth、跨任务长期会话与授权邮箱、任意桌面 App 的虚拟机执行需要独立接入，不把 npm 已安装或静态字符串作为完成验收。
+
+- [WorkBuddy 识图模型双图验证与可选列表](VISION-MODEL-VALIDATION.md) · [脱敏结果](VISION-MODEL-VALIDATION.json)
