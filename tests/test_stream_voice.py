@@ -81,8 +81,8 @@ def test_stream_asr_partial_before_finish_and_no_duplicate_settlement(tmp_path, 
     with TestClient(app) as client:
         with client.websocket_connect(PREFIX+'/voice/asr/stream') as ws:
             ws.send_json(auth)
+            ws.send_bytes(b'\0'*3200)  # sent immediately after auth, before ready
             assert ws.receive_json()['partial_results'] is True
-            ws.send_bytes(b'\0'*3200)
             assert ws.receive_json()=={'type':'asr.partial','text':'正在识别'}
             ws.send_json({'type':'finish'})
             assert ws.receive_json()=={'type':'asr.final','text':'最终识别结果'}
@@ -92,7 +92,7 @@ def test_stream_asr_partial_before_finish_and_no_duplicate_settlement(tmp_path, 
             ws.send_json(auth)
             assert ws.receive_json()['error']=='usage_already_submitted'
         assert app.state.store.wallet(user['user_id'])=={'balance':99,'reserved':0}
-        assert len(links)==1
+        assert len(links)==1 and links[0].pcm==[b'\0'*3200]
 
 
 @pytest.mark.parametrize('code',['audio_busy','tts_login_required'])

@@ -197,6 +197,10 @@ const {
       0,
       "partial transcript is visible before end of speech",
     );
+    assert(
+      await page.evaluate(() => live.utterance.earlySamples > 0),
+      "captured onset is sent after auth without waiting for the ready round trip",
+    );
     await page.evaluate(() => feed(false, 40));
     await page.waitForFunction(() => window.audioStarts > 0);
     const partialReply = await page
@@ -258,10 +262,30 @@ const {
       null,
       { timeout: 5000 },
     );
+    await page.evaluate(() => {
+      clearInterval(refreshTimer);
+      window.savedRefresh = refresh;
+      const gate = new Promise((resolve) => (window.finishReply = resolve));
+      refresh = async () => {
+        window.finishingReply = true;
+        await gate;
+        return window.savedRefresh();
+      };
+    });
     await page.evaluate(() => feed(false, 40));
+    await page.waitForFunction(() => window.finishingReply);
+    await page.evaluate(() => feed(true, 3)); // first 60 ms of the next speaker
+    await page.evaluate(() => {
+      refresh = window.savedRefresh;
+      window.finishReply();
+    });
     await page.waitForFunction(() => live && !live.processing, null, {
       timeout: 15000,
     });
+    assert(
+      await page.evaluate(() => live.detector.voiced >= 960),
+      "reply completion preserves a new speaker's onset",
+    );
     assert.equal(
       await page.locator("#messages .user").count(),
       userCount + 1,
@@ -272,6 +296,14 @@ const {
       "这是第3个语音问题 这是第4个语音问题",
       "no dropped words across the ASR finish boundary",
     );
+    await page.evaluate(() => feed(true, 3));
+    await page.waitForFunction(
+      () => live.utterance.ready && !live.utterance.final,
+    );
+    await page.evaluate(() => feed(false, 40));
+    await page.waitForFunction(() => live && !live.processing, null, {
+      timeout: 15000,
+    });
     // Listening also remains active while waiting for the model, before any audio.
     await page.evaluate(() => feed(true, 20));
     await page.waitForTimeout(30);

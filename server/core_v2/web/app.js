@@ -961,6 +961,13 @@ function openLiveASR(session, utterance) {
     socket.send(
       JSON.stringify({ token: session.owner, request_id: crypto.randomUUID() }),
     );
+    utterance.authSent = true;
+    if (session.capabilities?.early_audio) {
+      const pending = utterance.pending;
+      utterance.pending = [];
+      for (const chunk of pending) sendLivePCM(session, chunk, utterance);
+      if (utterance.ended) finishLivePCM(session, utterance);
+    }
   };
   socket.onmessage = async (event) => {
     if (
@@ -977,7 +984,7 @@ function openLiveASR(session, utterance) {
         for (const chunk of utterance.pending)
           sendLivePCM(session, chunk, utterance);
         utterance.pending = [];
-        if (utterance.ended) socket.send(JSON.stringify({ type: "finish" }));
+        if (utterance.ended) finishLivePCM(session, utterance);
       }
       if (reply.type === "asr.partial" && session.utterance === utterance) {
         $("live-transcript").textContent =
@@ -1019,7 +1026,7 @@ function openLiveASR(session, utterance) {
         }
         if (live === session && session.utterance === utterance) {
           session.processing = false;
-          session.detector.reset();
+          // The detector may already hold the next speaker's onset. Do not reset it here.
           liveState("正在聆听，请继续说…");
         }
       }
@@ -1044,13 +1051,34 @@ function openLiveASR(session, utterance) {
       liveFailure(session, new Error("voice_connection_ended"));
   };
 }
+function finishLivePCM(session, u = session.utterance) {
+  if (
+    live !== session ||
+    u.finishSent ||
+    !u.ws ||
+    u.ws.readyState !== WebSocket.OPEN
+  )
+    return;
+  if (u.ready || (session.capabilities?.early_audio && u.authSent)) {
+    u.finishSent = true;
+    u.ws.send(JSON.stringify({ type: "finish" }));
+  }
+}
 function sendLivePCM(session, pcm, u = session.utterance) {
   if (live !== session) return;
-  if (!u.ready) {
+  if (!u.ready && !(session.capabilities?.early_audio && u.authSent)) {
     u.pending.push(pcm.slice());
     if (u.pending.reduce((n, chunk) => n + chunk.length, 0) > 28000)
       liveFailure(session, new Error("识别衔接等待过久，请检查网络后重试。"));
     return;
+  }
+  if (!u.ready) {
+    u.earlySamples = (u.earlySamples || 0) + pcm.length;
+    if (u.earlySamples > 28000)
+      return liveFailure(
+        session,
+        new Error("语音连接建立过慢，请检查网络后重试。"),
+      );
   }
   if (u.ws.readyState !== WebSocket.OPEN || u.ws.bufferedAmount > 128000)
     return liveFailure(session, new Error("网络发送较慢，请检查连接后重试。"));
@@ -1111,11 +1139,7 @@ $("realtime").onclick = async () => {
         session.utterance.speechEnd =
           (session.sampleTime ?? session.context.currentTime) - trailingSilence;
         session.utterance.ended = true;
-        if (
-          session.utterance.ready &&
-          session.utterance.ws.readyState === WebSocket.OPEN
-        )
-          session.utterance.ws.send(JSON.stringify({ type: "finish" }));
+        finishLivePCM(session);
         liveState("正在识别…");
       },
     });

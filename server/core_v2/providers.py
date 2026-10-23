@@ -232,7 +232,7 @@ class Providers:
 
         @app.get(PREFIX+'/voice/capabilities')
         async def voice_capabilities(uid=Depends(user)):
-            return {'partial_results': self.config.audio_stream, 'streaming_audio': self.config.audio_stream,
+            return {'partial_results': self.config.audio_stream, 'streaming_audio': self.config.audio_stream, 'early_audio': self.config.audio_stream,
                     'reasoning_effort': self.config.voice_effort or None,
                     'asr_path': '/voice/asr/stream' if self.config.audio_stream else '/voice/asr', 'sample_rate': 24000}
 

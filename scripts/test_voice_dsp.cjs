@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const Echo = require("../server/core_v2/web/echo.js");
 const VAD = require("../server/core_v2/web/vad.js");
+const Resampler = require("../server/core_v2/web/pcm.js");
 const {
   VoiceSentences,
   PCMPlayback,
@@ -77,6 +78,47 @@ const {
     0,
     "played acoustic tail after interruption does not trigger another turn",
   );
+  // Real playback is 24 kHz; phone capture commonly runs at 44.1/48 kHz.
+  const reference24 = Float32Array.from({ length: 72000 }, (_, i) => {
+    const at = (i * 16000) / 24000,
+      low = Math.floor(at),
+      part = at - low;
+    return (voice[low] || 0) * (1 - part) + (voice[low + 1] || 0) * part;
+  });
+  for (const captureRate of [44100, 48000]) {
+    const cross = new Echo();
+    cross.add(reference24, 0, 24000);
+    const resampler = new Resampler(captureRate);
+    let falseStarts = 0;
+    const detector = new VAD({
+      start: () => falseStarts++,
+      data() {},
+      end() {},
+    });
+    for (let start = 0; start < 2 * captureRate; start += 512) {
+      const input = Float32Array.from({ length: 512 }, (_, j) => {
+        const at = ((start + j) / captureRate - 0.087) * 24000;
+        if (at < 0) return 0;
+        const low = Math.floor(at),
+          part = at - low;
+        return (
+          0.45 *
+          ((reference24[low] || 0) * (1 - part) +
+            (reference24[low + 1] || 0) * part)
+        );
+      });
+      const clean = cross.process(
+        resampler.push(input),
+        (start + 512) / captureRate,
+      );
+      detector.push(clean);
+    }
+    assert.equal(
+      falseStarts,
+      0,
+      "resampled phone capture does not turn speaker echo into a new utterance",
+    );
+  }
   const heardPlayer = new PCMPlayback({ currentTime: 2 });
   heardPlayer.segments = [
     { text: "已经播完。", start: 0, end: 1 },

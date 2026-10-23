@@ -19,3 +19,5 @@ app.include_router(audio_stream.router)
 上线时复制已知网关 release 到新目录，仅新增本模块和 import；先以禁用后台调度的临时 loopback 实例验收。正式切换前备份数据库与 systemd 配置，读取运行队列，等现有请求完成，再使用正常 service 入口启动新 release。旧接口行为不变。systemd 的多份 drop-in 按名字排序，应检查最终 WorkingDirectory 及 `/proc/<MainPID>/cwd`，不能只用模型目录 HTTP 200 判断新版本已生效。切换可临时使用不强杀的优雅退出，完成后恢复原停止超时。检查失败恢复原 WorkingDirectory 并重启；不回滚用户模型调用或覆盖现有账号库。
 
 声笺侧启用 `SHENGJIAN_AUDIO_STREAM=1`；仅在两个实际端点验收成功后开启。关闭此配置会恢复原有整句识别模式，旧 `/voice/asr`、`/voice/speech` 始终保留。
+
+AAC 探测窗口由 2048 缩至 32 字节，并显式刷新输出包。在 24/44.1/48 kHz、单／双声道合成样例中，完整解码输出逐样本一致，首批输出由约 304–363 ms 降至 39–40 ms。脚本为 `scripts/check_stream_decoder.py`，参数依据 [FFmpeg 格式文档](https://www.ffmpeg.org/ffmpeg-all.html)。没有启用本次测试中解码失败的 direct 选项。真实首音还包含上游推理、握手和网络时间，解码降幅不等于端到端保证。
