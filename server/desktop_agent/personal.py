@@ -28,6 +28,7 @@ class PersonalStore:
         self.db.executescript('''PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
           CREATE TABLE IF NOT EXISTS memories(id TEXT PRIMARY KEY, scope TEXT NOT NULL, text TEXT NOT NULL, fingerprint TEXT NOT NULL, created REAL NOT NULL, deleted INTEGER DEFAULT 0, UNIQUE(scope,fingerprint));
           CREATE TABLE IF NOT EXISTS settings(scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(scope,key));
+          CREATE TABLE IF NOT EXISTS life_memories(scope TEXT NOT NULL,id TEXT NOT NULL,text TEXT NOT NULL,day TEXT NOT NULL,sources TEXT NOT NULL,synced REAL NOT NULL,PRIMARY KEY(scope,id));
           CREATE TABLE IF NOT EXISTS schedules(id TEXT PRIMARY KEY, scope TEXT NOT NULL, title TEXT NOT NULL, prompt TEXT NOT NULL, kind TEXT NOT NULL, local_time TEXT, timezone TEXT NOT NULL, at REAL, enabled INTEGER NOT NULL, deleted INTEGER DEFAULT 0, created REAL NOT NULL);
           CREATE TABLE IF NOT EXISTS schedule_runs(schedule_id TEXT NOT NULL, slot TEXT NOT NULL, state TEXT NOT NULL, task_id TEXT, created REAL NOT NULL, PRIMARY KEY(schedule_id,slot));
           PRAGMA user_version=1;''')
@@ -87,10 +88,24 @@ class PersonalStore:
 
     def context(self, prompt):
         if not self.settings()['memory_context']: return ''
-        rows = self.memories()
+        rows = self.memories() + self.life_memories()
         terms = set(re.findall(r'[A-Za-z]{3,}|[\u4e00-\u9fff]{2}', prompt))
         rows.sort(key=lambda r: sum(term in r['text'] for term in terms), reverse=True)
         return '\n'.join('- '+r['text'] for r in rows[:12])[:4000]
+
+    def life_memories(self):
+        with self.lock:
+            return [dict(r) for r in self.db.execute('SELECT id,text,day,sources,synced FROM life_memories WHERE scope=? ORDER BY day DESC,id', (self.scope,))]
+
+    def sync_life(self, rows):
+        # Full snapshot: deletions on the server also retract local context.
+        if not isinstance(rows,list) or len(rows)>500:raise ValueError('invalid_life_snapshot')
+        for row in rows:
+            if not isinstance(row,dict) or any(not isinstance(row.get(k),str) for k in ('id','text','day')) or not 1<=len(row['text'])<=1000 or not isinstance(row.get('sources'),list):raise ValueError('invalid_life_snapshot')
+        with self.tx() as db:
+            db.execute('DELETE FROM life_memories WHERE scope=?',(self.scope,))
+            for row in rows:db.execute('INSERT INTO life_memories VALUES(?,?,?,?,?,?)',(self.scope,row['id'],row['text'],row['day'],json.dumps(row['sources']),time.time()))
+            db.execute("INSERT INTO settings VALUES(?,'life_synced_at',?) ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value",(self.scope,json.dumps(time.time())))
 
     def schedules(self):
         with self.lock:

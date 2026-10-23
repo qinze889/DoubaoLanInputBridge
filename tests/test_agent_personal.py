@@ -108,3 +108,14 @@ def test_parallel_children_have_distinct_background_profiles_and_no_native_input
         assert not tools.perform({'tool': 'browser', 'action': 'observe', '_agent_id': 'child-d'})['ok']
         children = list(tools.children.values()); tools.close_children()
         assert all(child.closed for child in children) and not tools.children
+
+
+def test_cloud_life_snapshot_is_scoped_and_deletions_retract_context(tmp_path):
+    rows=[{'id':'life-a','text':'喜欢简短回答','day':'2026-10-23','sources':['record-a']}]
+    with PersonalStore(tmp_path,'device-a') as a,PersonalStore(tmp_path,'device-b') as b:
+        a.sync_life(rows)
+        assert '简短回答' in a.context('回答') and not b.life_memories()
+        assert 'sources' in a.life_memories()[0]
+        a.configure({'memory_context':False});assert a.context('回答')==''
+        a.sync_life([]);assert not a.life_memories()
+        with pytest.raises(ValueError):a.sync_life([{'id':'broken'}])

@@ -72,7 +72,30 @@ class AgentRuntime:
                 elif action == 'schedule': store.schedule(body.get('schedule', {}))
                 elif action == 'schedule_state': store.change_schedule(body.get('id'), body.get('enabled', False), body.get('deleted', False))
                 else: raise ValueError('unknown_personal_action')
-            return {'ok': True, 'settings': store.settings(), 'memories': store.memories(), 'schedules': store.schedules(), 'runs': store.runs()}
+            return {'ok': True, 'settings': store.settings(), 'memories': store.memories(), 'life_memories': store.life_memories(), 'schedules': store.schedules(), 'runs': store.runs()}
+
+    def sync_life(self, connector):
+        account = CloudAccount(self.directory)
+        token = account.vault.read()
+        if not token:
+            connector.personal.sync_life([])
+            return
+        try:
+            devices = account.request('/devices', token=token)['devices']
+            if not any(d['id']==connector.config['device_id'] and not d['revoked'] and 'tasks' in d['grants'] for d in devices):
+                connector.personal.sync_life([])
+                return
+            data = account.request('/life/memories', token=token)
+            if account.vault.read()==token:connector.personal.sync_life(data['memories'])
+            else:connector.personal.sync_life([])
+        except PermissionError:
+            connector.personal.sync_life([])
+
+    async def life_sync(self, connector):
+        while True:
+            try:await asyncio.to_thread(self.sync_life, connector)
+            except Exception:pass  # A network outage keeps the last verified account's snapshot.
+            await asyncio.sleep(60)
 
     def submit(self, prompt, request_id=None, expires_in=None):
         if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 16000:
@@ -212,10 +235,11 @@ class AgentRuntime:
                     self.connector.journal.close()
                     return
                 scheduled = asyncio.create_task(self.scheduler(self.connector))
+                life = asyncio.create_task(self.life_sync(self.connector))
                 try: await self.connector.run()
                 finally:
-                    scheduled.cancel()
-                    await asyncio.gather(scheduled, return_exceptions=True)
+                    scheduled.cancel();life.cancel()
+                    await asyncio.gather(scheduled, life, return_exceptions=True)
             asyncio.run(connect())
         except asyncio.CancelledError:
             pass

@@ -290,3 +290,17 @@ small {
   font-size: 12px;
   margin-top: 8px;
 }
+
+.life-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(260px, 1fr); gap: 24px; }
+.life-layout > *, .life-entry { min-width: 0; }
+.life-entry p, #life-jobs p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.life-entry img { display: block; width: auto; max-width: 100%; max-height: 420px; object-fit: contain; border-radius: 12px; margin: 12px 0; }
+.life-file-button { display: inline-flex; align-items: center; padding: 9px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; position: relative; overflow: hidden; }
+.life-file-button input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+.life-file-button:focus-within { outline: 2px solid var(--blue); outline-offset: 2px; }
+#life .actions { flex-wrap: wrap; }
+#life-status { min-height: 1.5em; }
+#life-settings { padding: 16px 0; }
+#life-memories textarea { width: 100%; box-sizing: border-box; margin: 10px 0; }
+#life-jobs article { border-top: 1px solid var(--line); padding: 8px 0; }
+@media (max-width: 800px) { .life-layout { grid-template-columns: 1fr; } #life .heading { flex-wrap: wrap; gap: 12px; } }

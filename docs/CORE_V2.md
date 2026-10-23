@@ -146,3 +146,7 @@ swift run --package-path ios ClientChecks
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：MIT，固定 npm `@deepseek-ai/dsh@0.2.1-rc.2`，使用官方 headless JSON 输出及 `approval/request` 扩展点。审批插件为本仓库独立实现。升级版本必须重新验收事件、审批及取消语义。
 - [Codex App Server](https://learn.chatgpt.com/docs/app-server)：使用本机 CLI 生成的 JSON schema核对 initialize、thread/start、turn/start、command/file approval。只接受本次操作，不写 acceptForSession 或永久策略。
 - NanoMuse：仅参考设备任务、会话寿命与交互思路；没有复制其 GPL 实现，也不宣称已经具备全部 Muse 功能。
+
+## 生活记录与视觉模型
+
+见 [生活记录、WorkBuddy 看图和晚间记忆](LIFE-RECORDS.md)。新增 `/life`、`/life/settings`、`/life/entries`、`/life/images`、`/life/consolidate` 和 `/life/memories` 认证接口，使用独立 life SQLite WAL。图像模型已实际接通 `workbuddy/cn:glm-5v-turbo`，凭据只留服务器。

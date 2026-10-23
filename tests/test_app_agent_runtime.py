@@ -50,3 +50,23 @@ def test_no_login_does_not_enroll_or_install(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match='先在账号区登录'):
         agent_runtime.AgentRuntime(tmp_path).prepare(True)
     assert not (tmp_path/'agent/device.json').exists()
+
+
+def test_life_sync_revalidates_account_device_and_session(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    from server.desktop_agent.personal import PersonalStore
+    values={'token':'session-a','device':'device-a'}
+    rows=[{'id':'life-a','text':'今天散步了','day':'2026-10-23','sources':['record-a']}]
+    class Account:
+        vault=SimpleNamespace(read=lambda:values['token'])
+        def __init__(self,directory):pass
+        def request(self,path,token=''):
+            if path=='/devices':return {'devices':[{'id':values['device'],'revoked':False,'grants':['tasks']}]}
+            return {'memories':rows}
+    monkeypatch.setattr(agent_runtime,'CloudAccount',Account)
+    runtime=agent_runtime.AgentRuntime(tmp_path)
+    with PersonalStore(tmp_path/'personal','device-a') as store:
+        connector=SimpleNamespace(personal=store,config={'device_id':'device-a'})
+        runtime.sync_life(connector);assert len(store.life_memories())==1
+        values['device']='other-account-device';runtime.sync_life(connector);assert not store.life_memories()
+        values['device']='device-a';runtime.sync_life(connector);values['token']='';runtime.sync_life(connector);assert not store.life_memories()

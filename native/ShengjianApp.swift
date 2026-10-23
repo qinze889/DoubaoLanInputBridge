@@ -810,6 +810,11 @@ struct AgentPersonalView: View {
                     HStack { Text(row["text"] as? String ?? ""); Spacer(); Button("删除") { Task { await change(["action": "forget", "id": row["id"] ?? ""]) } } }
                 }
                 Text("手机也可以说“记住：回复请简洁”。").font(.caption).foregroundStyle(.secondary)
+                Text("生活记录沉淀的记忆").font(.headline)
+                Text("从同账号云端同步到本机，每分钟更新。来源、修改和删除在扫码页面的“生活记录”中管理。").font(.caption).foregroundStyle(.secondary)
+                ForEach(data["life_memories"] as? [[String: Any]] ?? [], id: \.selfID) { row in
+                    Text((row["day"] as? String ?? "")+" · "+(row["text"] as? String ?? "")).font(.callout).textSelection(.enabled)
+                }
                 Divider()
                 Text("每日定时任务").font(.headline)
                 Text("本机运行声笺且 Agent 在线时触发；错过时间不补跑。异常中断不重复执行。时区：Asia/Shanghai。").font(.caption).foregroundStyle(.secondary)

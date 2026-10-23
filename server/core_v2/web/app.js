@@ -75,9 +75,10 @@ async function api(
     signal: options.signal,
     headers: {
       Authorization: "Bearer " + requestToken,
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(body !== undefined ? { "Content-Type": options.raw ? "image/jpeg" : "application/json" } : {}),
+      ...(options.requestId ? { "X-Request-ID": options.requestId } : {}),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : options.raw ? body : JSON.stringify(body),
   });
   if (!r.ok) {
     let data = {};
@@ -97,8 +98,10 @@ function showPage(id) {
   document
     .querySelectorAll("nav button")
     .forEach((b) => b.classList.toggle("selected", b.dataset.page === id));
+  if (id === "life") window.ShengjianLife?.refresh();
 }
 function logoutLocal() {
+  window.ShengjianLife?.deactivate();
   reportEpoch++;
   authEpoch++;
   taskEpoch++;
@@ -184,6 +187,7 @@ async function refresh() {
   ]);
   if (owner !== token || !token) return;
   $("balance").textContent = `可用 ${me.balance} 积分 · 预留 ${me.reserved}`;
+  window.ShengjianLife?.activate(me.user_id, { json, image: (blob, id) => api('/life/images', blob, 'POST', {raw: true, requestId: id}), fetchImage: id => api('/life/images/'+id) });
   computerDevices = devices.devices.filter(d => !d.revoked && d.grants.includes("tasks"));
   const selected = $("destination").value;
   $("destination").replaceChildren(new Option("语音对话", "chat"));
@@ -409,6 +413,7 @@ async function openTask(id, { reveal = true, conversation = false } = {}) {
   connect();
 }
 function message(role, text) {
+  window.ShengjianLife?.capture(role, text);
   $("messages").append(el("div", text, "message " + role));
   $("messages").scrollTop = $("messages").scrollHeight;
 }
@@ -475,6 +480,7 @@ async function submitPrompt(prompt) {
       }
       await refresh();
     } else if (selected !== "chat") {
+      window.ShengjianLife?.capture("user", prompt);
       const d = await json("/tasks", {
         device_id: $("destination").value,
         prompt,
@@ -788,6 +794,8 @@ async function streamChat(history, model, owner, operation) {
     );
     if (owner !== token || operation !== composeEpoch) return;
     if (!complete || !text) throw new Error("model_result_unknown");
+    window.ShengjianLife?.capture('assistant', text);
+    turn.lifeRecorded = true;
     $("prompt").value = "";
     await speech?.done();
     turn.complete = true;
@@ -909,6 +917,7 @@ function interruptReply(session = live) {
   if (turn && !turn.complete && !turn.interrupted) {
     turn.interrupted = true;
     const heard = turn.voiced ? turn.player?.heard() || "" : turn.text;
+    if (!turn.lifeRecorded && heard) { window.ShengjianLife?.capture('assistant', heard+'（已打断）'); turn.lifeRecorded = true; }
     messages = [
       ...turn.history,
       {

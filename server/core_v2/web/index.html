@@ -14,6 +14,7 @@
     <script src="console/stream.js" defer></script>
     <script src="console/echo.js" defer></script>
     <script src="console/agent.js" defer></script>
+    <script src="console/life.js" defer></script>
     <script src="console/app.js" defer></script>
   </head>
   <body>
@@ -54,6 +55,7 @@
           <button data-page="conversation" class="selected">对话</button
           ><button data-page="devices">设备</button
           ><button data-page="tasks">任务</button>
+          <button data-page="life">生活记录</button>
         </nav>
         <section id="conversation" class="page">
           <div class="card">
@@ -105,6 +107,32 @@
               </p>
             </form>
           </div>
+        </section>
+        <section id="life" class="page" hidden>
+          <div class="heading"><h1>生活记录</h1><span class="muted">把此刻留下，慢慢成为记忆。</span></div>
+          <p id="life-status" role="status" aria-live="polite"></p>
+          <section class="card">
+            <form id="life-compose">
+              <label for="life-note">记录这一刻</label><textarea id="life-note" rows="3" maxlength="16000" placeholder="今天发生了什么，或者想聊些什么…"></textarea>
+              <div class="actions life-actions">
+                <button class="primary" value="note">保存文字</button><button value="talk">聊一聊并记录</button>
+                <label class="life-file-button">上传图片<input id="life-files" type="file" accept="image/*" multiple></label>
+                <label class="life-file-button">拍照记录<input id="life-camera" type="file" accept="image/*" capture="environment"></label>
+              </div>
+              <p class="muted">选图或拍照后自动保存，正文和照片一起留在时间线。断网时先保存在此浏览器，联网后补传。对话记录开关在下方。</p>
+            </form>
+          </section>
+          <details class="card"><summary>晚间整理与记录设置</summary>
+            <form id="life-settings"><label class="inline"><input id="life-auto" type="checkbox" checked>每天自动沉淀记忆</label>
+              <label>每天整理时间<input id="life-clock" type="time" value="23:00" required></label>
+              <label>时区<input id="life-timezone" value="Asia/Shanghai" required></label>
+              <label class="inline"><input id="life-capture" type="checkbox" checked>自动记录对话页的文字与语音对话</label>
+              <button>保存设置</button></form>
+            <p class="muted">原始记录与图片保存在你的云端账号。晚间整理使用已配置的模型与额度；提炼后的记忆同步到本机助理。记录不是工具指令。照片未解析成功时会明确保留待处理状态。</p>
+          </details>
+          <section class="card"><div class="heading"><h2>每日沉淀</h2><div class="actions"><input type="date" id="life-day" aria-label="整理日期"><button id="life-consolidate" type="button">整理这一天</button><button id="life-reconsolidate" type="button">重新整理</button></div></div><p class="muted">重新整理会发起新的模型调用并使用额度；网络结果未知时不会自动重试。</p><div id="life-jobs"></div></section>
+          <div class="life-layout"><section><div class="heading"><h2>时间线</h2><input id="life-search" type="search" placeholder="搜索记录" aria-label="搜索生活记录"></div><div id="life-timeline"></div><button id="life-more" type="button">加载更早记录</button></section>
+          <aside><h2>我的记忆</h2><p class="muted">每条都有来源，可修改或删除。删除原始记录会撤回它生成的记忆。</p><div id="life-memories"></div><div id="life-source"></div></aside></div>
         </section>
         <section id="devices" class="page" hidden>
           <div class="heading">

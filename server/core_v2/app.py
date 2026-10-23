@@ -102,6 +102,8 @@ class RateLimit:
 def create_app(directory, admin_token=None, providers=None):
     directory = Path(directory)
     store = Store(directory)
+    from .life import LifeService, mount as mount_life
+    life = LifeService(directory, store, providers)
     if admin_token is None:
         path = directory/'admin.token'
         if not path.exists():
@@ -117,7 +119,11 @@ def create_app(directory, admin_token=None, providers=None):
 
     @asynccontextmanager
     async def lifespan(app):
+        nightly = asyncio.create_task(life.nightly())
         yield
+        nightly.cancel()
+        await asyncio.gather(nightly, return_exceptions=True)
+        await life.close()
         for ws in list(peers.values()):
             try:
                 await ws.close(code=1012)
@@ -128,6 +134,7 @@ def create_app(directory, admin_token=None, providers=None):
     app = FastAPI(title='Shengjian Core v2', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store = store
     app.state.peers = peers
+    app.state.life = life
 
     @app.exception_handler(Fault)
     async def fault_handler(request, error):
@@ -135,6 +142,9 @@ def create_app(directory, admin_token=None, providers=None):
 
     @app.middleware('http')
     async def boundaries(request, call_next):
+        if request.url.path == PREFIX+'/life/images' and request.method=='POST':
+            try:user(request.headers.get('authorization'))
+            except Fault as error:return JSONResponse({'ok':False,'error':error.code},status_code=error.status)
         if request.url.path.startswith(PREFIX+'/auth/'):
             origin = request.headers.get('origin')
             if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and origin != str(request.base_url).rstrip('/')):
@@ -142,7 +152,8 @@ def create_app(directory, admin_token=None, providers=None):
         total, chunks = 0, []
         async for chunk in request.stream():
             total += len(chunk)
-            if total > 128*1024:
+            limit = 8*1024*1024 if request.url.path == PREFIX+'/life/images' and request.method=='POST' else 128*1024
+            if total > limit:
                 return JSONResponse({'ok': False, 'error': 'body_too_large'}, status_code=413)
             chunks.append(chunk)
         request._body = b''.join(chunks)
@@ -389,6 +400,7 @@ def create_app(directory, admin_token=None, providers=None):
 
     from .assistant import mount as mount_assistant
     mount_assistant(app, store, user, peers)
+    mount_life(app, life, user)
     if providers:
         providers.mount(app, store, user)
     static = Path(__file__).parent/'web'
@@ -398,7 +410,7 @@ def create_app(directory, admin_token=None, providers=None):
             return FileResponse(static/'index.html')
         @app.get(PREFIX+'/console/{asset}')
         async def asset(asset: str):
-            if asset not in {'app.js', 'app.css', 'pcm.js', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js'}:
+            if asset not in {'app.js', 'app.css', 'pcm.js', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js', 'life.js'}:
                 raise Fault('not_found', 404)
             return FileResponse(static/asset)
     return app
