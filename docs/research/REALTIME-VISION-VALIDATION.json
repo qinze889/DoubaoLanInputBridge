@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "default_model": "workbuddy/cn:glm-5v-turbo",
+  "first_token_seconds": 2.26,
+  "alternative_model": "workbuddy/cn:kimi-k2.6",
+  "photo_and_dialogue_entries": 7,
+  "nightly_memory": true,
+  "photo_deletion_detaches_chats_and_memory": true,
+  "cross_account_denied": true,
+  "date": "2026-10-23",
+  "timezone": "Asia/Shanghai",
+  "regression_tests": 385,
+  "virtual_device_test": [
+    "image_decode_gate",
+    "photo_ack_gate",
+    "camera_ready_gate",
+    "ASR_to_visual_SSE_to_early_TTS",
+    "barge_in_discards_old_deltas_and_audio",
+    "same_photo_followup",
+    "preview_does_not_upload",
+    "one_frame_per_question",
+    "camera_stop_releases_tracks",
+    "clear_context",
+    "source_records_and_delete",
+    "saved_photo_to_voice",
+    "logout_isolation"
+  ],
+  "phone_hardware": "awaiting_user_verification",
+  "source_scope": "Original implementation informed by bounded Doubao REA and public Volcengine RTC docs; not a recovered private video stack"
+}

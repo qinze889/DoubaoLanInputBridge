@@ -150,3 +150,5 @@ swift run --package-path ios ClientChecks
 ## 生活记录与视觉模型
 
 见 [生活记录、WorkBuddy 看图和晚间记忆](LIFE-RECORDS.md)。新增 `/life`、`/life/settings`、`/life/entries`、`/life/images`、`/life/consolidate` 和 `/life/memories` 认证接口，使用独立 life SQLite WAL。图像模型已实际接通 `workbuddy/cn:glm-5v-turbo`，凭据只留服务器。
+
+实时聊图：模型接口新增可选 `life_images`，仅用户会话可访问其自己的图片，服务端按账号选择视觉模型并支持 SSE；参见[实时语音聊图与摄像头画面](REALTIME-VISION.md)。既有不带图片的请求合同保持。

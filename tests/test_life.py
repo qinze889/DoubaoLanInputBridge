@@ -194,3 +194,13 @@ def test_selected_model_reaches_upstream_even_when_not_in_general_chat_picker(tm
     assert app.state.life.launch(a['user_id'],today(),scheduled=True)['id']==job['id']
     assert 'vision-b' not in {m['id'] for m in asyncio.run(provider.models())}
     s.close();app.state.store.close()
+
+
+def test_deleting_photo_detaches_chat_refs_and_retracts_related_memory(tmp_path):
+    s=LifeStore(tmp_path);image=s.add_image('a',b'jpeg',1,1,'linked-chat-photo-123')
+    photo=record(s,kind='photo',images=[image['id']]);chat=record(s,kind='chat',images=[image['id']])
+    job,_,_=s.claim('a',today());s.finish(job,output(chat));assert s.memories('a')
+    s.delete_entry('a',photo['id'])
+    assert s.entry('a',chat['id'])['text'] and s.entry('a',chat['id'])['images']==[]
+    assert not s.memories('a') and not (s.files/(image['id']+'.jpg')).exists()
+    s.close()

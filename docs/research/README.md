@@ -36,3 +36,5 @@
 暂不整体启用 DSH experimental-agent-team：它另有团队成员、共享任务及 revision 语义，不能与当前父子代理状态混用。连接器 OAuth、跨任务长期会话与授权邮箱、任意桌面 App 的虚拟机执行需要独立接入，不把 npm 已安装或静态字符串作为完成验收。
 
 - [WorkBuddy 识图模型双图验证与可选列表](VISION-MODEL-VALIDATION.md) · [脱敏结果](VISION-MODEL-VALIDATION.json)
+
+- [豆包实时视觉对话：安装包证据、公开机制与边界](DOUBAO-LIVE-VISION.md) · [WorkBuddy 图片流式验证](VISION-STREAM-VALIDATION.json)

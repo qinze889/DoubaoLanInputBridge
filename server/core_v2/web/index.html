@@ -14,6 +14,7 @@
     <script src="console/stream.js" defer></script>
     <script src="console/echo.js" defer></script>
     <script src="console/agent.js" defer></script>
+    <script src="console/visual.js" defer></script>
     <script src="console/life.js" defer></script>
     <script src="console/app.js" defer></script>
   </head>
@@ -72,6 +73,17 @@
               <p id="live-state" role="status" hidden></p>
               <p id="voice-latency" class="muted" hidden></p>
             </div>
+            <section class="visual-panel" aria-label="实时看图">
+              <div class="actions">
+                <label class="life-file-button">上传图片聊<input id="visual-upload" type="file" accept="image/*"></label>
+                <label class="life-file-button">拍照聊<input id="visual-take-photo" type="file" accept="image/*" capture="environment"></label>
+                <button id="visual-camera-toggle" type="button" aria-pressed="false">开启摄像头</button>
+                <button id="visual-clear" type="button" disabled>结束看图</button>
+              </div>
+              <video id="visual-video" muted autoplay playsinline hidden></video>
+              <img id="visual-photo" alt="当前对话图片" hidden>
+              <p id="visual-status" class="muted" role="status">拍照或上传后即可直接语音聊图，也可以开启摄像头边看边聊。</p>
+            </section>
             <div id="messages" role="log" aria-live="polite"></div>
             <form id="compose">
               <label for="prompt">输入或说出你的想法</label
@@ -114,7 +126,7 @@
           <section class="card">
             <label for="life-vision-model">识图模型</label>
             <select id="life-vision-model" disabled><option>正在载入已验证的模型…</option></select>
-            <p class="muted">只列出实际通过识图测试的模型，选择后自动保存到当前账号。更换模型后，点击“整理这一天”使用新模型，已有同版本结果时复用。“重新整理”会再次生成记忆并使用额度；仅切换设置不改变已有记忆。</p>
+            <p class="muted">只列出实际通过识图测试的模型，选择后自动保存到当前账号，下一轮看图对话生效。更换模型后，点击“整理这一天”使用新模型，已有同版本结果时复用。“重新整理”会再次生成记忆并使用额度；仅切换设置不改变已有记忆。</p>
           </section>
           <section class="card">
             <form id="life-compose">

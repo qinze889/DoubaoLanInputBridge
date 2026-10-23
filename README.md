@@ -7,7 +7,7 @@
 [![Windows CI](https://github.com/qinze889/DoubaoLanInputBridge/actions/workflows/windows-client.yml/badge.svg?branch=main)](https://github.com/qinze889/DoubaoLanInputBridge/actions/workflows/windows-client.yml)
 [![Apple CI](https://github.com/qinze889/DoubaoLanInputBridge/actions/workflows/apple-clients.yml/badge.svg?branch=main)](https://github.com/qinze889/DoubaoLanInputBridge/actions/workflows/apple-clients.yml)
 
-账号扫码页新增[生活记录](docs/LIFE-RECORDS.md)：文字、照片、对话时间线，WorkBuddy 看图，每晚整理为有来源的记忆，并同步到本机 Agent。
+账号扫码页新增[生活记录](docs/LIFE-RECORDS.md)：文字、照片、对话时间线，WorkBuddy [实时语音聊图与摄像头提问取帧](docs/REALTIME-VISION.md)，每晚整理为有来源的记忆，并同步到本机 Agent。
 
 ## 下载与版本
 

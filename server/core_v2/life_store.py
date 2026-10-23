@@ -147,8 +147,16 @@ class LifeStore:
             row=db.execute('SELECT * FROM entries WHERE id=? AND uid=? AND deleted=0',(ident,uid)).fetchone()
             if not row: raise Fault('life_record_not_found',404)
             db.execute("UPDATE entries SET deleted=1,text='',images='[]',updated=? WHERE id=?",(time.time(),ident))
+            withdrawn={ident}
+            if row['kind']!='chat':
+                removed=set(json.loads(row['images']))
+                for linked in db.execute("SELECT id,images FROM entries WHERE uid=? AND deleted=0 AND kind='chat'",(uid,)).fetchall():
+                    refs=json.loads(linked['images'])
+                    if removed.intersection(refs):
+                        db.execute('UPDATE entries SET images=?,updated=? WHERE id=?',(encode([i for i in refs if i not in removed]),time.time(),linked['id']))
+                        withdrawn.add(linked['id'])
             for memory in db.execute('SELECT id,sources FROM memories WHERE uid=? AND deleted=0',(uid,)).fetchall():
-                if ident in json.loads(memory['sources']):
+                if withdrawn.intersection(json.loads(memory['sources'])):
                     db.execute("UPDATE memories SET deleted=1,text='',updated=? WHERE id=?",(time.time(),memory['id']))
                     db.execute('DELETE FROM memory_history WHERE id=?',(memory['id'],))
             # Older summaries could contain removed material; invalidate all derived summaries for this owner.

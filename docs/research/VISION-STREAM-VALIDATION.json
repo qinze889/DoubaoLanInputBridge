@@ -1,0 +1,201 @@
+{
+  "date": "2026-10-23",
+  "source": "WorkBuddy cn gateway",
+  "passed": 24,
+  "tested": 24,
+  "limits": "One synthetic image, max_tokens=250, low effort on DeepSeek V4 IDs; first-token timing excludes ASR/TTS and handset network. Not a live-video latency claim.",
+  "models": [
+    {
+      "id": "workbuddy/cn:fast-model",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.79,
+      "seconds": 3.05,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:balanced-model",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.85,
+      "seconds": 3.16,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:hy3",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.21,
+      "seconds": 2.51,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:deep-model",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 4.38,
+      "seconds": 5.06,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:hy3-b",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.36,
+      "seconds": 2.73,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:hy3-c",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.37,
+      "seconds": 2.68,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:hy3-x",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.11,
+      "seconds": 2.49,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:hy4-preview-ctrl",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.16,
+      "seconds": 2.37,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:hy4-preview",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.2,
+      "seconds": 2.52,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:hy4-preview-exp",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 1.88,
+      "seconds": 2.26,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:glm-5v-turbo",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 1.83,
+      "seconds": 2.31,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:glm-5.3",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.18,
+      "seconds": 2.45,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:glm-5.3-flash",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.21,
+      "seconds": 2.56,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:glm-5.3-flashx",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.13,
+      "seconds": 2.3,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:glm-5.2",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.17,
+      "seconds": 2.49,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:kimi-k3-2",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 6.72,
+      "seconds": 7.41,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2.6",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.1,
+      "seconds": 2.3,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2.7",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.38,
+      "seconds": 2.7,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2.5",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 1.59,
+      "seconds": 1.89,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:minimax-m3-pay",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 1.52,
+      "seconds": 1.86,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v4.1-flash",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 1.97,
+      "seconds": 2.25,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v4-flash",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 1.96,
+      "seconds": 2.17,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:kimi-k2.8-preview",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 20.79,
+      "seconds": 21.41,
+      "done": true
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v4-pro",
+      "passed": true,
+      "status": 200,
+      "first_token_seconds": 2.32,
+      "seconds": 2.77,
+      "done": true
+    }
+  ]
+}

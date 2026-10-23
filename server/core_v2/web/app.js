@@ -94,6 +94,7 @@ async function json(path, body, method) {
   return (await api(path, body, method)).json();
 }
 function showPage(id) {
+  if(id!=="conversation")window.ShengjianVisual?.stopCamera();
   document.querySelectorAll(".page").forEach((p) => (p.hidden = p.id !== id));
   document
     .querySelectorAll("nav button")
@@ -101,6 +102,7 @@ function showPage(id) {
   if (id === "life") window.ShengjianLife?.refresh();
 }
 function logoutLocal() {
+  window.ShengjianVisual?.deactivate();
   window.ShengjianLife?.deactivate();
   reportEpoch++;
   authEpoch++;
@@ -187,6 +189,7 @@ async function refresh() {
   ]);
   if (owner !== token || !token) return;
   $("balance").textContent = `可用 ${me.balance} 积分 · 预留 ${me.reserved}`;
+  window.ShengjianVisual?.activate(me.user_id, {json, fetchImage:id=>api('/life/images/'+id)});
   window.ShengjianLife?.activate(me.user_id, { json, image: (blob, id) => api('/life/images', blob, 'POST', {raw: true, requestId: id}), fetchImage: id => api('/life/images/'+id) });
   computerDevices = devices.devices.filter(d => !d.revoked && d.grants.includes("tasks"));
   const selected = $("destination").value;
@@ -412,8 +415,8 @@ async function openTask(id, { reveal = true, conversation = false } = {}) {
   }
   connect();
 }
-function message(role, text) {
-  window.ShengjianLife?.capture(role, text);
+function message(role, text, images=[]) {
+  window.ShengjianLife?.capture(role, text, images);
   $("messages").append(el("div", text, "message " + role));
   $("messages").scrollTop = $("messages").scrollHeight;
 }
@@ -462,7 +465,7 @@ async function submitPrompt(prompt) {
   stopSpeech();
   try {
     const selected = $("destination").value;
-    if ((live || agentMode || selected === "chat") && ShengjianAgent.shouldRoute(prompt, agentMode || selected !== "chat", currentTask)) {
+    if ((live || agentMode || selected === "chat") && ShengjianAgent.shouldRoute(prompt, agentMode || selected !== "chat", window.ShengjianVisual?.hasContext() && !/任务|电脑|agent|harness/i.test(prompt) ? null : currentTask)) {
       message("user", prompt);
       const data = await json("/assistant/turn", { text: prompt, request_id: crypto.randomUUID(), device_id: selected === "chat" ? null : selected, task_id: currentTask || null, engine: $("engine").value });
       if (owner !== token || operation !== composeEpoch) return;
@@ -492,7 +495,9 @@ async function submitPrompt(prompt) {
       await openTask(d.task.id);
       if (owner === token && operation === composeEpoch) await refresh();
     } else {
-      message("user", prompt);
+      const visual=await window.ShengjianVisual?.snapshot(prompt) || {images:[]};
+      if(owner!==token || operation!==composeEpoch)return;
+      message("user", prompt,visual.images);
       const models = live?.models || (await json("/models")),
         model = models.data.find((m) => m.input_modalities.includes("text"));
       if (owner !== token || operation !== composeEpoch) return;
@@ -501,11 +506,12 @@ async function submitPrompt(prompt) {
         -20,
       );
       if (live?.capabilities?.streaming_audio) {
-        await streamChat(history, model.id, owner, operation);
+        await streamChat(history, model.id, owner, operation, visual.images);
         return;
       }
       const r = await api("/model/v1/chat/completions", {
         model: model.id,
+        ...(visual.images.length?{life_images:visual.images}:{}),
         messages:
           live && $("destination").value === "chat"
             ? [
@@ -526,7 +532,7 @@ async function submitPrompt(prompt) {
       const text = d.choices?.[0]?.message?.content;
       if (typeof text !== "string") throw new Error("没有收到文字回复");
       messages = [...history, { role: "assistant", content: text }];
-      message("assistant", text);
+      message("assistant", text,visual.images);
       if (owner !== token || operation !== composeEpoch) return;
       $("prompt").value = "";
       if ($("speak").checked) await speak(text);
@@ -726,13 +732,14 @@ async function speakStreaming(text) {
   speech.push(text);
   await speech.done();
 }
-async function streamChat(history, model, owner, operation) {
+async function streamChat(history, model, owner, operation, images=[]) {
   const controller = new AbortController();
   replyController = controller;
   const session = live;
   session.replyStart = performance.now();
   const turn = {
     history,
+    images,
     text: "",
     voiced: $("speak").checked,
     complete: false,
@@ -751,6 +758,7 @@ async function streamChat(history, model, owner, operation) {
       "/model/v1/chat/completions",
       {
         model,
+        ...(images.length?{life_images:images}:{}),
         messages: [
           {
             role: "system",
@@ -794,7 +802,7 @@ async function streamChat(history, model, owner, operation) {
     );
     if (owner !== token || operation !== composeEpoch) return;
     if (!complete || !text) throw new Error("model_result_unknown");
-    window.ShengjianLife?.capture('assistant', text);
+    window.ShengjianLife?.capture('assistant', text,images);
     turn.lifeRecorded = true;
     $("prompt").value = "";
     await speech?.done();
@@ -917,7 +925,7 @@ function interruptReply(session = live) {
   if (turn && !turn.complete && !turn.interrupted) {
     turn.interrupted = true;
     const heard = turn.voiced ? turn.player?.heard() || "" : turn.text;
-    if (!turn.lifeRecorded && heard) { window.ShengjianLife?.capture('assistant', heard+'（已打断）'); turn.lifeRecorded = true; }
+    if (!turn.lifeRecorded && heard) { window.ShengjianLife?.capture('assistant', heard+'（已打断）',turn.images || []); turn.lifeRecorded = true; }
     messages = [
       ...turn.history,
       {
@@ -940,6 +948,7 @@ function interruptReply(session = live) {
   }
 }
 function stopLive(reason = "实时对话已结束") {
+  window.ShengjianVisual?.stopCamera();
   const session = live;
   live = null;
   if (session) {
@@ -1312,3 +1321,6 @@ async function restoreLogin() {
 }
 window.addEventListener("hashchange", restoreLogin);
 restoreLogin();
+
+window.addEventListener('shengjian:visual-change',()=>{interruptReply();const content='用户已结束看图，当前没有提供图片或摄像头画面。可以回顾历史对话，但不能声称看到当前环境。';messages=messages.filter(m=>m.role!=='system'||m.content!==content);if(!window.ShengjianVisual?.hasContext())messages=[...messages,{role:'system',content}];});
+window.ShengjianConversation={async openVisual(start=false){if(agentMode)$('agent-mode').click();$('destination').value='chat';showPage('conversation');if(start&&!live)await $('realtime').onclick();}};

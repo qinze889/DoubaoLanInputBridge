@@ -1,0 +1,46 @@
+const {chromium}=require('../desktop/node_modules/playwright');
+const {spawn}=require('node:child_process');const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'shengjian-visual-voice-')),origin='http://127.0.0.1:18783';
+ const server=spawn(path.resolve('.venv/bin/python'),['tests/fixtures/core_ui_server.py',root,'18783'],{env:{...process.env,SHENGJIAN_FIXTURE_STREAM:'1',SHENGJIAN_FIXTURE_VISUAL:'1'},stdio:'ignore'});let browser;
+ try{
+  for(let i=0;i<100;i++){try{if((await fetch(origin+'/shengjian/api/v2/health')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
+  browser=await chromium.launch({headless:true,executablePath:process.env.SHENGJIAN_UI_BROWSER,args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
+  const context=await browser.newContext({viewport:{width:390,height:844}}),page=await context.newPage(),errors=[],requests=[];page.setDefaultTimeout(20000);page.on('pageerror',e=>errors.push(e.message));
+  page.on('request',r=>{if(r.url().endsWith('/model/v1/chat/completions'))requests.push(JSON.parse(r.postData()));});
+  let finals=0;
+  await page.routeWebSocket(/\/voice\/asr\/stream$/,socket=>{socket.onMessage(data=>{if(typeof data==='string'){const c=JSON.parse(data);if(c.token)socket.send(JSON.stringify({type:'asr.ready',partial_results:true}));if(c.type==='finish'){finals++;socket.send(JSON.stringify({type:'asr.final',text:finals===1?'这张图片是什么？':finals===2?'再看看右边有什么？':'现在镜头里是什么？'}));socket.send(JSON.stringify({type:'asr.finished'}));}}else socket.send(JSON.stringify({type:'asr.partial',text:'正在问这张图'}));});});
+  await page.goto(origin+'/shengjian/api/v2/console');await page.getByLabel('用户名',{exact:true}).fill('browser-test');await page.getByLabel('密码',{exact:true}).fill('browser-password-123');await page.getByRole('button',{name:'登录',exact:true}).click();await page.locator('#workspace').waitFor({state:'visible'});
+  await page.evaluate(()=>{
+   window.audioStarts=0;window.audioStops=0;window.videoGrants=0;const real=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+   navigator.mediaDevices.getUserMedia=async c=>{if(c.video){window.videoGrants++;const stream=await real(c);window.cameraTracks=stream.getTracks();if(window.cameraGate)await window.cameraGate;return stream;}return{getTracks:()=>[{stop(){},addEventListener(){}}]};};
+   window.AudioContext=class{constructor(){this.sampleRate=16000;this.state='running';this.started=performance.now();}get currentTime(){return(performance.now()-this.started)/1000;}resume(){return Promise.resolve();}close(){this.state='closed';return Promise.resolve();}createMediaStreamSource(){return{connect(){},disconnect(){}};}createScriptProcessor(){return{connect(){},disconnect(){}};}createBuffer(c,length,rate){return{duration:length/rate,getChannelData:()=>new Float32Array(length)};}createBufferSource(){const ctx=this;return{connect(){},disconnect(){},start(at){window.audioStarts++;this.timer=setTimeout(()=>this.onended?.(),Math.max(0,(at-ctx.currentTime)*1000)+this.buffer.duration*1000);},stop(){window.audioStops++;clearTimeout(this.timer);this.onended?.();}};}};
+   window.feed=(voice,n)=>{for(let i=0;i<n;i++)live.processor.onaudioprocess({inputBuffer:{getChannelData:()=>new Float32Array(320).fill(voice?.1:0)}});};
+  });
+  const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=180;c.height=180;c.getContext('2d').fillRect(0,0,180,180);return c.toDataURL('image/png').split(',')[1];});
+  let releaseUpload;const uploadGate=new Promise(r=>releaseUpload=r);
+  await page.route('**/life/images',async route=>{if(route.request().method()==='POST')await uploadGate;await route.continue();});
+  await page.evaluate(()=>{const original=HTMLImageElement.prototype.decode;let first=true;HTMLImageElement.prototype.decode=function(){const decoded=original.call(this);if(!first)return decoded;first=false;return decoded.then(()=>new Promise(resolve=>{window.releaseDecode=resolve;}));};});
+  await page.locator('#visual-upload').setInputFiles({name:'photo.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
+  await page.getByText('正在准备图片，请稍等保存完成后提问。',{exact:true}).waitFor();
+  await page.locator('#realtime').click();await page.getByText('正在聆听 · 实时识别，可随时打断',{exact:true}).waitFor();
+  await page.evaluate(()=>{feed(true,20);feed(false,40);});await page.waitForTimeout(400);assert.equal(requests.length,0,'no model call during image decode');await page.evaluate(()=>releaseDecode());await page.getByText('图片正在保存，保存后即可直接语音提问。',{exact:true}).waitFor();assert.equal(requests.length,0,'no model call before photo ACK');releaseUpload();
+  await page.waitForFunction(()=>audioStarts>0);assert(requests[0].life_images.length===1&&requests[0].stream);const firstId=requests[0].life_images[0];
+  assert.equal(await page.locator('#messages .assistant').last().textContent(),'图中有绿色方块。','audio before complete generation');
+  await page.evaluate(()=>{window.previousReply=replyController;feed(true,20);});await page.waitForTimeout(50);assert(await page.evaluate(()=>previousReply.signal.aborted));assert(await page.evaluate(()=>audioStops>0));
+  await page.evaluate(()=>feed(false,40));await page.waitForFunction(()=>live&&!live.processing);assert.equal(requests[1].life_images[0],firstId,'follow-up keeps the picture');assert.equal(await page.locator('#messages .assistant').first().textContent(),'图中有绿色方块。','late old deltas discarded');
+  const photosBefore=await page.evaluate(async()=> (await json('/life')).entries.filter(x=>x.kind==='photo').length);
+  await page.locator('#visual-camera-toggle').click();await page.waitForFunction(()=>document.querySelector('#visual-video').videoWidth>0);await page.waitForTimeout(400);
+  assert.equal(await page.evaluate(async()=> (await json('/life')).entries.filter(x=>x.kind==='photo').length),photosBefore,'preview does not upload frames');
+  await page.locator('#visual-camera-toggle').click();await page.evaluate(()=>{window.cameraGate=new Promise(resolve=>{window.releaseCamera=resolve;});});await page.locator('#visual-camera-toggle').click();await page.getByText('正在开启摄像头，画面就绪后即可提问。',{exact:true}).waitFor();await page.evaluate(()=>{feed(true,20);feed(false,40);});await page.waitForTimeout(400);assert.equal(requests.length,2,'no old picture answer while camera is opening');await page.evaluate(()=>releaseCamera());await page.waitForFunction(()=>live&&!live.processing);assert.equal(requests.length,3);assert.notEqual(requests[2].life_images[0],firstId,'camera question uses a new frame');
+  const photosAfter=await page.evaluate(async()=> (await json('/life')).entries.filter(x=>x.kind==='photo').length);assert.equal(photosAfter,photosBefore+1);
+  await page.locator('#visual-clear').click();assert(await page.evaluate(()=>cameraTracks.every(t=>t.readyState==='ended')));
+  await page.evaluate(()=>{feed(true,20);feed(false,40);});await page.waitForFunction(()=>live&&!live.processing);assert(!requests[3].life_images,'clear removes visual context');
+  await page.locator('#realtime').click();await page.screenshot({path:path.join(root,'visual-mobile.png'),fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  const archived=await page.evaluate(async()=> (await json('/life')).entries);assert(archived.some(e=>e.kind==='chat'&&e.images.includes(firstId)),'dialogue and picture archived together');
+  await page.evaluate(()=>ShengjianLife.capture('user','图片删除后仍保存的文字',['a'.repeat(32)]));await page.waitForFunction(async()=> (await json('/life')).entries.some(e=>e.text==='图片删除后仍保存的文字'&&!e.images.length));
+  await page.locator('[data-page="life"]').click();await page.getByRole('button',{name:'聊这张图',exact:true}).first().click();await page.getByText('正在聆听 · 实时识别，可随时打断',{exact:true}).waitFor();assert(await page.evaluate(()=>ShengjianVisual.images().length===1));
+  await page.locator('#logout').click();await page.locator('#workspace').waitFor({state:'hidden'});assert(await page.locator('#visual-photo').isHidden());assert.equal(errors.length,0,errors.join('\n'));
+  console.log(JSON.stringify({ok:true,checks:['photo-ack-gating','ASR-to-image-stream-to-TTS','early-audio','barge-in','same-photo-follow-up','camera-preview-no-upload','one-frame-per-question','camera-track-release','clear-picture-context','nightly-source-records','logout-isolation','mobile'],screenshots:root}));
+ }finally{await browser?.close();server.kill();}
+})().catch(e=>{console.error(e);process.exitCode=1});

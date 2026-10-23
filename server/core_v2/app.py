@@ -410,7 +410,7 @@ def create_app(directory, admin_token=None, providers=None):
             return FileResponse(static/'index.html')
         @app.get(PREFIX+'/console/{asset}')
         async def asset(asset: str):
-            if asset not in {'app.js', 'app.css', 'pcm.js', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js', 'life.js'}:
+            if asset not in {'app.js', 'app.css', 'pcm.js', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js', 'life.js', 'visual.js'}:
                 raise Fault('not_found', 404)
             return FileResponse(static/asset)
     return app
