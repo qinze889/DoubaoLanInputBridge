@@ -19,9 +19,15 @@ iconutil -c icns build/Shengjian.iconset -o build/Shengjian.icns
 TASK_STAGE="$(mktemp -d "$TASK_ROOT/build/native.XXXXXX")"
 TASK_APP="$TASK_STAGE/声笺.app"
 mkdir -p "$TASK_APP/Contents/MacOS" "$TASK_APP/Contents/Resources"
-xcrun swiftc -O -parse-as-library native/ShengjianApp.swift -target arm64-apple-macos14.4 -o "$TASK_APP/Contents/MacOS/Shengjian" -framework SwiftUI -framework AppKit -framework CoreImage
+xcrun swiftc -O -parse-as-library native/ShareImport.swift native/ShengjianApp.swift -target arm64-apple-macos14.4 -o "$TASK_APP/Contents/MacOS/Shengjian" -framework SwiftUI -framework AppKit -framework CoreImage
 cp packaging/Info-native.plist "$TASK_APP/Contents/Info.plist"
 cp build/Shengjian.icns "$TASK_APP/Contents/Resources/Shengjian.icns"
+TASK_EXTENSION="$TASK_APP/Contents/PlugIns/ShengjianShare.appex"
+mkdir -p "$TASK_EXTENSION/Contents/MacOS" "$TASK_EXTENSION/Contents/Resources"
+xcrun swiftc -O -parse-as-library -application-extension -emit-executable -module-name ShengjianShare -target arm64-apple-macos14.4 native/ShareImport.swift native/ShareExtension/ShareViewController.swift -o "$TASK_EXTENSION/Contents/MacOS/ShengjianShare" -framework AppKit -framework Foundation -Xlinker -e -Xlinker _NSExtensionMain
+cp native/ShareExtension/Info.plist "$TASK_EXTENSION/Contents/Info.plist"
+cp build/Shengjian.icns "$TASK_EXTENSION/Contents/Resources/Shengjian.icns"
+codesign --force --sign - --entitlements native/ShareExtension/Entitlements.plist "$TASK_EXTENSION"
 ditto dist/bridge-service "$TASK_APP/Contents/Resources/bridge-service"
 TASK_CF="$(command -v cloudflared || true)"
 if [[ -z "$TASK_CF" ]]; then
@@ -30,7 +36,7 @@ if [[ -z "$TASK_CF" ]]; then
 fi
 cp "$TASK_CF" "$TASK_APP/Contents/Resources/bridge-service/cloudflared"
 cp docs/cloudflared-LICENSE "$TASK_APP/Contents/Resources/cloudflared-LICENSE"
-codesign --force --deep --sign - "$TASK_APP"
+codesign --force --sign - "$TASK_APP"
 codesign --verify --deep --strict "$TASK_APP"
 # Preserve a previous build while replacing the public artifact.
 if [[ -d dist/声笺.app ]]; then mv dist/声笺.app "$TASK_STAGE/声笺-previous.app"; fi

@@ -24,7 +24,7 @@ Mac 使用 Xcode Command Line Tools 和官方 cloudflared。Windows 完整构建
 bash scripts/build_macos.sh
 ```
 
-脚本创建虚拟环境、安装依赖、运行回归、编译 SwiftUI、打包 Python 服务及 cloudflared，生成 `dist/声笺.app`、DMG 和 ZIP。更详细的要求见 [Mac 指南](README-macOS.md#开发与构建)。
+脚本创建虚拟环境、安装依赖、运行回归、编译 SwiftUI 与系统分享扩展、打包 Python 服务及 cloudflared，生成 `dist/声笺.app`、DMG 和 ZIP。更详细的要求见 [Mac 指南](README-macOS.md#开发与构建)。
 
 Windows 在 PowerShell 中执行：
 

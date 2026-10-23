@@ -22,16 +22,26 @@ def verify_app(app, version):
     info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
     assert info['CFBundleShortVersionString'] == version, 'Bundle version mismatch'
     assert info['CFBundleIdentifier'] == 'com.doubaolaninputbridge.mac'
+    assert any('public.item' in item.get('LSItemContentTypes', []) and item.get('LSHandlerRank') == 'Alternate'
+               for item in info.get('CFBundleDocumentTypes', [])), 'Open-file receiver is missing'
     native = app/'Contents/MacOS/Shengjian'
     service = app/'Contents/Resources/bridge-service/bridge-service'
     cloudflared = service.parent/'cloudflared'
-    for binary in (native, service, cloudflared):
+    extension = app/'Contents/PlugIns/ShengjianShare.appex'
+    extension_info = plistlib.loads((extension/'Contents/Info.plist').read_bytes())
+    assert extension_info['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.share-services'
+    assert extension_info['CFBundleShortVersionString'] == version
+    extension_binary = extension/'Contents/MacOS/ShengjianShare'
+    subprocess.run(['codesign', '--verify', '--strict', str(extension)], check=True)
+    entitlements = subprocess.check_output(['codesign', '-d', '--entitlements', ':-', str(extension)], stderr=subprocess.DEVNULL)
+    assert plistlib.loads(entitlements)['com.apple.security.app-sandbox'] is True
+    for binary in (native, service, cloudflared, extension_binary):
         subprocess.run(['lipo', str(binary), '-verify_arch', 'arm64'], check=True)
     subprocess.run([str(cloudflared), '--version'], check=True)
     private_names = {'relay.json', 'access_key.txt', 'paired-devices.json', 'device.json',
                      'minimax_api_key.txt', 'service.log'}
     assert not any(p.name in private_names for p in app.rglob('*')), 'Private state in package'
-    return sha256(native), sha256(service)
+    return sha256(native), sha256(service), sha256(extension_binary)
 
 
 def main():

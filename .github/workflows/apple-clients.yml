@@ -18,6 +18,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify shared-file import lifecycle and validation
+        run: |
+          xcrun swiftc -parse-as-library native/ShareImport.swift tests/native/ShareImportChecks.swift -o /tmp/shengjian-share-import-checks
+          /tmp/shengjian-share-import-checks
       - name: Fetch verified Cloudflare binary
         shell: bash
         run: |
