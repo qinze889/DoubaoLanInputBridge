@@ -7,6 +7,8 @@
 #messages.has-answer-focus>.message:not(.answer-focus){color:var(--muted)}
 .message.assistant.answer-focus{max-width:min(100%,62ch);font-size:clamp(20px,2.1vw,26px);line-height:1.75;font-weight:450;letter-spacing:-.2px;margin:20px 0 16px;padding:0;transform-origin:center 40%}
 .message.answer-focus p{line-height:inherit}
+.conversation-scroll[data-compact=true] .answer-focus{font-size:18px;line-height:1.65;font-weight:400;letter-spacing:0}
+.composer-dock[data-voice-feedback=true] .voice-note{font-size:10px;line-height:1.4;margin-top:4px}
 .answer-focus-actions{margin-top:0}
 .latest-answer{position:absolute;z-index:4;bottom:calc(var(--composer-height,190px) + 12px);left:50%;transform:translateX(-50%);min-height:44px;white-space:nowrap;padding:9px 16px;background:var(--card);border-color:var(--line);box-shadow:0 3px 16px #10182814;color:var(--blue);font-size:12px;border-radius:99px}
 @media(prefers-reduced-motion:no-preference){.answer-reveal{animation:answer-arrive .24s ease-out}@keyframes answer-arrive{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}}

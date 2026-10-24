@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-24",
+  "version": "2.0.0-preview.4",
+  "release": "20261024-58e9cb029baf",
+  "reported_issue": "Phone screenshot shows the beginning of an answer clipped by the top of the reading area.",
+  "cause": "The previous focus scroll followed the end when answer height exceeded 80% of the reading area. Voice status rows could shrink that area after layout.",
+  "changes": [
+    "focused answers anchor their beginning instead of following the tail",
+    "reading regions under 280 px use 18 px type",
+    "voice status copy distinguishes held versus continuous mode",
+    "compact essential hints keep the 30-second recording limit visible"
+  ],
+  "checked_viewports": [
+    [
+      390,
+      640
+    ],
+    [
+      320,
+      568
+    ],
+    [
+      390,
+      740
+    ]
+  ],
+  "checks": [
+    "old positioning formula reproduces clipped first glyph",
+    "corrected positioning keeps first glyph inside the reading viewport",
+    "last glyph is reachable by scrolling",
+    "long answer text stays intact",
+    "short answers keep their centered emphasis",
+    "input focus, history restore and reduced motion still pass"
+  ],
+  "physical_phone_text_confirmation": "not yet supplied after layout fix; earlier audio confirmation was normal",
+  "screenshots_use": "synthetic fixture text only; user screenshot is not published"
+}

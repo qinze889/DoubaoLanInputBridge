@@ -101,10 +101,25 @@ class PCMPlayback {
     this.echo = echo;
     this.segments = [];
   }
+  async running() {
+    if(this.stopped)return false;
+    if(this.context.state==='closed')throw new Error('audio_context_closed');
+    if(['suspended','interrupted'].includes(this.context.state)){
+      let timer;
+      try{
+        await Promise.race([this.context.resume(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('audio_context_paused')),1800);})]);
+        if(!this.stopped&&this.context.state!=='running')throw new Error('audio_context_paused');
+      }finally{clearTimeout(timer);}
+    }
+    return !this.stopped;
+  }
   async push(encoded) {
+    if(!await this.running())return;
     // Wait at most two seconds ahead; a long answer cannot accumulate minutes of audio.
-    while (!this.stopped && this.next - this.context.currentTime > 2)
+    while (!this.stopped && this.next - this.context.currentTime > 2){
+      if(!await this.running())return;
       await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     if (this.stopped) return;
     let bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
     if (this.tail !== null) {
@@ -126,7 +141,7 @@ class PCMPlayback {
     source.connect(this.context.destination);
     source.onended = () => {
       this.sources.delete(source);
-      source.disconnect();
+      try{source.disconnect();}catch{}
     };
     this.sources.add(source);
     const at = Math.max(this.next, this.context.currentTime + 0.025);
@@ -137,8 +152,10 @@ class PCMPlayback {
     this.onStart();
   }
   async drain() {
-    while (!this.stopped && this.sources.size)
+    while (!this.stopped && this.sources.size){
+      if(!await this.running())return;
       await new Promise((resolve) => setTimeout(resolve, 20));
+    }
   }
   mark(text, start) {
     this.segments.push({ text, start, end: this.next });
@@ -154,8 +171,8 @@ class PCMPlayback {
     this.echo?.cut(this.context.currentTime);
     this.stopped = true;
     for (const source of this.sources) {
-      source.stop();
-      source.disconnect();
+      try{source.stop();}catch{}
+      try{source.disconnect();}catch{}
     }
     this.sources.clear();
   }

@@ -10,36 +10,44 @@
     if(mode!==value&&live)stopLive('语音方式已切换',true);
     mode=value;document.getElementById('realtime').hidden=value==='hold';buttons[0].hidden=value!=='hold';state.hidden=value!=='hold';
     for(const b of document.querySelectorAll('[data-voice-mode]')){const chosen=b.dataset.voiceMode===value;b.setAttribute('aria-pressed',String(chosen));b.classList.toggle('selected',chosen);}
-    document.getElementById('voice-note').textContent=value==='hold'?'按住说话，松开发送；上滑取消。单次约30秒，到时自动发送；打断播报不会取消后台工作。':'随时开口打断。停止播报不会取消后台工作。';
+    document.getElementById('voice-note').textContent=value==='hold'?'单次约30秒，上滑取消；打断播报不影响工作。':'开口可打断，后台工作继续。';
     if(save&&owner)localStorage.setItem('shengjian.voice-mode.'+owner,value);
     labels();if(value==='hold'&&!live)state.textContent='按住说话，松开发送；上滑取消。';
   }
-  async function begin(button,event){
+  async function begin(button,event,source='pointer'){
+    if(gesture&&!gesture.held)gesture=null;
     if(gesture||!token)return;
     switchMode('hold');
-    const current={held:true,ready:false,cancelled:false,button,startY:event.clientY,pointerId:event.pointerId};gesture=current;
+    const current={held:true,ready:false,cancelled:false,button,source,startY:event.clientY,pointerId:event.pointerId,touchId:event.identifier};gesture=current;
     if(event.pointerId!==undefined)try{button.setPointerCapture(event.pointerId);}catch{}
     button.textContent='正在开启麦克风…';button.setAttribute('aria-pressed','true');state.textContent='准备好后说话，松开即可发送。';
     try{await startManualVoice(current);}catch(failure){reportVoiceFailure('capture',failure,'hold');error(failure);}
     finally{if(gesture===current&&!current.held){gesture=null;labels();}}
   }
-  function release(event,cancel=false){
+  function release(event,cancel=false,reason=''){
     const current=gesture;if(!current)return;
     if(event?.pointerId!==undefined&&event.pointerId!==current.pointerId)return;
-    gesture=null;endManualVoice(current,cancel);labels();
+    gesture=null;if(cancel&&reason)reportVoiceFailure('capture',new Error('hold_'+reason),'hold');endManualVoice(current,cancel);labels();
   }
+  function move(current,y){current.cancelled=current.startY-y>64;current.button.classList.toggle('cancel',current.cancelled);if(current.ready)current.button.textContent=current.cancelled?'松开取消':'松开发送 · 上滑取消';}
   for(const button of buttons){
-    button.onpointerdown=event=>{if(event.button!==0||!event.isPrimary)return;event.preventDefault();void begin(button,event);};
-    button.onpointermove=event=>{if(!gesture||gesture.button!==button||gesture.pointerId!==event.pointerId)return;gesture.cancelled=gesture.startY-event.clientY>64;button.classList.toggle('cancel',gesture.cancelled);if(gesture.ready)button.textContent=gesture.cancelled?'松开取消':'松开发送 · 上滑取消';};
-    button.onpointerup=event=>{event.preventDefault();release(event);};
-    button.onpointercancel=event=>release(event,true);
-    button.onlostpointercapture=event=>{if(gesture?.pointerId===event.pointerId)release(event,true);};
+    button.draggable=false;
+    button.onpointerdown=event=>{if(event.pointerType==='touch'||event.button!==0||!event.isPrimary)return;event.preventDefault();void begin(button,event);};
+    button.onpointermove=event=>{if(gesture?.source!=='pointer'||gesture.button!==button||gesture.pointerId!==event.pointerId)return;move(gesture,event.clientY);};
+    // Touch owns its physical contact until touchend/touchcancel. Browser focus
+    // changes and lost pointer capture do not mean that the finger was lifted.
+    button.addEventListener('touchstart',event=>{if(gesture||!event.changedTouches.length)return;event.preventDefault();const touch=event.changedTouches[0];void begin(button,touch,'touch');},{passive:false});
     button.oncontextmenu=event=>event.preventDefault();
-    button.onblur=()=>{if(gesture?.button===button)release(null,true);};
-    button.onkeydown=event=>{if(event.key==='Escape'){event.preventDefault();release(null,true);}else if([' ','Enter'].includes(event.key)){event.preventDefault();if(!event.repeat)void begin(button,{});}};
-    button.onkeyup=event=>{if([' ','Enter'].includes(event.key)){event.preventDefault();release(null);}};
+    button.onblur=()=>{if(gesture?.button===button&&gesture.source==='keyboard')release(null,true,'keyboard_blur');};
+    button.onkeydown=event=>{if(event.key==='Escape'){event.preventDefault();release(null,true);}else if([' ','Enter'].includes(event.key)){event.preventDefault();if(!event.repeat)void begin(button,{},'keyboard');}};
+    button.onkeyup=event=>{if([' ','Enter'].includes(event.key)){event.preventDefault();if(gesture?.source==='keyboard')release(null);}};
   }
-  window.addEventListener('blur',()=>release(null,true));
+  document.addEventListener('pointerup',event=>{if(gesture?.source==='pointer'){event.preventDefault();release(event);}},{capture:true});
+  document.addEventListener('pointercancel',event=>{if(gesture?.source==='pointer')release(event,true,'pointer_cancel');},{capture:true});
+  document.addEventListener('touchmove',event=>{if(gesture?.source!=='touch')return;const touch=[...event.touches].find(t=>t.identifier===gesture.touchId);if(touch){event.preventDefault();move(gesture,touch.clientY);}},{passive:false,capture:true});
+  document.addEventListener('touchend',event=>{if(gesture?.source!=='touch'||![...event.changedTouches].some(t=>t.identifier===gesture.touchId))return;event.preventDefault();release(null);},{passive:false,capture:true});
+  document.addEventListener('touchcancel',event=>{if(gesture?.source==='touch'&&[...event.changedTouches].some(t=>t.identifier===gesture.touchId))release(null,true,'touch_cancel');},{capture:true});
+  window.addEventListener('blur',()=>{if(gesture&&gesture.source!=='touch')release(null,true,'window_blur');});
   for(const b of document.querySelectorAll('[data-voice-mode]'))b.onclick=()=>switchMode(b.dataset.voiceMode);
   document.getElementById('image-start-live').onclick=()=>{switchMode('live');document.getElementById('realtime').click();};
   window.ShengjianPTT={

@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "actual_installed_Mac_Agent": true,
+  "permission_preset": "danger-full-access",
+  "outside_workspace_file_write_and_read": true,
+  "approval_not_required": true,
+  "background_execution": true,
+  "signed_app_reinstalled": false,
+  "accessibility_preserved": true,
+  "test_file": "full-access-067a4444b1fd63d3.txt",
+  "task_id": "4a8d5a90f748a9bceef616c5b58e5517"
+}

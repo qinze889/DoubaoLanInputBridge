@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0-preview.3",
+  "release": "20261024-de104c2e337c",
+  "date": "2026-10-24",
+  "reported_symptoms": [
+    "press-to-talk ends while finger held",
+    "streamed voice stops"
+  ],
+  "observed_before_fix": {
+    "recent_client_playback_failure_events": 2,
+    "previous_error_code": "client_voice_failure",
+    "recent_gateway_requests_status_200": true,
+    "exact_phone_trigger_confirmed": false
+  },
+  "changes": [
+    "native touchend/touchcancel owns touch recording; blur and lost pointer capture do not imply release",
+    "document-level pointerup/pointercancel for mouse; keyboard blur still cancels",
+    "recover transient suspended/interrupted audio within 1800 ms; hidden page still stops capture",
+    "later TTS/network failure drains existing valid PCM instead of cutting it; no automatic paid retry",
+    "typed audio/network/parser and gesture-end diagnostics without dialogue or audio content",
+    "ignore ASR socket errors and messages after final recognition; they must not close an ongoing reply"
+  ],
+  "validation": {
+    "backend_and_packaging_checks": 32,
+    "browser_native_touch_held_seconds": 4,
+    "blur_and_audio_resume_during_hold": true,
+    "no_submission_before_touch_release": true,
+    "one_submission_on_touch_release": true,
+    "later_segment_network_failure_keeps_queued_audio": true,
+    "microphone_released_after_touch_end": true,
+    "continuous_voice_and_Harness_barge_in_regression": true,
+    "PCM_resume_does_not_replay": true,
+    "late_ASR_error_does_not_interrupt_reply": true,
+    "unrecoverable_audio_context_keeps_model_text": true
+  },
+  "remaining_limit": "One held recording remains bounded to about 30 seconds by the existing ASR contract.",
+  "phone_hardware_validation": {
+    "user_confirmation": "已正常",
+    "date": "2026-10-24",
+    "phone_model_and_browser": "not supplied",
+    "text_layout_issue_reported_separately": true
+  }
+}

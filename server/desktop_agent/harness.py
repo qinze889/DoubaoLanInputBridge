@@ -18,6 +18,9 @@ class HarnessEngine(CodexEngine):
         self.config = config
         self.data = Path(data)
         self.data.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if 'permission_mode' in config:
+            from .permissions import install_policy
+            install_policy(self.data, config['permission_mode'])
         self.decisions = {}
         self.approval_token = secrets.token_urlsafe(48)
         self.local_tools = None
@@ -122,7 +125,7 @@ class HarnessEngine(CodexEngine):
         env = os.environ.copy()
         env.pop('SHENGJIAN_NATIVE_INPUT_SOCKET', None)
         env.pop('SHENGJIAN_NATIVE_INPUT_TOKEN', None)
-        env.update(DSH_HOME=str(self.data / 'home'), DSH_PERMISSION_MODE='workspace-write',
+        env.update(DSH_HOME=str(self.data / 'home'), DSH_PERMISSION_MODE=self.config.get('permission_mode','workspace-write'),
                    SHENGJIAN_DEVICE_TOKEN=self.config['token'],
                    SHENGJIAN_APPROVAL_URL=f'http://127.0.0.1:{port}/approval',
                    SHENGJIAN_APPROVAL_TOKEN=self.approval_token)

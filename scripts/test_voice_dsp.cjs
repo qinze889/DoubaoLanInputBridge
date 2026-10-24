@@ -125,6 +125,11 @@ const {
     { text: "尚未播出。", start: 1, end: 3 },
   ];
   assert.equal(heardPlayer.heard(), "已经播完。");
+  let resumes=0,starts=0;
+  const context={state:'interrupted',currentTime:0,resume(){resumes++;this.state='running';return Promise.resolve();},createBuffer(channels,count,rate){return{duration:count/rate,getChannelData:()=>new Float32Array(count)};},createBufferSource(){return{connect(){},disconnect(){},start(){starts++;},stop(){throw new DOMException('already ended','InvalidStateError');}};}};
+  const recoverable=new PCMPlayback(context),encoded=Buffer.alloc(960).toString('base64');await recoverable.push(encoded);assert.equal(resumes,1);assert.equal(starts,1);
+  context.state='suspended';await recoverable.push(encoded);assert.equal(resumes,2);assert.equal(starts,2,'resume does not replay already scheduled chunks');recoverable.pause();recoverable.pause();assert.equal(recoverable.sources.size,0,'cleanup survives an already ended audio source');await recoverable.push(encoded);assert.equal(starts,2,'a stopped player stays stopped');
+  await assert.rejects(()=>new PCMPlayback({state:'closed'}).push(encoded),/audio_context_closed/);
   const pieces = [];
   const sentences = new VoiceSentences((text) => pieces.push(text));
   sentences.push("这段开头没有标点");

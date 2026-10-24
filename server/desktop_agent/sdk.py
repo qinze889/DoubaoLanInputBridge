@@ -37,7 +37,7 @@ class SDKHarness(HarnessEngine):
         env = os.environ.copy()
         for k in ['SHENGJIAN_NATIVE_INPUT_SOCKET', 'SHENGJIAN_NATIVE_INPUT_TOKEN']:
             env.pop(k, None)
-        env.update(DSH_HOME=str(self.data / 'home'), DSH_PERMISSION_MODE='workspace-write', SHENGJIAN_DEVICE_TOKEN=self.config['token'], SHENGJIAN_APPROVAL_URL=f'http://127.0.0.1:{port}/approval', SHENGJIAN_APPROVAL_TOKEN=self.approval_token, SHENGJIAN_DESKTOP_URL=f'http://127.0.0.1:{port}/desktop-tool', SHENGJIAN_VISION_URL=f'http://127.0.0.1:{port}/vision-tool', SHENGJIAN_TOOLS_MODULE=str(Path(self.command[1]).resolve().parents[3] / '@deepseek-ai/dsh-tools/lib/index.js'))
+        env.update(DSH_HOME=str(self.data / 'home'), DSH_PERMISSION_MODE=self.config.get('permission_mode','workspace-write'), SHENGJIAN_DEVICE_TOKEN=self.config['token'], SHENGJIAN_APPROVAL_URL=f'http://127.0.0.1:{port}/approval', SHENGJIAN_APPROVAL_TOKEN=self.approval_token, SHENGJIAN_DESKTOP_URL=f'http://127.0.0.1:{port}/desktop-tool', SHENGJIAN_VISION_URL=f'http://127.0.0.1:{port}/vision-tool', SHENGJIAN_TOOLS_MODULE=str(Path(self.command[1]).resolve().parents[3] / '@deepseek-ai/dsh-tools/lib/index.js'))
         options = {'start_new_session': True} if os.name != 'nt' else {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
         await self.spawn(*self.command, 'sdk', '--patch', str(overlay), cwd=self.workspace, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=2 * 1024 * 1024, **options)
         self.sid = None

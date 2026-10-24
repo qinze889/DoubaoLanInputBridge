@@ -55,6 +55,11 @@ const errors = {
   microphone_unavailable:"麦克风暂时不可用，请结束其他录音或通话后重试。",
   unauthorized: "登录已失效，请重新登录。",
   audio_busy: "语音来源正在处理其他请求，请稍后重试。",
+  audio_context_closed:"声音通道已关闭，请重新开启语音。文字回复已保留。",
+  audio_context_paused:"声音被系统暂停，请点击语音按钮恢复。",
+  audio_context_invalid:"声音通道暂不可用，请重新开启语音。",
+  voice_network_error:"语音网络连接中断，文字回复已保留。",
+  voice_stream_invalid:"语音数据未完整到达，文字回复已保留。",
   tts_login_required: "豆包登录态已失效，需要在服务器更新登录。",
   audio_rejected: "语音请求被拒绝，请稍后重试。",
   audio_result_unknown: "语音来源未确认结果，额度暂时预留，请勿反复重试。",
@@ -621,6 +626,11 @@ async function streamAudio(text, epoch, player) {
     );
     if (!audioDone) throw new Error("audio_result_unknown");
     if (epoch === speechEpoch) player.mark(text, segmentStart);
+  } catch(failure) {
+    if(controller.signal.aborted)throw failure;
+    if(failure.name==='TypeError')throw new Error('voice_network_error');
+    if(['SyntaxError','InvalidCharacterError'].includes(failure.name))throw new Error('voice_stream_invalid');
+    throw failure;
   } finally {
     if (voiceController === controller) voiceController = null;
   }
@@ -670,7 +680,8 @@ function speechPipeline(turn = null) {
         if (epoch === speechEpoch) {
           failure = e;
           reportVoiceFailure("playback",e,session.mode||"live");
-          player.pause();if(playback===player)playback=null;
+          // Valid audio already queued must finish even if a later segment fails.
+          // Do not retry a paid segment whose synthesis result is uncertain.
           error(e);liveState("语音播报未完成，文字回复继续显示。可以继续说话或按住重试。");
         }
       });
@@ -681,8 +692,9 @@ function speechPipeline(turn = null) {
     async done() {
       sentences.flush();
       await chain;
-      if (failure) return;
-      if (epoch === speechEpoch) await player.drain();
+      if (epoch === speechEpoch){
+        try{await player.drain();}catch(e){if(epoch===speechEpoch){reportVoiceFailure('playback',e,session.mode||'live');player.pause();error(e);}}
+      }
       if (playback === player) playback = null;
     },
   };
@@ -931,7 +943,7 @@ function interruptReply(session = live) {
     $("compose").querySelector("[type=submit]").disabled = false;
   }
 }
-function stopLive(reason = "实时对话已结束", preserveCamera = false) {
+function stopLive(reason = "实时对话已结束", preserveCamera = false, preserveReply = false) {
   if(!preserveCamera)window.ShengjianVisual?.stopCamera();
   const session = live;
   live = null;
@@ -955,7 +967,7 @@ function stopLive(reason = "实时对话已结束", preserveCamera = false) {
     session.context?.close().catch(() => {});
     stopSpeech();
     // Ignore results from a conversation that the user ended.
-    if (session.owner === token && (session.destination === "chat" || session.replyTurn?.harness))
+    if (!preserveReply && session.owner === token && (session.destination === "chat" || session.replyTurn?.harness))
       interruptReply(session);
   }
   $("realtime").textContent = "开始实时对话";
@@ -993,6 +1005,7 @@ function startUtterance(session, chunks) {
     previous.flow?.close();
     previous.ws?.close();
   }
+  if(playback&&session.mode==='live')reportVoiceFailure('capture',new Error(session.echo?.last.correlation>.5?'barge_in_echo_related':'barge_in_voice_detected'),'live');
   interruptReply();
   session.processing = true;
   session.firstPartial = false;
@@ -1051,6 +1064,7 @@ function openLiveASR(session, utterance) {
     if (
       live !== session ||
       utterance.abandoned ||
+      utterance.final ||
       (session.utterance !== utterance && session.waitingFor !== utterance) ||
       session.owner !== token
     )
@@ -1119,7 +1133,7 @@ function openLiveASR(session, utterance) {
   socket.onerror = () => {
     if (
       (session.utterance === utterance || session.waitingFor === utterance) &&
-      !utterance.abandoned
+      !utterance.abandoned && !utterance.final
     )
       liveFailure(session, new Error("voice_connection_ended"));
   };
@@ -1257,13 +1271,7 @@ $("realtime").onclick = async () => {
           liveFailure(session, new Error("麦克风已断开，请重新开启实时对话。")),
         ),
       );
-    session.context.onstatechange = () => {
-      if (session.context.state === "suspended")
-        liveFailure(
-          session,
-          new Error("音频已被系统暂停，请返回页面重新开启。"),
-        );
-    };
+    session.context.onstatechange = () => recoverAudioContext(session);
     liveState(
       session.capabilities.partial_results
         ? "正在聆听 · 实时识别，可随时打断"
@@ -1276,10 +1284,18 @@ $("realtime").onclick = async () => {
 $('speak').addEventListener('change',()=>{if(live)live.speakEdited=true;});
 function reportVoiceFailure(stage,failure,mode='live') {
   if(!token||failure?.name==='AbortError')return;
-  const names={NotAllowedError:'microphone_denied',NotFoundError:'microphone_missing',NotReadableError:'microphone_unavailable',AbortError:'client_aborted'};
+  const names={NotAllowedError:stage==='playback'?'audio_playback_denied':'microphone_denied',NotFoundError:'microphone_missing',NotReadableError:'microphone_unavailable',AbortError:'client_aborted',InvalidStateError:'audio_context_invalid',NotSupportedError:'audio_format_unsupported',EncodingError:'audio_decode_failed',NetworkError:'voice_network_error',TypeError:'voice_type_error',SyntaxError:'voice_stream_invalid'};
   const raw=failure?.message||'';
   const code=/^[a-z][a-z0-9_]{2,80}$/.test(raw)?raw:(names[failure?.name]||'client_voice_failure');
   void json('/voice/client-events',{stage,code,mode}).catch(()=>{});
+}
+function recoverAudioContext(session){
+  if(live!==session||session.closed||session.audioRecovery||document.hidden||!['suspended','interrupted'].includes(session.context.state))return;
+  let timer;
+  session.audioRecovery=Promise.race([session.context.resume(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('audio_context_paused')),1800);})])
+   .then(()=>{if(live===session&&session.context.state!=='running')throw new Error('audio_context_paused');})
+   .catch(failure=>{if(live===session){reportVoiceFailure('playback',failure,session.mode||'live');stopLive('音频被系统暂停，请点击语音按钮恢复。',false,true);notice('音频被系统暂停，文字回复继续。请点击语音按钮恢复。');}})
+   .finally(()=>{clearTimeout(timer);session.audioRecovery=null;});
 }
 function detachManualMicrophone(session) {
   clearTimeout(session.manualTimer);session.manualTimer=null;
@@ -1305,7 +1321,7 @@ function endManualVoice(gesture,cancel=false) {
 }
 async function startManualVoice(gesture) {
   if(!token)throw new Error('请先登录');
-  if(live&&live.mode!=='hold')stopLive('切换到按键说话',true);
+  if(live&&(live.mode!=='hold'||live.context?.state==='closed'))stopLive('切换到按键说话',true);
   let session=live;
   if(!session){session={owner:token,mode:'hold',destination:$('destination').value,processing:false,context:new AudioContext(),sockets:new Set(),speakBefore:$('speak').checked};live=session;}
   session.manualGesture=gesture;session.destination=$('destination').value;
@@ -1346,8 +1362,8 @@ async function startManualVoice(gesture) {
     }
     session.manualRecording=true;gesture.ready=true;
     session.source.connect(session.processor);session.processor.connect(session.context.destination);
-    media.getTracks().forEach(track=>track.addEventListener('ended',()=>{if(live===session&&session.manualRecording){gesture.cancelled=true;endManualVoice(gesture,true);}}));
-    session.context.onstatechange=()=>{if(live===session&&session.context.state==='suspended'){gesture.cancelled=true;endManualVoice(gesture,true);}};
+    media.getTracks().forEach(track=>track.addEventListener('ended',()=>{if(live===session&&session.manualRecording){reportVoiceFailure('capture',new Error('hold_microphone_ended'),'hold');gesture.cancelled=true;endManualVoice(gesture,true);}}));
+    session.context.onstatechange=()=>recoverAudioContext(session);
     session.manualTimer=setTimeout(()=>{if(gesture.held){endManualVoice(gesture);notice('已达到单次录音上限，已结束录音并发送。');}},29000);
     liveState('正在录音 · 松开发送，上滑取消');window.ShengjianPTT?.recording();
   }catch(failure){
@@ -1359,11 +1375,11 @@ async function startManualVoice(gesture) {
 }
 
 window.addEventListener("offline", () =>
-  stopLive("网络已断开，重连后请重新开启实时对话"),
+  stopLive(live?.mode==='hold'?"网络已断开，联网后按住重试。":"网络已断开，联网后重新开启语音。"),
 );
 document.addEventListener("visibilitychange", () => {
   if (document.hidden)
-    stopLive("已暂停麦克风，返回后请重新开启实时对话。电脑任务继续运行。");
+    stopLive(live?.mode==='hold'?"麦克风已暂停，返回后按住说话。":"麦克风已暂停，返回后重新开启语音。");
 });
 window.addEventListener("pagehide", () => stopLive());
 let restoringLogin=false, lastSessionRenewal=0, pendingLoginTicket="";

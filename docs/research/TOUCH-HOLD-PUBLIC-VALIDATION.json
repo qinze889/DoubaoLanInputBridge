@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "version": "2.0.0-preview.3",
+  "native_touch_hold": true,
+  "blur_during_hold": true,
+  "history_restored_without_reexecution": true,
+  "new_conversation_independent": true,
+  "plain_chat_excluded_from_Work": true,
+  "five_navigation_areas": 5,
+  "actual_public_ASR": true,
+  "actual_local_DeepSeek_Harness": true,
+  "actual_streamed_TTS": true,
+  "synthetic_microphone": true,
+  "submissions": 1,
+  "ASR_fixture_words": true,
+  "microphone_off_after_release": true,
+  "release_to_first_audio_ms": 4204,
+  "task_state": "succeeded",
+  "reply_present": true,
+  "release": "20261024-de104c2e337c"
+}

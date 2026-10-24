@@ -2,6 +2,12 @@
 
 开发版侧栏进入“电脑 Agent”。执行引擎为内置的 DeepSeek Harness，模型沿用 sub-buddy；不是切换为其他厂商的桌面 Agent。
 
+## Harness 执行权限
+
+默认仍为 `workspace-write`。本机设备配置 `permission_mode` 可显式选择 `danger-full-access`，使用 DSH 自身最高预设：文件效果不再限制在任务目录，审批预设为 `never`。这不会获得操作系统管理员身份，也不改变 macOS 授权。
+
+该选择通过声笺自有 `$DSH_HOME/cordis.patch.yml` 插件调用 `permissionPresets.set`，为新建和恢复会话写入规范权限事件，重启后复用。仅在设备主人明确选择后启用；恢复限制时设为 `workspace-write`。保留其他已存在的配置，不覆盖无法解析的用户补丁。当前 Mac 已按用户要求启用，并用已安装 Agent 在任务目录外创建和读回测试文件验证。未重签名或重装桌面 App。
+
 ## 独立后台浏览器
 
 “独立后台浏览器，不占用前台”默认开启。网页任务使用本机已安装 Chrome / Edge 的独立 headless profile，通过公开 CDP 连接。不会接入用户已打开的浏览器、复用用户 Cookie 或发送桌面键鼠事件。主代理和每个子代理使用独立 profile 与快照；子代理浏览器最多三份，任务结束后关闭其拥有的进程。浏览器登录态与用户日常浏览器独立。

@@ -1,7 +1,7 @@
 "use strict";
 (()=>{
  const $=id=>document.getElementById(id),terminal=new Set(['succeeded','failed','cancelled','unknown']);
- let owner='',epoch=0,page='conversation',cid='',binding='',nextCursor=null,snapshot=null,historyMode='recent',workFilter='active',stick=true,loading=false,entered=false,silentClose=false,deviceSignature='',toastTimer=null,artMode='generate',releaseInfo={name:'声笺 Web',version:'2.0.0-preview.2',updated:'2026-10-24'};
+ let owner='',epoch=0,page='conversation',cid='',binding='',nextCursor=null,snapshot=null,historyMode='recent',workFilter='active',stick=true,loading=false,entered=false,silentClose=false,deviceSignature='',toastTimer=null,artMode='generate',releaseInfo={name:'声笺 Web',version:'2.0.0-preview.4',updated:'2026-10-24'};
  const acceptedTasks=new Map(),following=new Map(),objectUrls=new Set(),deviceExpanded=new Set();let pendingConfirmation=null;let historyRows=[],historyCursor=null,historyLoading=false,taskResult='',taskResultNode=null,taskLogs=null,taskReadButton=null;
  const titles={conversation:'对话',create:'创作',life:'记录',tasks:'工作',devices:'我的'};
  const friendlyStates={queued:'等待电脑',running:'进行中',awaiting_user:'等你确认',succeeded:'已完成',failed:'未完成',cancelled:'已取消',unknown:'需要核实'};
@@ -86,15 +86,19 @@
    if(focusedReply?.isConnected&&focusedReply.classList.contains('answer-focus')){
     const box=focusedReply.getBoundingClientRect(),offset=box.top-reading.getBoundingClientRect().top+reading.scrollTop;
     const space=Math.max(18,Math.min(reading.clientHeight*.38,(reading.clientHeight-box.height-48)/2));
-    top=box.height>reading.clientHeight*.8?offset+box.height-reading.clientHeight+56:offset-space;
+    // Keep the first line readable even when status rows, a webview toolbar or
+    // the keyboard leave little height. Long answers are read by scrolling.
+    top=offset-space;
    }
    reading.scrollTop=Math.max(0,top);
   });
  }
- new ResizeObserver(()=>{reading.style.setProperty('--answer-space',Math.round(reading.clientHeight*.5)+'px');scrollConversation();}).observe(reading);
+ new ResizeObserver(()=>{reading.dataset.compact=String(reading.clientHeight<280);reading.style.setProperty('--answer-space',Math.round(reading.clientHeight*.5)+'px');scrollConversation();}).observe(reading);
  function messageCount(){const has=$('messages').childElementCount>0;$('welcome').hidden=has||loading;scrollConversation();}
  new MutationObserver(messageCount).observe($('messages'),{childList:true,subtree:true});
  new ResizeObserver(()=>document.documentElement.style.setProperty('--composer-height',document.querySelector('.composer-dock').getBoundingClientRect().height+'px')).observe(document.querySelector('.composer-dock'));
+ function voiceFeedback(){document.querySelector('.composer-dock').dataset.voiceFeedback=String(!$('live-state').hidden&&!!$('live-state').textContent.trim());}
+ new MutationObserver(voiceFeedback).observe($('live-state'),{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['hidden']});voiceFeedback();
  function mediaPreview(){const has=window.ShengjianVisual?.hasContext();document.querySelector('.visual-panel').hidden=!has;}
  new MutationObserver(mediaPreview).observe($('visual-clear'),{attributes:true,attributeFilter:['disabled']});
  window.addEventListener('shengjian:visual-change',mediaPreview);window.addEventListener('shengjian:visual-ready',mediaPreview);

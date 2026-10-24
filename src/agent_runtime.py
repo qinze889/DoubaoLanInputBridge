@@ -44,6 +44,7 @@ class AgentRuntime:
         self.thread = self.loop = self.task = self.connector = None
         self.phase, self.error = 'off', ''
         self.model = ''
+        self.permission_mode = 'workspace-write'
         self.stopping = False
 
     def status(self):
@@ -54,6 +55,7 @@ class AgentRuntime:
                     'workspace': str(self.workspace), 'enabled': self.enabled_path.exists(),
                     'connected': bool(connector and connector.ws),
                     'interaction_mode': 'background',
+                    'permission_mode': self.permission_mode,
                     'subagents': [{'id': ident, 'state': state} for engine in (list(connector.engines.values()) if connector else []) for ident, state in dict(getattr(engine, 'agents', {})).items()],
                     'capabilities': {'subagents': True, 'max_subagents': 3, 'max_depth': 1, 'child_messages': True, 'skills': ['background-web', 'computer-report', 'task-workspace'], 'mcp_client': 'not_configured'},
                     'last_task': connector.last_task if connector else None,
@@ -168,6 +170,9 @@ class AgentRuntime:
             raise RuntimeError('请先在账号区登录与手机相同的声笺账号。')
         if self.config_path.exists():
             config = json.loads(self.config_path.read_text())
+            mode=config.get('permission_mode','workspace-write')
+            if mode not in {'workspace-write','danger-full-access'}:raise RuntimeError('无效的 Harness 权限模式。')
+            self.permission_mode=mode
             if bundled_command():
                 config['harness_executable'] = bundled_command()
             self.workspace = Path(config['workspace'])
