@@ -9,6 +9,8 @@
 
 账号扫码页新增[生活记录](docs/LIFE-RECORDS.md)：文字、照片、对话时间线，WorkBuddy [实时语音聊图与摄像头提问取帧](docs/REALTIME-VISION.md)，每晚整理为有来源的记忆，并同步到本机 Agent。
 
+[手机生图](docs/IMAGE-GENERATION.md)：Responses 上游接入 Hunyuan Image Alpha / MiniMax Image-01，支持后台生成、保存 PNG 和继续语音聊图。
+
 ## 下载与版本
 
 | 平台 | 推荐入口 | 说明 |

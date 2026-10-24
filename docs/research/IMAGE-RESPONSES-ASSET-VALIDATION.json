@@ -1,0 +1,52 @@
+[
+  {
+    "model": "workbuddy/cn:hunyuan-image-alpha",
+    "protocol": "responses",
+    "status": 200,
+    "seconds": 9.88,
+    "result_format": "output_text_asset",
+    "ok": true,
+    "width": 1024,
+    "height": 1024,
+    "bytes": 725984,
+    "sha256": "af5d5a533f146117a5cd85e7e52b0f0ea3ab3bfc2504315455efd97bdccc5e72",
+    "image_model": null,
+    "source": null,
+    "usage": {
+      "input_tokens": 0,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 0
+    }
+  },
+  {
+    "model": "minimax/image-01",
+    "protocol": "responses",
+    "status": 200,
+    "seconds": 18.47,
+    "result_format": "output_text_asset",
+    "ok": true,
+    "width": 1024,
+    "height": 1024,
+    "bytes": 44090,
+    "sha256": "21f926070f5cfd798ae5eb709c9477abb667a6e8fee318acb04f92e8f59f89b5",
+    "image_model": null,
+    "source": null,
+    "usage": {
+      "input_tokens": 0,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 0
+    }
+  }
+]

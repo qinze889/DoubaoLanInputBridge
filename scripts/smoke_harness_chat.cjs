@@ -45,7 +45,7 @@ const {spawn}=require('node:child_process');const fs=require('node:fs'),os=requi
   await page.locator('#visual-clear').click();
   voiceOverride='请在后台慢速验收';await page.evaluate(()=>{feed(true,20);feed(false,40);});
   await page.waitForFunction(async()=>{if(!currentTask)return false;const d=await json('/tasks/'+currentTask);return JSON.parse(d.task.specification).voice_text==='请在后台慢速验收'&&d.task.state==='running';});
-  const work=await page.evaluate(()=>currentTask);assert(!(await page.locator('#compose [type=submit]').isDisabled()),'composer remains available during Work');
+  const work=await page.evaluate(()=>currentTask);await page.waitForFunction(()=>!busy&&!document.querySelector('#compose [type=submit]').disabled,{},{timeout:2000});assert(!(await page.locator('#compose [type=submit]').isDisabled()),'composer remains available during Work');
   voiceOverride='现在进度怎么样了';await page.evaluate(()=>{feed(false,12);feed(true,20);feed(false,40);});await page.locator('#messages .user').getByText('现在进度怎么样了',{exact:true}).waitFor();await page.waitForFunction(()=>live&&!live.processing&&!busy);
   assert.equal(await page.evaluate(()=>currentTask),work,'progress does not create or replace Work');assert((await page.locator('#messages').textContent()).includes('执行中'),'live voice progress returns without waiting for Work: '+await page.locator('#messages').textContent());
   voiceOverride='取消正在执行的任务';await page.evaluate(()=>{feed(false,12);feed(true,20);feed(false,40);});await page.waitForFunction(async()=> (await json('/tasks/'+currentTask)).task.state==='cancelled');

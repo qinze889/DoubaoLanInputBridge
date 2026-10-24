@@ -23,6 +23,9 @@ class ProviderConfig:
     text_model: str = ''
     vision_model: str = ''
     chat_models: tuple = ()
+    image_models: tuple = ()
+    image_credits: int = 10
+    image_asset_origin: str = ''
     voice_key: str = ''
     voice_effort: str = ''
     audio_base: str = ''
@@ -37,9 +40,13 @@ class ProviderConfig:
     def from_environment(cls):
         chat_models=json.loads(os.getenv('SHENGJIAN_CHAT_MODELS','[]'))
         if not isinstance(chat_models,list):raise ValueError('Chat models must be a JSON list')
+        image_models=json.loads(os.getenv('SHENGJIAN_IMAGE_MODELS','[]'))
+        if not isinstance(image_models,list):raise ValueError('Image models must be a JSON list')
         return cls(model_base=os.getenv('SHENGJIAN_MODEL_BASE_URL','').rstrip('/'), model_key=os.getenv('SHENGJIAN_MODEL_API_KEY',''),
                    text_model=os.getenv('SHENGJIAN_TEXT_MODEL',''), vision_model=os.getenv('SHENGJIAN_VISION_MODEL',''),
-                   chat_models=tuple(chat_models),
+                   chat_models=tuple(chat_models), image_models=tuple(image_models),
+                   image_credits=int(os.getenv('SHENGJIAN_IMAGE_CREDITS','10')),
+                   image_asset_origin=os.getenv('SHENGJIAN_IMAGE_ASSET_ORIGIN','').rstrip('/'),
                    audio_base=os.getenv('SHENGJIAN_AUDIO_BASE_URL','').rstrip('/'), audio_key=os.getenv('SHENGJIAN_AUDIO_API_KEY',''),
                    audio_stream=os.getenv('SHENGJIAN_AUDIO_STREAM','')=='1',
                    voice_key=os.getenv('SHENGJIAN_DOUBAO_API_KEY',''), voice_effort=os.getenv('SHENGJIAN_VOICE_REASONING_EFFORT',''), speaker=os.getenv('SHENGJIAN_DOUBAO_SPEAKER',''),
@@ -61,6 +68,11 @@ class Providers:
         if config.voice_effort not in {'', 'low'}:
             raise ValueError('Voice effort must be empty or an upstream-verified low profile')
         if len(config.chat_models)>20 or any(not isinstance(m,str) or not 1<=len(m)<=256 for m in config.chat_models):raise ValueError('Invalid verified chat model configuration')
+        if len(config.image_models)>20 or any(not isinstance(m,str) or not 1<=len(m)<=256 for m in config.image_models):raise ValueError('Invalid verified image model configuration')
+        if type(config.image_credits) is not int or not 1<=config.image_credits<=10000:raise ValueError('Invalid image credit rate')
+        if config.image_asset_origin:
+            origin=urlsplit(config.image_asset_origin)
+            if origin.scheme!='https' or not origin.hostname or origin.username or origin.password or origin.path or origin.query or origin.fragment:raise ValueError('Invalid image asset origin')
         self.cached_models = None
         self.discovered_ids = set()
         self.models_at = 0

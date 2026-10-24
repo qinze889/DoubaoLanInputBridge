@@ -104,6 +104,8 @@ def create_app(directory, admin_token=None, providers=None):
     store = Store(directory)
     from .life import LifeService, mount as mount_life
     life = LifeService(directory, store, providers)
+    from .imagegen import ImageGeneration, mount as mount_images
+    images = ImageGeneration(store, life, providers)
     if admin_token is None:
         path = directory/'admin.token'
         if not path.exists():
@@ -123,6 +125,7 @@ def create_app(directory, admin_token=None, providers=None):
         yield
         nightly.cancel()
         await asyncio.gather(nightly, return_exceptions=True)
+        await images.close()
         await life.close()
         for ws in list(peers.values()):
             try:
@@ -135,6 +138,7 @@ def create_app(directory, admin_token=None, providers=None):
     app.state.store = store
     app.state.peers = peers
     app.state.life = life
+    app.state.images = images
 
     @app.exception_handler(Fault)
     async def fault_handler(request, error):
@@ -403,6 +407,7 @@ def create_app(directory, admin_token=None, providers=None):
     from .assistant import mount as mount_assistant
     mount_assistant(app, store, user, peers)
     mount_life(app, life, user)
+    mount_images(app, images, user)
     if providers:
         providers.mount(app, store, user)
     static = Path(__file__).parent/'web'
@@ -412,7 +417,7 @@ def create_app(directory, admin_token=None, providers=None):
             return FileResponse(static/'index.html')
         @app.get(PREFIX+'/console/{asset}')
         async def asset(asset: str):
-            if asset not in {'app.js', 'app.css', 'pcm.js', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js', 'life.js', 'visual.js'}:
+            if asset not in {'app.js', 'app.css', 'pcm.js', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js', 'life.js', 'visual.js', 'imagegen.js'}:
                 raise Fault('not_found', 404)
             return FileResponse(static/asset)
     return app

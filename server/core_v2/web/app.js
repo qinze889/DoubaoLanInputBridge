@@ -55,6 +55,8 @@ const errors = {
   chat_computer_offline: "会话绑定的电脑离线，请打开声笺并启用 Agent。",
   chat_agent_update_required: "电脑 Agent 需要更新后才能接收统一 Chat 对话。",
   model_result_unknown: "模型未确认结果，请查看任务状态后再操作。",
+  image_job_busy: "已有图片正在后台生成，请稍后查看结果。",
+  image_model_not_available: "暂无可用生图模型，请在模型与连接中重新选择。",
   chat_model_not_verified: "这个模型尚未通过工具调用验证，请选择列表中的模型。",
   chat_model_not_available: "所选对话模型暂不可用，请在模型与连接中重新选择。",
   model_provider_not_configured: "对话来源尚未配置。",
@@ -132,6 +134,7 @@ function logoutLocal() {
   replyController?.abort();replyController=null;
   window.ShengjianVisual?.deactivate();
   window.ShengjianLife?.deactivate();
+  window.ShengjianImages?.deactivate();
   reportEpoch++;
   authEpoch++;
   taskEpoch++;
@@ -223,6 +226,7 @@ async function refresh() {
   $("balance").textContent = `可用 ${me.balance} 积分 · 预留 ${me.reserved}`;
   window.ShengjianVisual?.activate(me.user_id, {json, fetchImage:id=>api('/life/images/'+id)});
   window.ShengjianLife?.activate(me.user_id, { json, image: (blob, id) => api('/life/images', blob, 'POST', {raw: true, requestId: id}), fetchImage: id => api('/life/images/'+id) });
+  window.ShengjianImages?.activate(me.user_id,{json, file:id=>api('/images/jobs/'+id+'/file'),preview:id=>api('/life/images/'+id)});
   chatOwner=me.user_id;
   if(modelOwner!==owner && !modelSaving)await loadModels(owner).catch(e=>{$('model-note').textContent='模型列表暂未载入，可稍后刷新。';error(e);});
   if(owner!==token)return;
@@ -499,6 +503,15 @@ async function submitPrompt(prompt) {
   submit.disabled = true;
   stopSpeech();
   try {
+    if(window.ShengjianImages?.isGeneration(prompt)){
+      if(window.ShengjianVisual?.hasContext())throw new Error('当前只支持文字生图；请先结束看图，参考图编辑尚未接入。');
+      const job=await window.ShengjianImages.generate(prompt);
+      if(owner!==token || operation!==composeEpoch)return;
+      message('user',prompt);message('assistant','已提交后台生图。你可以继续聊天，或到“生成图片”查看进度。');
+      $('prompt').value='';$('messages').append(button('查看生图进度',()=>window.ShengjianImages.open()));
+      if(live&&$('speak').checked)speak('已经开始生成图片，你可以继续聊天。').catch(error);
+      return;
+    }
     const selected = $("destination").value;
     if ($("engine").value === "harness" || selected === "chat") {
       const visual=ShengjianAgent.control(prompt)?{images:[]}:(await window.ShengjianVisual?.snapshot(prompt) || {images:[]});

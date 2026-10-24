@@ -1,0 +1,27 @@
+{
+  "scope": "isolated account, public Shenjian endpoints, real Responses image models",
+  "models": [
+    {
+      "id": "workbuddy/cn:hunyuan-image-alpha",
+      "state": "succeeded",
+      "width": 1024,
+      "height": 1024,
+      "png_bytes": 1695864,
+      "job_recovery_and_no_duplicate_submission": true,
+      "seconds": 12.23
+    },
+    {
+      "id": "minimax/image-01",
+      "state": "succeeded",
+      "width": 1024,
+      "height": 1024,
+      "png_bytes": 780897,
+      "job_recovery_and_no_duplicate_submission": true,
+      "seconds": 18.47
+    }
+  ],
+  "public_ui": true,
+  "rendered_images": 2,
+  "verified_models": 2,
+  "ok": true
+}

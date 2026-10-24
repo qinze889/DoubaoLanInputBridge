@@ -16,3 +16,5 @@
 - [真实本机 Harness 模型切换与文件执行验证](research/MOBILE-MODEL-SELECTION-VALIDATION.json)
 
 截图保存在本地 `artifacts/core-ui/mobile-*.png`，CI 运行 `scripts/smoke_mobile_ui.cjs` 并上传到 core UI 附件中。浏览器使用虚拟麦克风/摄像头，手机扬声器与麦克风体验仍以真机为准。
+
+手机已增加[生图画室与独立生图模型选择](IMAGE-GENERATION.md)，通过 Responses 使用图片模型，Chat/Work 与识图偏好分别保留。

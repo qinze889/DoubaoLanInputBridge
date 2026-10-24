@@ -42,3 +42,5 @@
 - [统一本机 Harness Chat / Work](../HARNESS-CHAT.md)与[真实识图执行验收](HARNESS-CHAT-VALIDATION.json)：豆包仅提供 ASR/TTS，DeepSeek 持久化会话负责对话和工作，视觉模型作为本轮附件工具。隔离账号真实电脑执行及390项回归通过；[原账号钥匙串确认后的真实验收](HARNESS-CHAT-ACCOUNT-VALIDATION.json)也已通过。
 
 - [语音首音、后台工作控制与长期扫码登录](../VOICE-LATENCY.md)：常驻 SDK 小样本首个TTS数据包中位数约2.22秒；真实进程取消与恢复、旧二维码复用及180天滚动续期。
+
+- [手机 Responses 生图接入与兼容边界](../IMAGE-GENERATION.md) · [真实公网双模型验证](IMAGE-GENERATION-PUBLIC-VALIDATION.json)。

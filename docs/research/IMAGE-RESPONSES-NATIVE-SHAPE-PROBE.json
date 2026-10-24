@@ -1,0 +1,16 @@
+[
+  {
+    "model": "workbuddy/cn:hunyuan-image-alpha",
+    "protocol": "responses",
+    "ok": false,
+    "error_type": "AssertionError",
+    "automatic_retry": false
+  },
+  {
+    "model": "minimax/image-01",
+    "protocol": "responses",
+    "ok": false,
+    "error_type": "AssertionError",
+    "automatic_retry": false
+  }
+]
