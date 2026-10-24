@@ -4,177 +4,102 @@
     <meta charset="utf-8" />
     <meta
       name="viewport"
-      content="width=device-width,initial-scale=1,viewport-fit=cover"
+      content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content"
     />
     <meta name="color-scheme" content="light dark" />
     <title>声笺 · 随身助理</title>
-    <link rel="stylesheet" href="console/app.css" />
-    <script src="console/pcm.js" defer></script>
-    <script src="console/vad.js" defer></script>
-    <script src="console/voice-flow.js" defer></script>
-    <script src="console/stream.js" defer></script>
-    <script src="console/echo.js" defer></script>
-    <script src="console/agent.js" defer></script>
-    <script src="console/visual.js" defer></script>
-    <script src="console/life.js" defer></script>
-    <script src="console/imagegen.js" defer></script>
-    <script src="console/app.js" defer></script>
-    <script src="console/push-to-talk.js" defer></script>
+    <link rel="stylesheet" href="console/app.css?v=2.0.0-preview.1" />
+    <script src="console/pcm.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/vad.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/voice-flow.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/stream.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/echo.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/agent.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/visual.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/life.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/imagegen.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/app.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/push-to-talk.js?v=2.0.0-preview.1" defer></script>
+    <script src="console/product.js?v=2.0.0-preview.1" defer></script>
   </head>
   <body>
-    <header>
-      <div class="brand">声笺<span>说出来，一起完成</span></div>
-      <button id="logout" hidden>退出登录</button>
-    </header>
+    <header class="app-header"><a class="brand" href="/shengjian/api/v2/console" aria-label="声笺首页"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>声笺</a><button id="profile-open" class="avatar" type="button" aria-label="我的账号" hidden>笺</button></header>
     <main>
-      <section id="auth" class="card narrow">
-        <h1>随时，与电脑对话</h1>
-        <p class="muted">登录后查看设备、发起任务和语音对话。本浏览器登录保留 180 天并随使用续期；共用设备请在用完后退出。</p>
-        <form id="login-form">
-          <label
-            >用户名<input
-              name="username"
-              autocomplete="username"
-              minlength="3"
-              required /></label
-          ><label
-            >密码<input
-              name="password"
-              type="password"
-              autocomplete="current-password"
-              minlength="12"
-              required /></label
-          ><label
-            >邀请码 <span class="muted">仅注册时需要</span
-            ><input name="invite" autocomplete="off"
-          /></label>
-          <div class="actions">
-            <button class="primary" name="action" value="login">登录</button
-            ><button name="action" value="register">使用邀请码注册</button>
-          </div>
-        </form>
+      <section id="auth" class="auth-panel">
+        <div class="auth-intro"><h1 id="auth-title">欢迎回来</h1><p>聊聊想法，也把事情交给电脑。</p></div>
+        <form id="login-form"><label>用户名<input name="username" pattern="[A-Za-z0-9_.-]+" title="使用字母、数字、点、下划线或短横线" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="64" required placeholder="输入用户名"></label><label>密码<span class="password-field"><input name="password" aria-label="密码" type="password" autocomplete="current-password" minlength="12" maxlength="128" required placeholder="输入密码"><button id="show-password" type="button" aria-label="显示密码">显示</button></span></label><label id="invite-field" hidden>邀请码<input name="invite" autocomplete="off" placeholder="输入邀请码"></label><button class="primary auth-submit" name="action" value="login">登录</button><p class="auth-switch"><button type="button" id="auth-switch">使用邀请码注册</button></p></form><p class="auth-privacy">此浏览器会记住登录。共用设备请在用完后退出。</p>
       </section>
       <div id="workspace" hidden>
-        <p class="remember-note muted">已记住此浏览器。下次直接打开<a href="/shengjian/api/v2/console">声笺固定入口</a>，也可收藏或添加到手机主屏幕，无需重新扫码。</p>
-        <nav aria-label="页面"><button data-page="conversation" aria-label="对话" class="selected"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"/></svg><span>对话</span></button><button data-page="tasks" aria-label="任务"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="17" rx="3"/><path d="M9 3h6v4H9zM8 12l2 2 5-5M8 17h8"/></svg><span>工作</span></button><button data-page="life" aria-label="生活记录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5Zm0 13A2.5 2.5 0 0 1 6.5 16H20M8 7h7M8 11h5"/></svg><span>生活</span></button><button data-page="devices" aria-label="设备"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="15" height="12" rx="2"/><path d="M6 20h7M9.5 15v5"/><rect x="16" y="9" width="6" height="12" rx="1.5"/></svg><span>设备</span></button></nav>
-        <section id="conversation" class="page">
-          <div class="conversation-top"><div><span class="eyebrow">随身助手</span><h1>对话</h1></div><span id="computer-status" class="status-pill">正在连接电脑</span></div>
-          <details id="model-settings" class="model-settings card">
-            <summary><span class="model-dot"></span><span id="current-model-name">选择对话模型</span><span class="model-settings-label">模型与连接 ⌄</span></summary>
-            <div class="model-grid">
-              <label>聊天与工作 · 文字／工具<select id="chat-model" disabled><option>正在加载模型…</option></select></label>
-              <label>识图 · 图片 → 文字<select id="chat-vision-model" disabled><option>正在加载模型…</option></select></label>
-              <label>生图 · 文字 → 图片<select id="image-model" disabled><option>正在加载生图模型…</option></select></label>
-              <label>改图 · 图片 → 图片<select id="image-edit-model" disabled><option>正在加载改图模型…</option></select></label>
-              <label>发送到<select id="destination"><option value="chat">自动选择电脑</option></select></label>
-              <label>执行引擎<select id="engine"><option value="harness">DeepSeek Harness</option><option value="codex">Codex</option></select></label>
-            </div>
-            <label class="inline"><input type="checkbox" id="speak" checked>语音回复</label>
-            <p id="model-note" class="muted">四类模型分别保存，只列出实测可用的选项；下一轮生效，正在执行的任务保持原模型。</p>
-            <span id="balance" class="muted"></span>
-          </details>
-          <div class="conversation-modes" aria-label="对话方式"><button type="button" data-conversation-mode="chat" class="selected" aria-pressed="true">聊天与工作</button><button type="button" data-conversation-mode="image" aria-pressed="false">生成图片</button></div>
-          <section id="image-space" class="card" hidden>
-            <div id="image-live-banner" hidden role="status">实时语音仍在聆听 <button type="button" id="image-stop-live">结束实时对话</button></div>
-            <span class="eyebrow">灵感画室</span><h2>把想象，变成图片。</h2><p class="muted">选择模型，上传参考图，或描述新的画面。</p>
-            <section id="image-reference" class="image-reference"><img id="image-reference-photo" alt="本轮修改的参考图" hidden><div><strong id="image-reference-label">先上传参考图，或直接描述新图片</strong><p id="image-reference-status" class="muted">上传／拍照后说“背景改成白色”，再说“亮一点”即可继续调整。</p><div class="actions"><label class="life-file-button">上传参考图<input id="image-reference-upload" type="file" accept="image/*"></label><label class="life-file-button">拍照改图<input id="image-reference-camera" type="file" accept="image/*" capture="environment"></label><button type="button" id="image-reference-clear">重新创作</button></div></div></section>
-            <div class="actions"><button type="button" id="image-start-live">开始实时语音</button><button type="button" id="image-push-to-talk" class="push-to-talk">按住说话改图</button></div>
-            <p id="image-voice-state" role="status" aria-live="polite"></p>
-            <form id="image-form"><label for="image-prompt" class="sr-only">图片描述</label><textarea id="image-prompt" rows="3" maxlength="1500" placeholder="例如：一只坐在窗边的小黑猫，温暖阳光，水彩插画…" required></textarea><div class="actions"><button type="submit" class="primary" id="create-image">生成图片</button><span id="image-cost" class="muted"></span></div></form>
-            <p id="image-status" role="status"></p><p class="muted">提交后在云端生成，离开页面也会继续。生成图片标记为 AI 作品，保存在生活记录中。</p>
-            <div id="image-gallery"></div>
-          </section>
+        <nav class="app-nav" aria-label="主导航"><button type="button" data-page="conversation" data-conversation-mode="chat" aria-label="对话" class="selected" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H9l-5 3v-7a7.5 7.5 0 1 1 16-3.5Z"/></svg><span>对话</span><i class="nav-count" aria-hidden="true" hidden></i></button><button type="button" data-page="create" data-conversation-mode="image" aria-label="创作"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="m4 16 5-5 4 4 3-3 5 5M15 7h.01"/></svg><span>创作</span><i class="nav-count" aria-hidden="true" hidden></i></button><button type="button" data-page="life" aria-label="记录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h13a2 2 0 0 1 2 2v15H7a3 3 0 0 1-3-3V6a2 2 0 0 1 1-2Zm-1 14a3 3 0 0 1 3-3h13M8 8h7M8 11h4"/></svg><span>记录</span><i class="nav-count" aria-hidden="true" hidden></i></button><button type="button" data-page="tasks" aria-label="工作"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="4"/><path d="M9 3h6v4H9zM8 12l2 2 5-5M8 17h7"/></svg><span>工作</span><i class="nav-count" aria-hidden="true" hidden></i></button><button type="button" data-page="devices" aria-label="我的"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span>我的</span><i class="nav-count" aria-hidden="true" hidden></i></button></nav>
+        <section id="conversation" class="page conversation-page">
+          <div class="chat-toolbar"><button type="button" id="history-open" class="icon-button" aria-label="历史对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v6l4 2"/></svg></button><button type="button" id="model-open" class="model-trigger"><span id="current-model-name">选择模型</span><span aria-hidden="true">⌄</span></button><button type="button" id="new-chat" class="icon-button" aria-label="新对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+          <button type="button" id="computer-status" class="connection-status" aria-label="查看电脑连接">正在连接电脑</button>
+          <div id="active-work-strip" hidden></div>
           <div id="chat-space" class="conversation-surface">
-            <div class="welcome">
-              <div class="voice-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-              <h2>想聊什么，<br>或想完成什么？</h2>
-              <p>说出想法，让电脑在后台帮你完成。</p>
-              <div class="suggestions"><button type="button" data-prompt="帮我整理一下今天的计划">聊聊今天的计划 <span>↗</span></button><button type="button" data-prompt="汇报今天电脑情况">查看电脑近况 <span>↗</span></button></div>
+            <div class="conversation-scroll" id="conversation-scroll"><button type="button" id="history-more" class="subtle-button" hidden>查看更早消息</button><p id="conversation-status" class="muted" role="status"></p><div class="welcome" id="welcome"><div class="welcome-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i></div><h1>今天，从哪件事开始？</h1><p>说出来，或者轻轻记下来。</p><div class="suggestions"><button type="button" data-prompt="帮我梳理一下今天的计划">梳理今天的计划</button><button type="button" data-prompt="汇报今天电脑情况">看看电脑近况</button><button type="button" id="suggest-photo">聊聊一张照片</button><button type="button" id="suggest-create">创作一张图片</button></div></div><div id="messages" role="log" aria-live="polite"></div></div>
+            <div class="composer-dock"><section class="visual-panel" aria-label="当前图片" hidden><video id="visual-video" muted autoplay playsinline hidden></video><img id="visual-photo" alt="当前对话图片" hidden><div class="visual-caption"><p id="visual-status" role="status">图片就绪后即可提问。</p><button id="visual-clear" type="button" disabled>移除</button></div></section>
+              <form id="compose" class="composer"><div class="input-row"><button id="attachments-open" type="button" class="icon-button" aria-label="添加照片或打开摄像头"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><label for="prompt" class="sr-only">输入或说出你的想法</label><textarea id="prompt" rows="1" maxlength="16000" required placeholder="想聊什么，或想做什么…"></textarea><button class="primary send-button" type="submit" aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 4-7 7M12 4l7 7M12 4v16"/></svg></button></div>
+                <div class="voice-mode-picker" role="group" aria-label="语音方式"><button type="button" data-voice-mode="live" aria-pressed="true">实时对话</button><button type="button" data-voice-mode="hold" aria-pressed="false">按键说话</button></div><div class="voice-controls"><button type="button" id="realtime" aria-pressed="false">开始实时对话</button><button type="button" id="push-to-talk" class="push-to-talk" aria-pressed="false" hidden>按住说话，松开发送</button><button type="button" id="stop-speech" class="subtle-button" aria-label="停止播报" hidden>停止播报</button></div>
+                <p id="live-transcript" aria-live="polite" hidden></p><p id="live-state" role="status" hidden></p><p id="voice-latency" class="muted" hidden></p><p id="voice-note" class="voice-note">随时开口打断，后台工作会继续。</p><button type="button" id="agent-mode" aria-pressed="false" hidden>聊天与工作</button>
+              </form>
             </div>
-            <div id="messages" role="log" aria-live="polite"></div>
-            <section class="visual-panel" aria-label="实时看图">
-              <video id="visual-video" muted autoplay playsinline hidden></video>
-              <img id="visual-photo" alt="当前对话图片" hidden>
-              <div class="attachment-bar">
-                <label class="life-file-button">＋ 图片<input id="visual-upload" type="file" accept="image/*"></label>
-                <label class="life-file-button">拍照聊<input id="visual-take-photo" type="file" accept="image/*" capture="environment"></label>
-                <button id="visual-camera-toggle" type="button" aria-pressed="false">开启摄像头</button>
-                <button id="visual-clear" type="button" disabled>结束看图</button>
-              </div>
-              <p id="visual-status" class="muted" role="status">拍照或上传图片，就能直接开口聊图。</p>
-            </section>
-            <form id="compose" class="composer">
-              <label for="prompt" class="sr-only">输入或说出你的想法</label><textarea id="prompt" rows="2" maxlength="16000" required placeholder="聊一聊，或交给电脑做点事…"></textarea>
-              <div class="voice-mode-picker" role="group" aria-label="语音方式"><button type="button" data-voice-mode="live" aria-pressed="true">实时对话</button><button type="button" data-voice-mode="hold" aria-pressed="false">按键说话</button></div>
-              <div class="compose-actions voice-controls"><button type="button" id="realtime" aria-pressed="false">开始实时对话</button><button type="button" id="push-to-talk" class="push-to-talk" aria-pressed="false" hidden>按住说话，松开发送</button><button class="primary send-button" type="submit">发送</button></div>
-              <p id="live-transcript" aria-live="polite" hidden></p><p id="live-state" role="status" hidden></p><p id="voice-latency" class="muted" hidden></p>
-              <div class="composer-tools"><button type="button" id="record">录音转文字</button><button type="button" id="stop-speech">停止播报</button><button type="button" id="agent-mode" aria-label="Chat / Work · DeepSeek Harness" aria-pressed="false">聊天与工作</button></div>
-              <p id="voice-note" class="muted">随时开口打断。停止播报不会取消后台工作。</p>
-            </form>
           </div>
         </section>
-        <section id="life" class="page" hidden>
-          <div class="heading"><div><span class="eyebrow">日常与记忆</span><h1>生活记录</h1></div><span class="muted">把此刻留下，慢慢成为记忆。</span></div>
+        <section id="create" class="page" hidden><section id="image-space" class="creation-workspace" hidden>
+            <div id="image-live-banner" hidden role="status">实时语音仍在聆听 <button type="button" id="image-stop-live">结束实时对话</button></div>
+            <div class="section-heading"><div><h1>创作</h1><p>从一个想法，或一张照片开始。</p></div><button type="button" data-open-models="image" class="subtle-button">选择模型</button></div>
+            <div class="segmented" role="group" aria-label="创作方式"><button type="button" data-art-mode="generate" class="selected">生成图片</button><button type="button" data-art-mode="edit">编辑照片</button></div>
+            <section id="image-reference" class="image-reference"><img id="image-reference-photo" alt="本轮修改的参考图" hidden><div><strong id="image-reference-label">先上传参考图，或直接描述新图片</strong><p id="image-reference-status" class="muted">上传／拍照后说“背景改成白色”，再说“亮一点”即可继续调整。</p><div class="actions"><label class="life-file-button">上传参考图<input id="image-reference-upload" type="file" accept="image/*"></label><label class="life-file-button">拍照改图<input id="image-reference-camera" type="file" accept="image/*" capture="environment"></label><button type="button" id="image-reference-clear">重新创作</button></div></div></section>
+            <div class="actions"><button type="button" id="image-start-live">开始实时语音</button><button type="button" id="image-push-to-talk" class="push-to-talk">按住说出需求</button></div>
+            <p id="image-voice-state" role="status" aria-live="polite"></p>
+            <form id="image-form"><label for="image-prompt" class="sr-only">图片描述</label><textarea id="image-prompt" rows="3" maxlength="1500" placeholder="例如：一只坐在窗边的小黑猫，温暖阳光，水彩插画…" required></textarea><div class="actions"><button type="submit" class="primary" id="create-image">生成图片</button><span id="image-cost" class="muted"></span></div></form>
+            <p id="image-status" role="status"></p><p class="muted">图片完成后会出现在这里，离开页面也会继续生成。</p>
+            <div id="image-gallery"></div>
+          </section></section>
+                <section id="life" class="page" hidden>
+          <div class="section-heading"><div><h1>记录</h1><p>留下此刻，慢慢成为记忆。</p></div><button type="button" data-dialog="memory-dialog" class="icon-button" aria-label="记录设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg></button></div><div class="segmented" role="group" aria-label="记录分区"><button data-life-view="timeline" class="selected">时间线</button><button data-life-view="review">每日回顾</button><button data-life-view="memories">记忆</button></div>
           <p id="life-status" role="status" aria-live="polite"></p>
-          <section class="card">
-            <label for="life-vision-model">识图模型</label>
-            <select id="life-vision-model" disabled><option>正在载入已验证的模型…</option></select>
-            <p class="muted">只列出实际通过识图测试的模型，选择后自动保存到当前账号，下一轮看图对话生效。更换模型后，点击“整理这一天”使用新模型，已有同版本结果时复用。“重新整理”会再次生成记忆并使用额度；仅切换设置不改变已有记忆。</p>
-          </section>
-          <section class="card">
+          <section class="card note-compose" data-life-panel="timeline">
             <form id="life-compose">
-              <label for="life-note">记录这一刻</label><textarea id="life-note" rows="3" maxlength="16000" placeholder="今天发生了什么，或者想聊些什么…"></textarea>
+              <label for="life-note">记下此刻</label><textarea id="life-note" rows="3" maxlength="16000" placeholder="今天发生了什么？写下心情，或留一张照片。"></textarea>
               <div class="actions life-actions">
-                <button class="primary" value="note">保存文字</button><button value="talk">聊一聊并记录</button>
+                <button class="primary" value="note">保存记录</button><button value="talk">和声笺聊聊</button>
                 <label class="life-file-button">上传图片<input id="life-files" type="file" accept="image/*" multiple></label>
                 <label class="life-file-button">拍照记录<input id="life-camera" type="file" accept="image/*" capture="environment"></label>
               </div>
-              <p class="muted">选图或拍照后自动保存，正文和照片一起留在时间线。断网时先保存在此浏览器，联网后补传。对话记录开关在下方。</p>
+              <p class="muted">照片会和这段文字一起保存；离线时先留在此浏览器，联网后同步。</p>
             </form>
           </section>
-          <details class="card"><summary>晚间整理与记录设置</summary>
+          <section class="card" data-life-panel="review" hidden><div class="heading"><h2>每日回顾</h2><div class="actions"><input type="date" id="life-day" aria-label="整理日期"><button id="life-consolidate" type="button">整理这一天</button><button id="life-reconsolidate" type="button">重新整理</button></div></div><p class="muted">重新生成回顾会再次使用额度。</p><div id="life-jobs"></div></section>
+          <div class="life-layout"><section data-life-panel="timeline"><div class="heading"><h2>时间线</h2><input id="life-search" type="search" placeholder="搜索记录" aria-label="搜索生活记录"></div><div id="life-timeline"></div><button id="life-more" type="button">加载更早记录</button></section>
+          <aside data-life-panel="memories" hidden><h2>我的记忆</h2><p class="muted">每条都有来源，可修改或删除。删除原始记录会撤回它生成的记忆。</p><div id="life-memories"></div><div id="life-source"></div></aside></div>
+        </section>
+
+        <section id="tasks" class="page" hidden><div class="section-heading"><div><h1>工作</h1><p>交给电脑的事，进展都在这里。</p></div><button type="button" id="new-work" class="subtle-button">发起任务</button></div><div id="work-overview" class="work-overview"></div><div class="segmented" role="group" aria-label="工作筛选"><button data-work-filter="active" class="selected">进行中</button><button data-work-filter="attention">待处理</button><button data-work-filter="done">已结束</button><button data-work-filter="all">全部</button></div><div class="task-layout"><div id="task-list"></div><div id="task-detail-pane"><button type="button" id="task-back" class="subtle-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg>返回工作列表</button><article id="task-detail" class="card"><div class="empty-state"><h2>选择一项工作</h2><p>查看进展、结果，或处理需要你确认的操作。</p></div></article></div></div></section>
+        <section id="devices" class="page" hidden><div class="section-heading"><div><h1>我的</h1><p>让声笺更了解你，也连好你的设备。</p></div></div><section class="profile-card"><span class="avatar" id="profile-avatar">笺</span><div><h2 id="profile-name">我的账号</h2><p id="balance" class="muted"></p></div></section><div class="settings-list"><button type="button" data-open-models="chat">模型偏好<span>对话、看图与创作</span></button><button type="button" data-dialog="memory-dialog">记录与记忆<span>自动记录、晚间整理</span></button><button type="button" data-dialog="connect-dialog">连接帮助<span>电脑连接与公网传输</span></button><button type="button" data-dialog="about-dialog">关于声笺<span>Web 2.0 预览版</span></button></div><div class="section-heading small"><h2>我的设备</h2><button id="refresh" type="button" class="subtle-button">刷新</button></div><div id="device-list" class="grid"></div><details class="advanced-device"><summary>高级：手动登记电脑</summary><form id="enroll"><label>设备名称<input name="name" maxlength="80" required></label><button class="primary">登记任务与状态能力</button></form><p class="muted">通常只需在电脑端登录同一账号。以下配置只供自行部署连接器使用。</p><pre id="device-config"></pre></details><button id="logout" class="logout-button" type="button" hidden>退出登录</button></section>
+        <div id="voice-minibar" hidden><span>实时对话进行中</span><button type="button" id="voice-return">返回对话</button><button type="button" id="voice-end">结束</button></div>
+      </div>
+      <div id="notice" role="status" aria-live="polite"></div>
+    </main>
+    <dialog id="models-dialog" class="sheet"><div class="sheet-heading"><h2>模型偏好</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭" id="models-close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div class="segmented" role="group" aria-label="模型用途"><button type="button" data-model-scope="chat" class="selected">对话</button><button type="button" data-model-scope="image">创作</button></div><details id="model-settings" open><summary class="sr-only">模型与连接</summary><div class="model-grid"><label data-model-panel="chat">对话与工作<select id="chat-model" disabled><option>正在加载…</option></select></label><label data-model-panel="chat">看图<select id="chat-vision-model" disabled><option>正在加载…</option></select></label><label data-model-panel="image">生成图片<select id="image-model" disabled><option>正在加载…</option></select></label><label data-model-panel="image">编辑图片<select id="image-edit-model" disabled><option>正在加载…</option></select></label></div><p id="model-note" class="muted" role="status">选择后自动保存，从下一轮开始使用。</p><label class="inline"><input type="checkbox" id="speak">语音回复</label><details class="advanced"><summary>电脑与执行方式</summary><label>发送到<select id="destination"><option value="chat">自动选择电脑</option></select></label><label>执行方式<select id="engine"><option value="harness">电脑助手（DeepSeek Harness）</option><option value="codex">Codex</option></select></label><p class="muted">切换电脑将开启独立对话。正在进行的工作不受影响。</p></details></details></dialog>
+    <dialog id="attachments-dialog" class="sheet"><div class="sheet-heading"><h2>把画面带进对话</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭" id="attachments-close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div class="attachment-options"><label class="file-option">从相册选择<input id="visual-upload" type="file" accept="image/*"></label><label class="file-option">拍照提问<input id="visual-take-photo" type="file" accept="image/*" capture="environment"></label><button id="visual-camera-toggle" type="button" aria-pressed="false">开启摄像头</button></div><div class="sheet-divider"></div><button type="button" id="record">录音转文字</button><p class="muted">只识别并填入输入框，编辑后再发送。</p></dialog>
+    <dialog id="history-dialog" class="sheet history-sheet"><div class="sheet-heading"><h2>历史对话</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭" id="history-close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><label class="search-field"><span class="sr-only">搜索对话</span><input id="conversation-search" type="search" placeholder="搜索已加载的对话"></label><div class="segmented"><button type="button" data-history-view="recent" class="selected">最近</button><button type="button" data-history-view="archived">已归档</button></div><p id="history-status" class="muted" role="status"></p><div id="conversation-list"></div><button type="button" id="history-load-more" class="subtle-button" hidden>加载更早对话</button></dialog>
+    <dialog id="memory-dialog" class="sheet"><div class="sheet-heading"><h2>记录与记忆</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭" id="memory-close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>          <section><h3>晚间回顾</h3>
             <form id="life-settings"><label class="inline"><input id="life-auto" type="checkbox" checked>每天自动沉淀记忆</label>
               <label>每天整理时间<input id="life-clock" type="time" value="23:00" required></label>
               <label>时区<input id="life-timezone" value="Asia/Shanghai" required></label>
               <label class="inline"><input id="life-capture" type="checkbox" checked>自动记录对话页的文字与语音对话</label>
               <button>保存设置</button></form>
-            <p class="muted">原始记录与图片保存在你的云端账号。晚间整理使用已配置的模型与额度；提炼后的记忆同步到本机助理。记录不是工具指令。照片未解析成功时会明确保留待处理状态。</p>
-          </details>
-          <section class="card"><div class="heading"><h2>每日沉淀</h2><div class="actions"><input type="date" id="life-day" aria-label="整理日期"><button id="life-consolidate" type="button">整理这一天</button><button id="life-reconsolidate" type="button">重新整理</button></div></div><p class="muted">重新整理会发起新的模型调用并使用额度；网络结果未知时不会自动重试。</p><div id="life-jobs"></div></section>
-          <div class="life-layout"><section><div class="heading"><h2>时间线</h2><input id="life-search" type="search" placeholder="搜索记录" aria-label="搜索生活记录"></div><div id="life-timeline"></div><button id="life-more" type="button">加载更早记录</button></section>
-          <aside><h2>我的记忆</h2><p class="muted">每条都有来源，可修改或删除。删除原始记录会撤回它生成的记忆。</p><div id="life-memories"></div><div id="life-source"></div></aside></div>
-        </section>
-        <section id="devices" class="page" hidden>
-          <div class="heading">
-            <div><span class="eyebrow">CONNECTED DEVICES</span><h1>我的设备</h1></div>
-            <button id="refresh">刷新</button>
-          </div>
-          <div id="device-list" class="grid"></div>
-          <details class="card">
-            <summary>登记电脑连接器</summary>
-            <form id="enroll">
-              <label
-                >设备名称<input name="name" maxlength="80" required /></label
-              ><button class="primary">登记任务与状态能力</button>
-            </form>
-            <p class="muted">
-              登记后保存配置到这台电脑的私有文件，并在设备卡片中开启能力。
-            </p>
-            <pre id="device-config"></pre>
-          </details>
-        </section>
-        <section id="tasks" class="page" hidden>
-          <div class="section-title"><span class="eyebrow">工作空间</span><h1>工作与进度</h1><p class="muted">电脑在后台执行，你随时掌握进度。</p></div><div id="work-overview" class="work-overview"></div>
-          <div class="task-layout">
-            <div id="task-list"></div>
-            <article id="task-detail" class="card">
-              <p class="muted">选择任务查看进度。手机切后台不会取消任务。</p>
-            </article>
-          </div>
-        </section>
-      </div>
-      <p id="notice" role="status" aria-live="polite"></p>
-    </main>
-    <footer>声笺 · 想法有回应，生活有记忆</footer>
+            <p class="muted">照片与文字保存在当前账号。晚间回顾会使用模型额度，提炼的记忆会同步到电脑助手。</p>
+          </section>
+          <section class="card">
+            <label for="life-vision-model" hidden>识图模型</label>
+            <select id="life-vision-model" disabled hidden><option>正在载入已验证的模型…</option></select>
+            <p class="muted">照片理解跟随“模型偏好”中的看图模型，修改后用于后续提问与回顾。</p>
+          </section>
+</dialog>
+    <dialog id="connect-dialog" class="sheet"><div class="sheet-heading"><h2>连接电脑</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭" id="connect-close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><ol class="setup-steps"><li><h3>在电脑打开声笺</h3><p>登录与手机相同的账号。</p></li><li><h3>启用电脑助手</h3><p>电脑会出现在“我的设备”，保持声笺后台运行。</p></li><li><h3>回到这里开始对话</h3><p>可以聊想法、看图片，也可以交给电脑做事。</p></li></ol><details><summary>传文字或文件到当前输入框</summary><p>在电脑端展开“文件传输与自动粘贴”，扫描其中的文件传输码。固定公网模式支持手机流量连接；自动粘贴需要电脑系统权限。</p></details><button type="button" class="primary" id="show-devices">查看我的设备</button></dialog>
+    <dialog id="about-dialog" class="sheet"><div class="sheet-heading"><h2>关于声笺</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭" id="about-close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div class="about-brand"><span class="brand-mark"><i></i><i></i><i></i></span><h3>声笺</h3><p id="about-version">Web 2.0 预览版</p></div><p>用对话连接想法、生活与电脑。</p><button type="button" id="copy-version" class="subtle-button">复制版本信息</button><h3>这一版的变化</h3><ul><li>对话历史可查看和继续，刷新后恢复。</li><li>创作、生活记录、电脑工作各有清楚的入口。</li><li>实时对话与按键说话，模型偏好按需设置。</li></ul><p class="muted">这是网页预览版本，桌面安装版本独立更新。</p></dialog>
+    <dialog id="confirm-dialog" class="sheet"><div class="sheet-heading"><h2 id="confirm-title">确认操作</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭">×</button></div><p id="confirm-description"></p><div class="actions"><button id="confirm-no" type="button">保留</button><button id="confirm-yes" type="button" class="primary">确认</button></div></dialog>
   </body>
 </html>

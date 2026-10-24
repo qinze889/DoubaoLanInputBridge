@@ -1,0 +1,53 @@
+{
+  "version": "2.0.0-preview.1",
+  "date": "2026-10-24",
+  "release": "20261024-3c572f8b6de3",
+  "areas": [
+    "对话",
+    "创作",
+    "记录",
+    "工作",
+    "我的"
+  ],
+  "backend_unique_checks": 116,
+  "backend_note": "115 checks passed together; after adding conversation-list pagination, 11 targeted checks passed, including the new fifth product test.",
+  "browser_suites": [
+    "smoke_product_ui",
+    "smoke_mobile_ui",
+    "smoke_core_ui",
+    "smoke_life_ui",
+    "smoke_image_generation",
+    "smoke_reference_edit",
+    "smoke_stream_voice",
+    "smoke_push_to_talk",
+    "smoke_harness_chat",
+    "test_voice_dsp",
+    "test_voice_flow"
+  ],
+  "viewport_widths": [
+    320,
+    390,
+    1100
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "database_restore_points": {
+    "core": true,
+    "life_and_images": true
+  },
+  "native_after_deploy": {
+    "agent_connected": true,
+    "engine": "DeepSeek Harness",
+    "interaction_mode": "background",
+    "accessibility": true,
+    "legacy_relay_active": true,
+    "desktop_reinstalled": false
+  },
+  "limitations": [
+    "Synthetic microphone and camera checks do not validate phone speakers, acoustic echo or system keyboard.",
+    "Web preview release; desktop VERSION and public installers are unchanged.",
+    "Actual public audio scheduling sample was 3920 ms; this product UI refactor makes no new latency-improvement claim."
+  ]
+}

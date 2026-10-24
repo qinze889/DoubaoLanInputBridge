@@ -28,7 +28,7 @@
     try{await framePromise;}finally{framePromise=null;}
   }
   async function snapshot(prompt){if(opening)await cameraReady();if(media)await captureFrame(prompt);const state=current,version=epoch;const images=await ready();if(version!==epoch||state!==current)throw new Error('图片已更换，请重新提问。');return{images};}
-  async function attach(files){if(files.length!==1)throw new Error('每次选择一张图片。');await window.ShengjianConversation?.openVisual(false);const owner=uid,version=epoch,selectionId=beginSelection();try{const blob=await window.ShengjianLife.compress(files[0]);if(owner!==uid||version!==epoch)return;await window.ShengjianLife.attachPhoto(blob,'',{selectionId});}catch(error){selectionFailed(selectionId,error);throw error;}}
+  async function attach(files,options={}){if(files.length!==1)throw new Error('每次选择一张图片。');if(options.open!==false)await window.ShengjianConversation?.openVisual(false);const owner=uid,version=epoch,selectionId=beginSelection();try{const blob=await window.ShengjianLife.compress(files[0]);if(owner!==uid||version!==epoch)return;await window.ShengjianLife.attachPhoto(blob,'',{selectionId});}catch(error){selectionFailed(selectionId,error);throw error;}}
   for(const id of ['visual-upload','visual-take-photo'])$(id).onchange=e=>{attach([...e.target.files]).catch(e=>note(e.message)).finally(()=>{e.target.value='';});};
   $('visual-camera-toggle').onclick=async()=>{
     if(media){stopCamera();changed();return;}const version=epoch;let cam;
@@ -40,13 +40,14 @@
       $('visual-camera-toggle').textContent='关闭摄像头';$('visual-camera-toggle').setAttribute('aria-pressed','true');$('visual-clear').disabled=false;$('visual-camera-toggle').disabled=false;note('摄像头已开启。提问时只保存一张当前画面，随后和对话一起晚间整理。');opening=false;for(const w of cameraWaiters)w.resolve();cameraWaiters=[];
     }catch(error){if(version!==epoch||cam!==cameraEpoch)return;stopCamera();note('摄像头未开启：'+error.message);changed();}
   };
-  $('visual-clear').onclick=()=>{stopCamera();dispose();preview();note('已结束看图，照片和对话仍保留在生活记录。');changed();};
+  function clear(){stopCamera();dispose();preview();note('已移除当前图片，原记录仍保留。');changed();}
+  $('visual-clear').onclick=clear;
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopCamera();});
   window.addEventListener('pagehide',stopCamera);
   window.ShengjianVisual={
     activate(owner,client){if(uid!==owner){stopCamera();dispose();epoch++;uid=owner;preview();note('拍照或上传后即可直接语音聊图，也可以开启摄像头边看边聊。');}api=client;},
     deactivate(){uid='';epoch++;stopCamera();dispose();preview();api=null;},
-    attach,pendingPhoto,photoReady,photoFailed,useSaved,snapshot,stopCamera,beginSelection,selectionFailed,
+    attach,clear,pendingPhoto,photoReady,photoFailed,useSaved,snapshot,stopCamera,beginSelection,selectionFailed,
     hasContext(){return !!(current||media||opening);},
     images(){return current?.id?[current.id]:[];},
     removed(ids){if(current?.id&&ids.includes(current.id)){$('visual-clear').click();}}

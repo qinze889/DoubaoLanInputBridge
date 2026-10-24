@@ -1,3 +1,4 @@
+const {openModels,closeModels,toggleModels,setSpeech,logoutUser}=require('./ui_helpers.cjs');
 const { chromium } = require("../desktop/node_modules/playwright");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -128,18 +129,18 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.locator("#workspace").waitFor({ state: "visible" });
-    await page.locator('#model-settings summary').click();
+    await toggleModels(page);
     await page.locator('#chat-model').selectOption('fixture-text-alternative');
     await page.waitForFunction(()=>document.querySelector('#current-model-name').textContent==='fixture text alternative');
     await page.reload();await page.locator('#workspace').waitFor({state:'visible'});
-    await page.locator('#model-settings summary').click();
+    await toggleModels(page);
     assert.equal(await page.locator('#chat-model').inputValue(),'fixture-text-alternative');
     await page.locator('#chat-vision-model').selectOption('fixture-vision-alternative');
     await page.waitForFunction(()=>document.querySelector('#life-vision-model').value==='fixture-vision-alternative' && !document.querySelector('#chat-vision-model').disabled);
-    await page.locator("#speak").uncheck();
+    await setSpeech(page,false);
     await page.locator("#prompt").fill("测试对话");
     await page.getByRole("button", { name: "发送", exact: true }).click();
-    await page.getByText("已收到你的消息。", { exact: true }).waitFor();
+    await page.locator("#messages").getByText("已收到你的消息。", { exact: true }).waitFor();
     const speechBodies = [];
     let speechDelay = 0;
     await page.route("**/shengjian/api/v2/voice/speech", async (route) => {
@@ -193,7 +194,9 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     speechBodies.length = 0;
     // Real-time conversation: one microphone grant, automatic send, a second turn,
     // interruption during playback, then background shutdown with no retry.
+    await openModels(page,true);
     await page.locator("#destination").selectOption("chat");
+    await closeModels(page);
     await page.evaluate(() => {
       window.savedAudioContext = window.AudioContext;
       window.savedGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
@@ -345,19 +348,22 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       window.AudioContext = window.savedAudioContext;
       navigator.mediaDevices.getUserMedia = window.savedGetUserMedia;
     });
-    await page.getByRole("button", { name: "设备", exact: true }).click();
-    await page.getByText("登记电脑连接器", { exact: true }).click();
+    await page.getByRole("button", { name: "我的", exact: true }).click();
+    await page.getByText("高级：手动登记电脑", { exact: true }).click();
     await page.getByLabel("设备名称").fill("测试电脑");
     await page.getByRole("button", { name: "登记任务与状态能力" }).click();
     await page
       .getByRole("heading", { name: "测试电脑", exact: true })
       .waitFor();
+    await page.locator("#device-list summary").first().click();
     await page.getByLabel("执行任务", { exact: true }).check();
     await page.getByRole("button", { name: "对话", exact: true }).click();
+    await openModels(page,true);
     await page
       .locator("#destination")
       .selectOption({ label: "测试电脑 · 离线" });
     await page.locator("#engine").selectOption("codex");
+    await closeModels(page);
     await page.locator("#prompt").fill("整理测试资料");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await page
@@ -373,7 +379,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       .getByText("已取消", { exact: true })
       .waitFor();
     await page.getByRole("button", { name: "对话", exact: true }).click();
-    await page.locator("#speak").check();
+    await setSpeech(page,true);
     await page.locator("#prompt").fill("语音汇报测试");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await page
@@ -456,7 +462,6 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       navigator.mediaDevices.getUserMedia = window.agentGetUserMedia;
       window.Audio = window.agentAudio;
     });
-    await page.getByRole('button', { name: 'Chat / Work · DeepSeek Harness', exact: true }).click();
     await page.getByRole('button', { name: '开始实时对话', exact: true }).click();
     await page.waitForFunction(() => live?.processor);
     async function sayAgent(text) {
@@ -483,7 +488,6 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     await sayAgent('取消当前任务');
     assert.equal(await page.evaluate(async () => (await json('/tasks/' + currentTask)).task.state), 'cancelled');
     await page.evaluate(() => stopLive());
-    await page.getByRole('button', { name: 'Chat / Work · DeepSeek Harness', exact: true }).click();
     voiceText = null;
     await page.evaluate(() => { window.AudioContext = window.savedAudioContext; navigator.mediaDevices.getUserMedia = window.savedGetUserMedia; window.Audio = window.originalAudio; });
     // A response begun under the old account must never appear after logout.
@@ -504,11 +508,13 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
         });
       },
     );
+    await openModels(page,true);
     await page.locator("#destination").selectOption("chat");
+    await closeModels(page);
     await page.locator("#prompt").fill("旧账号延迟请求");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await requestStarted;
-    await page.getByRole("button", { name: "退出登录" }).click();
+    await logoutUser(page);
     await page.locator("#auth").waitFor({ state: "visible" });
     await page.getByLabel("用户名", { exact: true }).fill("browser-second");
     await page.getByLabel("密码", { exact: true }).fill("browser-password-456");
@@ -518,14 +524,14 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     await page.waitForTimeout(200);
     assert.equal(await page.locator("#messages").textContent(), "");
     assert.equal(await page.locator("#prompt").inputValue(), "");
-    assert.equal(await page.locator("#task-list button").count(), 0);
+    assert.equal(await page.locator("#task-list .task-card").count(), 0);
     assert.equal(await page.locator("#device-config").textContent(), "");
     assert(
       !(await page
         .getByRole("button", { name: "发送", exact: true })
         .isDisabled()),
     );
-    await page.getByRole("button", { name: "任务", exact: true }).click();
+    await page.getByRole("button", { name: "工作", exact: true }).click();
     assert(
       !(await page.locator("#task-detail").textContent()).includes(
         "voice-task-report",
@@ -538,7 +544,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     let phone = await phoneContext.newPage();
     await phone.goto(origin + '/shengjian/api/v2/console#login=' + ticket);
     await phone.locator('#workspace').waitFor({ state: 'visible' });
-    assert.equal(new URL(phone.url()).hash, '');
+    assert(!new URL(phone.url()).hash.includes('login='),'QR credential removed from URL');
     assert.equal(await phone.evaluate(() => sessionStorage.getItem('shengjian.session')), null);
     const phoneDevice = await page.evaluate(async () => (await json('/devices')).devices.find(d => d.name === '手机扫码登录').id);
     const saved = await phoneContext.storageState();
@@ -551,9 +557,9 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     await phone.reload();
     await phone.locator('#auth').waitFor({ state: 'visible' });
     await phone.goto(origin + '/shengjian/api/v2/console#login=' + ticket);
-    await phone.getByText('二维码已使用或已过期，请在电脑上刷新后重新扫描。', { exact: true }).waitFor();
+    await phone.locator('#notice').filter({hasText:'二维码已使用或已过期，请在电脑上刷新后重新扫描。'}).waitFor();
     await phoneContext.close();
-    await page.getByRole("button", { name: "退出登录" }).click();
+    await logoutUser(page);
     console.log(
       "Core UI: QR redeem/replay/restart/revocation, real-time endpointing/two turns/interruption/mic reuse/offline, account isolation, voice queue/stop, task report, enrollment/grants, cancellation, light/dark and mobile passed",
     );

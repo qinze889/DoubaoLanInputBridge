@@ -77,6 +77,14 @@ class Store:
             if column not in {r[1] for r in self.db.execute('PRAGMA table_info('+table+')')}:
                 self.db.execute('ALTER TABLE '+table+' ADD COLUMN '+column+' INTEGER NOT NULL DEFAULT 0')
         self.db.execute('CREATE TABLE IF NOT EXISTS quota_changes(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),unlimited INTEGER NOT NULL,created REAL NOT NULL)')
+        if 'is_work' not in {r[1] for r in self.db.execute('PRAGMA table_info(tasks)')}:
+            with self.tx() as db:
+                db.execute('ALTER TABLE tasks ADD COLUMN is_work INTEGER NOT NULL DEFAULT 1')
+                for row in db.execute('SELECT id,specification FROM tasks').fetchall():
+                    if json.loads(row['specification']).get('assistant_chat'):db.execute('UPDATE tasks SET is_work=0 WHERE id=?',(row['id'],))
+                for row in db.execute('SELECT task_id,body FROM events').fetchall():
+                    if self.work_event(json.loads(row['body'])):db.execute('UPDATE tasks SET is_work=1 WHERE id=?',(row['task_id'],))
+        self.db.execute('CREATE INDEX IF NOT EXISTS tasks_owner_created ON tasks(user_id,created DESC)')
         version = self.db.execute('PRAGMA user_version').fetchone()[0]
         if version > 2:
             raise RuntimeError('Database schema is newer than this service')
@@ -304,7 +312,16 @@ class Store:
             if not db.execute('UPDATE devices SET last_seen=?,metrics=? WHERE id=? AND revoked=0', (time.time(), encode(metrics), ident)).rowcount:
                 raise Fault('device_revoked', 401)
 
+    @staticmethod
+    def work_event(body):
+        if body.get('type')=='task.approval':return True
+        if body.get('type')!='task.log':return False
+        try:log=json.loads(body.get('text',''))
+        except (ValueError,TypeError):return False
+        return isinstance(log,dict) and log.get('type')=='tool_call' and log.get('tool')!='see_user_image'
+
     def _event(self, db, task_id, body, event_id=None):
+        if self.work_event(body):db.execute('UPDATE tasks SET is_work=1 WHERE id=?',(task_id,))
         sequence = db.execute('SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE task_id=?', (task_id,)).fetchone()[0]
         db.execute('INSERT INTO events VALUES(?,?,?,?,?)', (task_id, sequence, event_id or secrets.token_hex(16), encode(body), time.time()))
         return sequence
@@ -344,6 +361,7 @@ class Store:
                 raise Fault('active_task_limit', 429)
             task_id = secrets.token_hex(16)
             db.execute('INSERT INTO tasks(id,user_id,device_id,request_id,specification,created) VALUES(?,?,?,?,?,?)', (task_id, uid, device['id'], specification['request_id'], encode(specification), time.time()))
+            if specification.get('assistant_chat'):db.execute('UPDATE tasks SET is_work=0 WHERE id=?',(task_id,))
             self._event(db, task_id, {'type': 'task.state', 'state': 'queued'})
             return dict(db.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone())
 

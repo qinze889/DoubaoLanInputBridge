@@ -3,7 +3,7 @@
   const buttons=[document.getElementById('push-to-talk'),document.getElementById('image-push-to-talk')];
   let gesture=null,owner='',mode='live';
   const state=document.getElementById('live-state');
-  const labels=()=>{for(const b of buttons){b.textContent=b.id==='image-push-to-talk'?'按住说话改图':'按住说话，松开发送';b.setAttribute('aria-pressed','false');b.classList.remove('recording','cancel');}};
+  const labels=()=>{for(const b of buttons){b.textContent=b.id==='image-push-to-talk'?'按住说出需求':'按住说话，松开发送';b.setAttribute('aria-pressed','false');b.classList.remove('recording','cancel');}};
   function switchMode(value,save=true){
     if(!['live','hold'].includes(value))return;
     if(gesture){gesture.cancelled=true;endManualVoice(gesture,true);gesture=null;}

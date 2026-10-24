@@ -70,6 +70,8 @@ def mount(app, store, user, peers):
     @app.post(PREFIX+'/assistant/chat')
     async def chat(body: Chat, uid=Depends(user)):
         if intent(body.text) != 'task':
+            previous=getattr(app.state,'previous_conversation_control',lambda *args:None)(uid,body)
+            if previous:return previous
             # A queued follow-up must not replace the running Work as the control target.
             with store.lock:
                 bound=store.db.execute('SELECT * FROM assistant_conversations WHERE id=?',(body.conversation_id,)).fetchone()
@@ -82,8 +84,11 @@ def mount(app, store, user, peers):
                 running=[t for t in candidates if t['state'] in {'running','awaiting_user'}]
                 if running:target=min(running,key=lambda t:t['created'])['id']
                 elif candidates:target=min(candidates,key=lambda t:t['created'])['id']
-            return await turn(Turn(text=body.text, request_id=body.request_id, device_id=selected,
+            response=await turn(Turn(text=body.text, request_id=body.request_id, device_id=selected,
                                    task_id=target), uid)
+            recorder=getattr(app.state,'record_conversation_control',None)
+            if recorder:recorder(uid,body,response)
+            return response
         old = store.task_by_request(uid, body.request_id)
         if old:
             spec = json.loads(old['specification'])

@@ -15,7 +15,7 @@ let token = "",
   composeEpoch = 0,
   replyController = null,
   voiceController = null;
-let authEpoch = 0, legacyCaptureEpoch = 0;
+let authEpoch = 0, legacyCaptureEpoch = 0, appSnapshot = null, taskViewId = "";
 let agentMode = false, computerDevices = [];
 let chatOwner="", harnessInterrupted=false;
 let modelOwner="", modelSaving=false;
@@ -31,6 +31,7 @@ const labels = {
 };
 function notice(value = "") {
   $("notice").textContent = value;
+  window.ShengjianProduct?.presentNotice(value);
 }
 function el(tag, text, cls) {
   const node = document.createElement(tag);
@@ -45,7 +46,10 @@ function button(text, handler) {
   return b;
 }
 const errors = {
-  insufficient_credits: "测试额度不足，请联系管理员补充。",
+  insufficient_credits: "可用积分不足，请联系管理员补充。",
+  invalid_credentials:"用户名或密码不正确，请再检查一下。",
+  invalid_invitation:"邀请码不可用，请检查后重试，或申请新的邀请码。",
+  username_unavailable:"这个用户名已被使用，请换一个。",
   microphone_denied:"麦克风权限未允许，请在浏览器设置中允许麦克风后重试。",
   microphone_missing:"没有找到可用麦克风，请连接麦克风后重试。",
   microphone_unavailable:"麦克风暂时不可用，请结束其他录音或通话后重试。",
@@ -64,7 +68,9 @@ const errors = {
   chat_model_not_available: "所选对话模型暂不可用，请在模型与连接中重新选择。",
   model_provider_not_configured: "对话来源尚未配置。",
   model_discovery_failed: "暂时无法连接对话来源。",
-  capability_not_granted: "请先在设备页开启这台电脑的任务能力。",
+  capability_not_granted: "请在“我的”中开启这台电脑的任务权限。",
+  conversation_not_found:"这段对话暂时不可用，请从历史中重新打开。",
+  conversation_device_mismatch:"这段对话属于另一台电脑，请为新电脑开启新对话。",
   rate_limited: "操作较频繁，请一分钟后重试。",
   usage_already_submitted: "这项请求已提交，请查看原结果。",
   utterance_too_long: "这段录音已达到 30 秒，请分句录制。",
@@ -106,13 +112,15 @@ async function api(
 async function json(path, body, method) {
   return (await api(path, body, method)).json();
 }
-function showPage(id) {
-  if(id!=="conversation")window.ShengjianVisual?.stopCamera();
-  document.querySelectorAll(".page").forEach((p) => (p.hidden = p.id !== id));
-  document
-    .querySelectorAll("nav button")
-    .forEach((b) => b.classList.toggle("selected", b.dataset.page === id));
-  if (id === "life") window.ShengjianLife?.refresh();
+function showPage(id,options={}) {
+  if(!['conversation','create','life','tasks','devices'].includes(id))return;
+  if(id!=="conversation"&&id!=="create")window.ShengjianVisual?.stopCamera();
+  document.querySelectorAll('.page').forEach(p=>p.hidden=p.id!==id);
+  for(const b of document.querySelectorAll('.app-nav button')){const selected=b.dataset.page===id;b.classList.toggle('selected',selected);if(selected)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');}
+  window.ShengjianProduct?.navigated(id,options);
+  if(id==='create')window.ShengjianImages?.open();
+  if(id!=='create')window.ShengjianImages?.chat();
+  if(id==='life')window.ShengjianLife?.refresh();
 }
 function modelName(id) { const names={'workbuddy/cn:deepseek-v4.1-flash':'DeepSeek V4.1 Flash','workbuddy/cn:deepseek-v4-flash':'DeepSeek V4 Flash','workbuddy/cn:deepseek-v4-pro':'DeepSeek V4 Pro'};return names[id] || id.replace('workbuddy/cn:', '').replaceAll('-', ' '); }
 async function loadModels(owner) {
@@ -134,6 +142,7 @@ $('chat-model').onchange=async()=>{
 };
 for(const suggestion of document.querySelectorAll('[data-prompt]'))suggestion.onclick=()=>{$('prompt').value=suggestion.dataset.prompt;$('prompt').focus();};
 function logoutLocal() {
+  window.ShengjianProduct?.deactivate();appSnapshot=null;taskViewId="";
   for(const stop of backgroundWork.values())stop();
   replyController?.abort();replyController=null;
   window.ShengjianVisual?.deactivate();
@@ -171,6 +180,7 @@ function logoutLocal() {
   $("auth").hidden = false;
   $("workspace").hidden = true;
   $("logout").hidden = true;
+  $("profile-open").hidden=true;document.body.classList.remove("signed-in");
   $("device-config").textContent = "";
   $("voice-latency").textContent = "";
   $("voice-latency").hidden = true;
@@ -181,23 +191,28 @@ async function enter() {
   const owner = token;
   await refresh();
   if (owner !== token || !token) return;
+  if(!window.ShengjianProduct)await new Promise((resolve,reject)=>{let timer;const ready=()=>{clearTimeout(timer);resolve();};window.addEventListener('shengjian:product-ready',ready,{once:true});timer=setTimeout(()=>{window.removeEventListener('shengjian:product-ready',ready);reject(new Error('界面加载未完成，请刷新后继续。'));},10000);});
+  if(owner!==token||!token)return;
   $("auth").hidden = true;
   $("workspace").hidden = false;
   $("logout").hidden = false;
+  $("profile-open").hidden=false;document.body.classList.add("signed-in");
+  window.ShengjianProduct?.entered();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(() => refresh().catch(error), 10000);
 }
 $("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const operation = ++authEpoch;
+  window.ShengjianProduct?.authBusy(true);
   try {
     const form = new FormData(e.target),
-      action = e.submitter.value;
+      action = e.submitter?.value || e.target.querySelector(".auth-submit").value;
     const body = {
-      username: form.get("username"),
+      username: String(form.get("username")||"").trim(),
       password: form.get("password"),
     };
-    if (action === "register") body.invite = form.get("invite");
+    if (action === "register") body.invite = String(form.get("invite")||"").trim();
     const data = await json("/auth/" + action, body);
     if (operation !== authEpoch) return;
     token = data.token;
@@ -208,7 +223,7 @@ $("login-form").addEventListener("submit", async (e) => {
     notice();
   } catch (e) {
     error(e);
-  }
+  } finally { window.ShengjianProduct?.authBusy(false); }
 });
 $("logout").onclick = async () => {
   const owner = token;
@@ -228,7 +243,7 @@ async function refresh() {
     json("/tasks"),
   ]);
   if (owner !== token || !token) return;
-  $("balance").textContent = me.unlimited?`无限测试积分 · 测试调用不扣减`:`可用 ${me.balance} 积分 · 预留 ${me.reserved}`;
+  $("balance").textContent = me.unlimited?"无限额度":`可用 ${me.balance} 积分${me.reserved?" · 待结算 "+me.reserved:""}`;
   window.ShengjianVisual?.activate(me.user_id, {json, fetchImage:id=>api('/life/images/'+id)});
   window.ShengjianLife?.activate(me.user_id, { json, image: (blob, id) => api('/life/images', blob, 'POST', {raw: true, requestId: id}), fetchImage: id => api('/life/images/'+id) });
   window.ShengjianImages?.activate(me.user_id,{json, file:id=>api('/images/jobs/'+id+'/file'),preview:id=>api('/life/images/'+id)});
@@ -240,101 +255,15 @@ async function refresh() {
   $("computer-status").textContent=computerDevices.some(d=>d.online)?"电脑已连接":"电脑未连接";
   $("computer-status").dataset.online=String(computerDevices.some(d=>d.online));
   const selected = $("destination").value;
-  $("destination").replaceChildren(new Option("Chat · 本机 DeepSeek Harness", "chat"));
-  $("device-list").replaceChildren();
-  devices.devices
-    .filter((d) => !d.revoked)
-    .forEach((d) => {
-      if (d.grants.includes("tasks"))
-        $("destination").add(
-          new Option(d.name + (d.online ? " · 在线" : " · 离线"), d.id),
-        );
-      const card = el("article", undefined, "card");
-      card.append(
-        el("h2", d.name),
-        el("p", d.online ? "在线" : "离线", "muted"),
-      );
-      const metrics = d.metrics || {};
-      const readings = ["cpu_percent", "memory_percent", "disk_percent"]
-        .filter((k) => typeof metrics[k] === "number")
-        .map(
-          (k) =>
-            ({
-              cpu_percent: "CPU",
-              memory_percent: "内存",
-              disk_percent: "磁盘",
-            })[k] +
-            ": " +
-            metrics[k].toFixed(1) +
-            "%",
-        );
-      if (readings.length) card.append(el("p", readings.join(" · "), "muted"));
-      for (const capability of d.capabilities) {
-        const label = el("label", undefined, "inline"),
-          check = el("input");
-        check.type = "checkbox";
-        check.checked = d.grants.includes(capability);
-        check.onchange = async () => {
-          check.disabled = true;
-          try {
-            const grants = new Set(d.grants);
-            if (check.checked) grants.add(capability);
-            else grants.delete(capability);
-            await json("/devices/" + d.id, { grants: [...grants] }, "PATCH");
-            await refresh();
-          } catch (e) {
-            check.checked = !check.checked;
-            error(e);
-          } finally {
-            check.disabled = false;
-          }
-        };
-        label.append(
-          check,
-          document.createTextNode(
-            {
-              tasks: "执行任务",
-              metrics: "状态监控",
-              screen: "共享屏幕",
-              input: "键鼠控制",
-              files: "文件共享",
-            }[capability],
-          ),
-        );
-        card.append(label);
-      }
-      card.append(
-        button("撤销设备", async () => {
-          await json("/devices/" + d.id, undefined, "DELETE");
-          await refresh();
-        }),
-      );
-      $("device-list").append(card);
-    });
+  $("destination").replaceChildren(new Option("自动选择电脑", "chat"));
+  for(const d of devices.devices)if(!d.revoked&&d.grants.includes('tasks'))$('destination').add(new Option(d.name+(d.online?' · 在线':' · 离线'),d.id));
   if ([...$("destination").options].some((o) => o.value === selected))
     $("destination").value = selected;
   if (live && $("destination").value !== live.destination)
     stopLive("目标设备已不可用，实时对话已暂停");
-  $('work-overview').replaceChildren();
-  for(const [title,states] of [['进行中',['queued','running']],['待处理',['awaiting_user','unknown']],['已完成',['succeeded']]]){
-    const stat=el('article',undefined,'work-stat');stat.append(el('strong',String(tasks.tasks.filter(t=>states.includes(t.state)).length)),el('span',title));$('work-overview').append(stat);
-  }
-  $("task-list").replaceChildren();
-  if(!tasks.tasks.length)$('task-list').append(el('p','还没有工作记录。在对话中说出要完成的事，进度会显示在这里。','muted'));
-  for (const task of tasks.tasks) {
-    const b = button(
-      (
-        (typeof task.specification === "string"
-          ? JSON.parse(task.specification)
-          : task.specification
-        )?.prompt || task.id
-      ).slice(0, 56) +
-        " · " +
-        (labels[task.state] || task.state),
-      () => openTask(task.id),
-    );
-    $("task-list").append(b);
-  }
+  appSnapshot={me,devices:devices.devices,tasks:tasks.tasks};
+  window.ShengjianProduct?.update(appSnapshot);
+
 }
 $("refresh").onclick = () => refresh().catch(error);
 $("enroll").onsubmit = async (e) => {
@@ -360,16 +289,17 @@ $("enroll").onsubmit = async (e) => {
     error(e);
   }
 };
-async function openTask(id, { reveal = true, conversation = false } = {}) {
+async function openTask(id, { reveal = true, conversation = false, announce = false } = {}) {
   const epoch = ++taskEpoch;
   if (stream) stream.close();
-  currentTask = id;
+  currentTask = id;taskViewId=id;
   cursor = 0;
-  if (reveal) showPage("tasks");
+  if (reveal) showPage("tasks",{task:id});
   const d = await json("/tasks/" + id);
   if (epoch !== taskEpoch || !token) return;
   const terminal = new Set(["succeeded", "failed", "cancelled", "unknown"]);
-  const stateLine = el("p", labels[d.task.state] || d.task.state, "muted");
+  let taskTerminal=terminal.has(d.task.state);
+  const stateLine = el("p", labels[d.task.state] || d.task.state, "state-badge");stateLine.dataset.state=d.task.state;
   const cancelButton = button("取消任务", async () => {
     const reply = await json("/tasks/" + id + "/cancel", {});
     notice(
@@ -391,12 +321,13 @@ async function openTask(id, { reveal = true, conversation = false } = {}) {
     cancelButton,
     button("停止播报", stopAgentSpeech),
   );
+  window.ShengjianProduct?.taskOpened(id,reveal);
   let resultText = "",
     spoken = false;
   const reports = new Set();
   const approvals = new Map();
   function connect() {
-    if (currentTask !== id || epoch !== taskEpoch || !token) return;
+    if (taskViewId !== id || epoch !== taskEpoch || !token) return;
     const connection = new WebSocket(
       location.origin.replace(/^http/, "ws") +
         base +
@@ -418,12 +349,14 @@ async function openTask(id, { reveal = true, conversation = false } = {}) {
       if (!item.seq || item.seq <= cursor) return;
       cursor = item.seq;
       const event = item.body || item.event || item;
+      window.ShengjianProduct?.taskEvent(event);
       const text =
         event.text ||
         (event.state ? labels[event.state] || event.state : event.type);
       if (event.type === "task.state") {
-        stateLine.textContent = labels[event.state] || event.state;
+        stateLine.textContent = labels[event.state] || event.state;stateLine.dataset.state=event.state;
         if (terminal.has(event.state)) {
+          taskTerminal=true;
           cancelButton.disabled = true;
           for (const actions of approvals.values()) actions.remove();
         }
@@ -434,9 +367,10 @@ async function openTask(id, { reveal = true, conversation = false } = {}) {
         if (event.state === "succeeded" && resultText && !spoken) {
           spoken = true;
           if (conversation) agentReport("电脑任务已完成。" + resultText);
-          else if ($("speak").checked) speak(resultText).catch(error);
+          else if(announce&&$("speak").checked)speak(resultText).catch(error);
+
         }
-      } else $("task-detail").append(el("pre", text));
+      } else if(!window.ShengjianProduct)$("task-detail").append(el("pre", text));
       if (event.type === "task.result") resultText = event.text || "";
       if (event.type === "approval.decision")
         approvals.get(event.approval_id)?.remove();
@@ -461,7 +395,7 @@ async function openTask(id, { reveal = true, conversation = false } = {}) {
       }
     };
     connection.onclose = () => {
-      if (currentTask === id && epoch === taskEpoch && token)
+      if (!taskTerminal && taskViewId === id && epoch === taskEpoch && token)
         setTimeout(connect, 2000);
     };
   }
@@ -469,7 +403,8 @@ async function openTask(id, { reveal = true, conversation = false } = {}) {
 }
 function message(role, text, images=[]) {
   window.ShengjianLife?.capture(role, text, images);
-  $("messages").append(el("div", text, "message " + role));
+  const bubble=el("div", text, "message " + role);$("messages").append(bubble);
+  window.ShengjianProduct?.messageAdded(bubble,role,text,images);
   $("messages").scrollTop = $("messages").scrollHeight;
 }
 function agentReport(text) {
@@ -508,14 +443,16 @@ async function submitPrompt(prompt) {
   const submit = $("compose").querySelector("[type=submit]");
   submit.disabled = true;
   stopSpeech();
-  const imageIntent=window.ShengjianImages?.intent(prompt);
+  const imageIntent=window.ShengjianProduct?.creationIntent(prompt)||window.ShengjianImages?.intent(prompt);
   try {
+    if(await window.ShengjianProduct?.creationControl(prompt))return;
     if(imageIntent){
       const edited=imageIntent==='edit';
       const job=await window.ShengjianImages.generate(prompt,{edit:edited});
       if(owner!==token || operation!==composeEpoch)return;
-      message('user',prompt);message('assistant',edited?'调整已排队，会基于选定图片或上一版结果继续修改。':'已提交后台生图。你可以继续聊天，或到“生成图片”查看进度。');
-      $('prompt').value='';$('messages').append(button('查看图片与版本',()=>window.ShengjianImages.open()));
+      if(window.ShengjianProduct)window.ShengjianProduct.jobSubmitted(job,edited);
+      else{message('user',prompt);message('assistant',edited?'修改已排队。':'图片已开始创作。');$('messages').append(button('查看图片与版本',()=>window.ShengjianImages.open()));}
+      $('prompt').value='';
       if(live&&$('speak').checked)speak(edited?'已收到调整，会接着上一版修改。':'已经开始生成图片，你可以继续聊天。').catch(error);
       return;
     }
@@ -554,7 +491,7 @@ async function submitPrompt(prompt) {
       });
       if (owner !== token || operation !== composeEpoch) return;
       $("prompt").value = "";
-      await openTask(d.task.id);
+      await openTask(d.task.id,{announce:true});
       if (owner === token && operation === composeEpoch) await refresh();
     }
     if (owner === token && operation === composeEpoch) await refresh();
@@ -588,7 +525,7 @@ function stopSpeech() {
     playbackDone = null;
   }
 }
-async function speak(text) {
+async function speak(text,outputContext=null) {
   if (live?.capabilities?.streaming_audio) return speakStreaming(text);
   stopSpeech();
   const epoch = speechEpoch;
@@ -604,7 +541,7 @@ async function speak(text) {
     let audio;
     // Reuse the AudioContext unlocked by the microphone button on mobile Safari.
     // A fresh HTMLAudioElement after a network round trip may require another tap.
-    const context = live?.context;
+    const context = outputContext || live?.context;
     if (context && typeof context.decodeAudioData === "function") {
       const buffer = await context.decodeAudioData(await blob.arrayBuffer());
       if (epoch !== speechEpoch || context.state === "closed") return;
@@ -773,7 +710,7 @@ function watchBackgroundWork(id,owner,after=0,hasWork=false){
    if(item.type==="task.log"){try{const l=JSON.parse(item.text);if(l.type==="tool_call"&&l.tool!=="see_user_image")hasWork=true;}catch{}}
    if(item.type==="task.result")result=item.text||"";
    if(item.type==="task.state"&&["succeeded","failed","cancelled","unknown"].includes(item.state)){
-    stop();if(!hasWork&&item.state==="succeeded")return;agentReport(item.state==="succeeded"?"后台工作已完成。"+result.slice(0,600):"后台工作"+(labels[item.state]||item.state)+"。");
+    stop();if(!hasWork&&item.state==="succeeded")return;if(window.ShengjianProduct?.taskReportElsewhere(id,item.state))return;agentReport(item.state==="succeeded"?"后台工作已完成。"+result.slice(0,600):"后台工作"+(labels[item.state]||item.state)+"。");
    }
   };
   socket.onclose=()=>{if(!closed)setTimeout(connect,2000);};
@@ -783,11 +720,17 @@ function watchBackgroundWork(id,owner,after=0,hasWork=false){
 async function streamHarness(prompt,images,owner,operation,selected) {
   const terminal=new Set(["succeeded","failed","cancelled","unknown"]);
   const key="shengjian.chat."+chatOwner+"."+selected;
-  let conversation=sessionStorage.getItem(key);
+  let conversation=window.ShengjianProduct?.conversationFor(selected)||sessionStorage.getItem(key);
   if(!conversation){conversation=crypto.randomUUID().replaceAll("-","");sessionStorage.setItem(key,conversation);}
   const interrupted=harnessInterrupted;harnessInterrupted=false;
-  const data=await json("/assistant/chat",{text:prompt,request_id:crypto.randomUUID(),conversation_id:conversation,
-    device_id:selected==="chat"?null:selected,task_id:currentTask||null,life_images:images,interrupted});
+  const pendingKey='shengjian.pending-turn.'+chatOwner+'.'+conversation;let pending;
+  try{pending=JSON.parse(sessionStorage.getItem(pendingKey)||'null');}catch{}
+  if(!pending||pending.text!==prompt||pending.conversation_id!==conversation||pending.device_id!==(selected==='chat'?null:selected)||JSON.stringify(pending.life_images)!==JSON.stringify(images)){
+    pending={text:prompt,request_id:crypto.randomUUID(),conversation_id:conversation,device_id:selected==='chat'?null:selected,task_id:currentTask||null,life_images:images,interrupted};sessionStorage.setItem(pendingKey,JSON.stringify(pending));
+  }
+  const data=await json('/assistant/chat',pending);sessionStorage.removeItem(pendingKey);
+  window.ShengjianProduct?.turnAccepted(conversation,data);
+
   if(owner!==token || operation!==composeEpoch)return;
   $("prompt").value="";
   if(data.action!=="chat") {
@@ -798,14 +741,14 @@ async function streamHarness(prompt,images,owner,operation,selected) {
   const id=data.task.id;
   busy=false;$("compose").querySelector("[type=submit]").disabled=false;
   currentTask=id;
-  $("messages").append(button("查看本轮工作与确认",()=>openTask(id)));
+  const workLink=button("查看工作进展",()=>openTask(id));workLink.className="work-turn-link";workLink.hidden=!data.task.is_work;$("messages").append(workLink);
   const controller=new AbortController();replyController=controller;
   const session=live;
   if(session)session.replyStart=performance.now();
   const turn={history:[...messages,{role:"user",content:prompt}],images,text:"",voiced:$("speak").checked,complete:false,speechEnd:session?.utterance?.speechEnd,harness:true};
   if(session)session.replyTurn=turn;
   const speech=session && turn.voiced?speechPipeline(turn):null;
-  const node=el("div",data.queued_behind?"补充已排队，当前工作继续运行。可随时询问进度或取消任务。":"正在连接本机 DeepSeek Harness…","message assistant");turn.node=node;$("messages").append(node);
+  const node=el("div",data.queued_behind?"补充已排队，当前工作继续运行。可随时询问进度或取消任务。":"正在思考…","message assistant");turn.node=node;$("messages").append(node);
   let cursor=0, socket, result="", settled=false, approvalSeen=new Set();
   try {
     await new Promise((resolve,reject)=>{
@@ -819,13 +762,13 @@ async function streamHarness(prompt,images,owner,operation,selected) {
         socket.onmessage=e=>{
           if(settled || owner!==token || operation!==composeEpoch)return;
           const item=JSON.parse(e.data);if(!item.seq||item.seq<=cursor)return;cursor=item.seq;
-          if(item.type==="task.log"){try{const log=JSON.parse(item.text);if(log.type==="tool_call"&&log.tool!=="see_user_image")turn.work=true;}catch{}}
+          if(item.type==="task.log"){try{const log=JSON.parse(item.text);if(log.type==="tool_call"&&log.tool!=="see_user_image"){turn.work=true;workLink.hidden=false;window.ShengjianProduct?.workStarted(id,prompt);}}catch{}}
           if(item.type==="task.delta"){
             if(!turn.text && session)session.metrics={...session.metrics,first_token_ms:Math.round(performance.now()-session.replyStart)};
             turn.text+=item.text||"";node.textContent=turn.text;speech?.push(item.text||"");
           } else if(item.type==="task.result")result=item.text||"";
           else if(item.type==="task.approval" && !approvalSeen.has(item.approval_id)){
-            approvalSeen.add(item.approval_id);notice("电脑需要确认，请打开本轮工作卡片；也可说允许本次操作或拒绝本次操作。");
+            workLink.hidden=false;turn.work=true;window.ShengjianProduct?.workStarted(id,prompt);approvalSeen.add(item.approval_id);notice("电脑需要确认，请打开本轮工作卡片；也可说允许本次操作或拒绝本次操作。");
             // Keep listening while the owned work waits; a new spoken control goes through the same task API.
             busy=false;$("compose").querySelector("[type=submit]").disabled=false;
           } else if(item.type==="task.state" && terminal.has(item.state)) {
@@ -833,7 +776,7 @@ async function streamHarness(prompt,images,owner,operation,selected) {
             if(!turn.text){turn.text=result;node.textContent=result;speech?.push(result);}
             finish();
           }
-          $("messages").scrollTop=$("messages").scrollHeight;
+          $("messages").scrollTop=$("messages").scrollHeight;window.ShengjianProduct?.scrollConversation();
         };
         socket.onclose=()=>{if(!settled)setTimeout(connect,1000);};
       }
@@ -844,7 +787,7 @@ async function streamHarness(prompt,images,owner,operation,selected) {
     messages=[...turn.history,{role:"assistant",content:result||turn.text}].slice(-20);
     window.ShengjianLife?.capture("assistant",result||turn.text,images);turn.lifeRecorded=true;
     if(speech)await speech.done();else if(turn.voiced)await speak(result||turn.text);
-    turn.complete=true;
+    turn.complete=true;window.ShengjianProduct?.messageAdded(node,"assistant",result||turn.text,images);
     await refresh();
   } finally {socket?.close();if(replyController===controller)replyController=null;}
 }
@@ -994,6 +937,7 @@ function stopLive(reason = "实时对话已结束", preserveCamera = false) {
   live = null;
   if (session) {
     session.closed = true;
+    if(!session.speakEdited&&session.speakBefore!==undefined)$("speak").checked=session.speakBefore;
     clearTimeout(session.timeout);
     clearTimeout(session.manualTimer);
     session.utterance?.flow?.close();
@@ -1222,6 +1166,7 @@ $("realtime").onclick = async () => {
     destination: $("destination").value,
     processing: false,
     mode:"live",
+    speakBefore:$("speak").checked,
   };
   live = session;
   $("realtime").textContent = "结束实时对话";
@@ -1328,6 +1273,7 @@ $("realtime").onclick = async () => {
     liveFailure(session, failure);
   }
 };
+$('speak').addEventListener('change',()=>{if(live)live.speakEdited=true;});
 function reportVoiceFailure(stage,failure,mode='live') {
   if(!token||failure?.name==='AbortError')return;
   const names={NotAllowedError:'microphone_denied',NotFoundError:'microphone_missing',NotReadableError:'microphone_unavailable',AbortError:'client_aborted'};
@@ -1361,7 +1307,7 @@ async function startManualVoice(gesture) {
   if(!token)throw new Error('请先登录');
   if(live&&live.mode!=='hold')stopLive('切换到按键说话',true);
   let session=live;
-  if(!session){session={owner:token,mode:'hold',destination:$('destination').value,processing:false,context:new AudioContext(),sockets:new Set()};live=session;}
+  if(!session){session={owner:token,mode:'hold',destination:$('destination').value,processing:false,context:new AudioContext(),sockets:new Set(),speakBefore:$('speak').checked};live=session;}
   session.manualGesture=gesture;session.destination=$('destination').value;
   $('destination').disabled=true;$('engine').disabled=true;$('record').disabled=true;
   // Resume in the press gesture before awaiting microphone permission or network.

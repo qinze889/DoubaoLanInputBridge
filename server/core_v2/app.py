@@ -258,7 +258,8 @@ def create_app(directory, admin_token=None, providers=None):
 
     @app.get(PREFIX+'/me')
     async def me(uid=Depends(user)):
-        return {'ok': True, 'user_id': uid, 'unlimited':store.unlimited(uid), **store.wallet(uid)}
+        with store.lock:username=store.db.execute('SELECT username FROM users WHERE id=?',(uid,)).fetchone()['username']
+        return {'ok': True, 'user_id': uid, 'username':username, 'unlimited':store.unlimited(uid), **store.wallet(uid)}
 
     @app.post(PREFIX+'/devices')
     async def enroll(body: Device, uid=Depends(user)):
@@ -423,16 +424,18 @@ def create_app(directory, admin_token=None, providers=None):
     mount_capabilities(app,providers,life,user)
     from .voice_diagnostics import mount as mount_voice_diagnostics
     mount_voice_diagnostics(app,store,user)
+    from .conversations import mount as mount_conversations
+    mount_conversations(app,store,user)
     if providers:
         providers.mount(app, store, user)
     static = Path(__file__).parent/'web'
     if static.exists():
         @app.get(PREFIX+'/console')
         async def console():
-            return FileResponse(static/'index.html')
+            return FileResponse(static/'index.html',headers={'Cache-Control':'no-cache'})
         @app.get(PREFIX+'/console/{asset}')
         async def asset(asset: str):
-            if asset not in {'app.js', 'app.css', 'pcm.js', 'voice-flow.js', 'push-to-talk.js', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js', 'life.js', 'visual.js', 'imagegen.js'}:
+            if asset not in {'app.js', 'app.css', 'pcm.js', 'voice-flow.js', 'push-to-talk.js', 'product.js', 'product-version.json', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js', 'life.js', 'visual.js', 'imagegen.js'}:
                 raise Fault('not_found', 404)
-            return FileResponse(static/asset)
+            return FileResponse(static/asset,headers={'Cache-Control':'no-cache'})
     return app

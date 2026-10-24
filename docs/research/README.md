@@ -52,3 +52,5 @@
 - [按键说话、缓冲与播报失败恢复](../PUSH-TO-TALK.md) · [部署前公网语音诊断基线](VOICE-DIAGNOSTIC-BASELINE-20261024.json)。
 
 - [语音日志调查与按键说话交付](VOICE-PUSH-TO-TALK-20261024.md) · [真实公网按键链路](PUSH-TO-TALK-PUBLIC-VALIDATION.json)。
+
+- [Web 2.0 产品界面与会话](../MOBILE-UI.md) · [本轮检查范围](WEB-PRODUCT-VALIDATION.json) · [真实公网语音与历史恢复](WEB-PRODUCT-PUBLIC-VALIDATION.json)。

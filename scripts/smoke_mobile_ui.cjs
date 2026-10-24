@@ -1,3 +1,4 @@
+const {openModels,closeModels,toggleModels,setSpeech,logoutUser}=require('./ui_helpers.cjs');
 const {chromium}=require('../desktop/node_modules/playwright');
 const {spawn}=require('node:child_process'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
 (async()=>{
@@ -11,21 +12,21 @@ const {spawn}=require('node:child_process'),fs=require('node:fs'),os=require('no
   await page.goto(origin+'/shengjian/api/v2/console');await login('browser-test','browser-password-123');
   for(const colorScheme of ['light','dark'])for(const width of [320,390,1100]){
     await page.emulateMedia({colorScheme});await page.setViewportSize({width,height:844});
-    for(const section of ['conversation','tasks','life','devices']){
+    for(const section of ['conversation','create','life','tasks','devices']){
       await page.locator('[data-page="'+section+'"]').click();
       await page.waitForTimeout(180);
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),section+' overflow at '+width);
       await page.screenshot({path:path.join(out,`mobile-${section}-${colorScheme}-${width}.png`),fullPage:true});
     }
   }
-  await page.locator('[data-page="conversation"]').click();await page.locator('#model-settings summary').click();
+  await page.locator('[data-page="conversation"]').click();await toggleModels(page);
   await page.locator('#chat-model').selectOption('fixture-text-alternative');await page.waitForFunction(()=>document.querySelector('#current-model-name').textContent==='fixture text alternative');
   await page.locator('#chat-vision-model').selectOption('fixture-vision-alternative');await page.waitForFunction(()=>!document.querySelector('#chat-vision-model').disabled);
-  await page.reload();await page.locator('#workspace').waitFor({state:'visible'});await page.locator('#model-settings summary').click();
+  await page.reload();await page.locator('#workspace').waitFor({state:'visible'});await toggleModels(page);
   assert.equal(await page.locator('#chat-model').inputValue(),'fixture-text-alternative');await page.waitForFunction(()=>document.querySelector('#chat-vision-model').value==='fixture-vision-alternative');
   await page.setViewportSize({width:390,height:844});await page.emulateMedia({colorScheme:'light'});await page.waitForTimeout(180);await page.screenshot({path:path.join(out,'mobile-model-settings.png'),fullPage:true});
-  await page.locator('#logout').click();await login('browser-second','browser-password-456');
+  await logoutUser(page);await login('browser-second','browser-password-456');
   assert.equal(await page.locator('#chat-model').inputValue(),'fixture-text');await page.waitForFunction(()=>!document.querySelector('#chat-vision-model').disabled);assert.equal(await page.locator('#chat-vision-model').inputValue(),'');
-  assert.equal(errors.length,0,errors.join('\n'));console.log(JSON.stringify({ok:true,checks:['4-sections','320-390-1100-width','light-dark','chat-and-vision-selection','reload-persistence','account-isolation'],screenshots:out}));
+  assert.equal(errors.length,0,errors.join('\n'));console.log(JSON.stringify({ok:true,checks:['5-product-sections','320-390-1100-width','light-dark','chat-and-vision-selection','reload-persistence','account-isolation'],screenshots:out}));
  }finally{await browser?.close();server.kill('SIGTERM');}
 })().catch(e=>{console.error(e);process.exitCode=1;});
