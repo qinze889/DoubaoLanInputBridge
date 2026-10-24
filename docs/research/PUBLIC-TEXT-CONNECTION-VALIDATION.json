@@ -5,7 +5,7 @@
   "fixed_https": true,
   "phone_login_passed": true,
   "actual_desktop_public_roundtrip": true,
-  "can_paste": false,
+  "can_paste": true,
   "development_device_separate_from_production": true,
   "credentials_private_0600": true,
   "phone_text_route_reaches_actual_desktop": true,
@@ -15,5 +15,10 @@
   "ready_to_send": true,
   "credential_removed_from_url": true,
   "permission_message_visible": true,
-  "browser_login_survives_reload": true
+  "browser_login_survives_reload": true,
+  "public_text_send_http": 200,
+  "native_send_reported_characters": 33,
+  "independent_preview_received_text": false,
+  "validation_limit": "Native input box contents not verified; browser preview is not an OS paste target",
+  "actual_native_received_text_history_exact_match": true
 }
