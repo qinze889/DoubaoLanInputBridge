@@ -132,6 +132,7 @@ struct Transfer: Identifiable {
     @Published var online = false
     @Published var publicEnabled = true
     @Published var relayConfigured = false
+    @Published var fileConnectionNotice = ""
     @Published var connectionMode = "lan"
     @Published var modeDescription = "同一 Wi-Fi 或内网直接连接。"
     @Published var p2pCount = 0
@@ -298,13 +299,18 @@ struct Transfer: Identifiable {
     func setPublic(_ value:Bool) async { await setMode(connectionMode, enabled:value) }
     func setMode(_ mode:String, enabled:Bool = true) async {
         guard !busy else { return }
+        if mode == "public" && enabled && !relayConfigured {
+            fileConnectionNotice = "这是自建文件中转，需要本机专属配置。语音、图片创作和电脑 Agent 请使用上方公网入口，无需导入配置。"
+            return
+        }
+        fileConnectionNotice = ""
         guard !preview else { connectionMode = mode; publicEnabled = enabled; tunnelPhase = enabled ? "ready" : "off"; return }
         busy = true; defer { busy = false }
         do {
             _ = try await api("/desktop/connections",body:["mode":mode,"enabled":enabled])
             lastError = ""; lastTunnelError = ""
             await refresh()
-        } catch { report(error.localizedDescription) }
+        } catch { fileConnectionNotice = error.localizedDescription }
     }
     func importServerConfig() {
         let panel = NSOpenPanel()
@@ -315,7 +321,7 @@ struct Transfer: Identifiable {
             let data = try Data(contentsOf:url)
             guard data.count < 16384, let config = try JSONSerialization.jsonObject(with:data) as? [String:Any] else { report("配置格式不正确"); return }
             Task {
-                do { _ = try await api("/desktop/connections/config",body:["config":config]); await refresh(); toast("服务器配置已导入") }
+                do { _ = try await api("/desktop/connections/config",body:["config":config]); await refresh(); fileConnectionNotice = ""; toast("文件中转配置已导入") }
                 catch { report(error.localizedDescription) }
             }
         } catch { report("无法读取配置文件") }
@@ -495,6 +501,7 @@ struct QRCode:View {
 
 struct ConnectionView:View {
     @EnvironmentObject var model:BridgeModel
+    @ViewState private var fileTransferExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body:some View {
         ScrollView {
@@ -502,13 +509,16 @@ struct ConnectionView:View {
                 HStack(alignment:.top) {
                     VStack(alignment:.leading,spacing:8) {
                         Text("连接你的手机").font(.system(size:30,weight:.bold,design:.rounded)).tracking(-0.7)
-                        Text("想法在手机，落笔在 Mac。").font(.system(size:14)).foregroundStyle(.secondary)
+                        Text("实时语音、图片创作和电脑任务，扫码即可使用。").font(.system(size:14)).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    StatusPill(text:model.connectionLabel,color:model.connectionColor).padding(.top,7)
+                    StatusPill(text:"固定公网入口",color:accent).padding(.top,7)
                 }
                 CloudAccountCard()
-                Card(padding:0) {
+                DisclosureGroup(isExpanded:$fileTransferExpanded) {
+                  VStack(alignment:.leading,spacing:16) {
+                    Text("以下设置只用于文件传输与自动粘贴，不影响上方语音和 Agent。局域网仅限同一 Wi-Fi；自建中转需单独配置。").font(.system(size:13)).foregroundStyle(.secondary).padding(.top,12)
+                    Card(padding:0) {
                     HStack(spacing:0) {
                         VStack(spacing:18) {
                             ZStack {
@@ -532,23 +542,29 @@ struct ConnectionView:View {
                         }.padding(32).frame(maxWidth:.infinity)
                         Rectangle().fill(.primary.opacity(0.055)).frame(width:1).padding(.vertical,32)
                         VStack(alignment:.leading,spacing:18) {
-                            HStack { Text("连接方式").font(.system(size:18,weight:.semibold)); Spacer(); Toggle("启用连接",isOn:Binding(get:{model.publicEnabled},set:{v in Task { await model.setPublic(v) }})).labelsHidden().toggleStyle(.switch).tint(accent).disabled(model.busy || !model.online) }
+                            HStack { Text("文件传输网络").font(.system(size:18,weight:.semibold)); Spacer(); Toggle("启用文件传输",isOn:Binding(get:{model.publicEnabled},set:{v in Task { await model.setPublic(v) }})).labelsHidden().toggleStyle(.switch).tint(accent).disabled(model.busy || !model.online) }
                             LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:10) {
                                 ForEach(BridgeModel.modes, id: \.0) { mode in
                                     Button { Task { await model.setMode(mode.0) } } label: {
                                         VStack(alignment:.leading,spacing:10) {
                                             HStack { Image(systemName:mode.2).font(.system(size:19)); Spacer(); if model.connectionMode == mode.0 { Image(systemName:"checkmark.circle.fill").foregroundStyle(accent) } }
-                                            Text(mode.1).font(.system(size:12,weight:.semibold))
+                                            Text(mode.0 == "public" ? "自建文件中转" : mode.1).font(.system(size:12,weight:.semibold))
                                         }.foregroundStyle(model.connectionMode == mode.0 ? accent : Color.primary).padding(13).frame(maxWidth:.infinity,alignment:.leading)
                                             .background(model.connectionMode == mode.0 ? accent.opacity(0.09) : Color.primary.opacity(0.035),in:RoundedRectangle(cornerRadius:14))
                                             .overlay(RoundedRectangle(cornerRadius:14).stroke(model.connectionMode == mode.0 ? accent.opacity(0.35) : .clear,lineWidth:1))
                                     }.buttonStyle(.plain).disabled(model.busy || !model.online)
                                 }
                             }.animation(reduceMotion ? nil : .easeInOut(duration:0.2),value:model.connectionMode)
+                            if !model.fileConnectionNotice.isEmpty {
+                                VStack(alignment:.leading,spacing:10) {
+                                    Label(model.fileConnectionNotice,systemImage:"info.circle").font(.system(size:13)).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                                    Button("返回公网语音扫码") { fileTransferExpanded = false }.buttonStyle(.bordered)
+                                }.padding(14).background(accent.opacity(0.06),in:RoundedRectangle(cornerRadius:12))
+                            }
                             Text(model.modeDescription).font(.system(size:12)).foregroundStyle(.secondary).lineSpacing(4).frame(minHeight:40,alignment:.topLeading)
                             if model.connectionMode == "p2p" { Text(model.p2pCount > 0 ? "直连中 · 内容不经过服务器" : "扫码后建立直连 · 失败可手动切换其他方式").font(.system(size:11)).foregroundStyle(.secondary) }
                             HStack {
-                                Button("导入服务器配置") { model.importServerConfig() }.buttonStyle(.borderless).font(.system(size:11)).tint(accent)
+                                Button("导入自建文件中转配置") { model.importServerConfig() }.buttonStyle(.borderless).font(.system(size:11)).tint(accent)
                                 Spacer()
                                 if model.publicEnabled && model.tunnelPhase != "ready" && model.tunnelPhase != "starting" { Button("重连") { Task { await model.setPublic(true) } }.buttonStyle(.bordered) }
                             }
@@ -568,6 +584,15 @@ struct ConnectionView:View {
                     miniFeature("photo.on.rectangle","照片、文件，随手传","选择文件，或从系统分享菜单添加",color:.purple) { model.openPublish(files: true) }
                 }
                 HStack(spacing:6) { Image(systemName:"info.circle"); Text("每台机器拥有独立连接码。同一域名按设备编号连接，不会混发到其他电脑。") }.font(.system(size:11)).foregroundStyle(.tertiary).frame(maxWidth:.infinity)
+                  }
+                } label: {
+                    HStack(spacing:12) {
+                        SymbolTile(name:"arrow.left.arrow.right",size:34)
+                        VStack(alignment:.leading,spacing:4) { Text("文件传输与自动粘贴").font(.system(size:15,weight:.semibold)); Text("可选设置 · 局域网、隧道或自建中转").font(.system(size:12)).foregroundStyle(.secondary) }
+                        Spacer()
+                        StatusPill(text:model.connectionLabel,color:model.connectionColor)
+                    }.padding(.vertical,8)
+                }.tint(accent)
             }.padding(32).frame(maxWidth:1000).frame(maxWidth:.infinity)
         }
     }
@@ -1024,8 +1049,8 @@ struct RootView:View {
             Button("分享内容…") { model.openPublish() }
             Divider()
             Link("设备、任务与语音对话", destination: URL(string:"https://test.xjiaoai.com/shengjian/api/v2/console")!)
-            Text(model.connectionLabel)
-            Button(model.publicEnabled ? "关闭连接" : "开启连接") { Task { await model.setPublic(!model.publicEnabled) } }
+            Text("文件传输 · " + model.connectionLabel)
+            Button(model.publicEnabled ? "关闭文件传输" : "开启文件传输") { Task { await model.setPublic(!model.publicEnabled) } }
             Divider()
             Button("退出声笺") { NSApp.terminate(nil) }.keyboardShortcut("q")
         }
