@@ -36,6 +36,8 @@ def test_private_image_refs_resolve_server_side_selected_model_stream_and_usage(
     assert sent['messages'][-1]['content'][0]['text']=='这张图里是什么？'
     assert sent['messages'][-1]['content'][1]['image_url']['url'].startswith('data:image/jpeg;base64,')
     assert '不可信' in sent['messages'][0]['content'] and 'private-provider-key' not in r.text
+    from server.core_v2.providers import RESPONSE_STYLE
+    assert any(m['role']=='system' and RESPONSE_STYLE in m['content'] for m in sent['messages'])
     assert app.state.store.wallet(one['user_id'])=={'balance':999,'reserved':0}
 
 

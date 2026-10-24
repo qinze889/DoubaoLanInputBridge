@@ -7,6 +7,7 @@ from fastapi import Depends
 from pydantic import Field
 
 from .store import Fault, TERMINAL
+from .providers import RESPONSE_STYLE
 
 STATES = {'queued': '排队中', 'running': '执行中', 'awaiting_user': '等待你的确认', 'succeeded': '已完成', 'failed': '失败', 'cancelled': '已取消', 'unknown': '结果未知，需要检查电脑'}
 
@@ -117,7 +118,9 @@ def mount(app, store, user, peers):
         model = life.vision_choice(uid) if body.life_images else None
         if body.life_images and not model: raise Fault('vision_model_not_available', 503)
         store.conversation(uid, body.conversation_id, ident)
-        spec = {'device_id': ident, 'request_id': body.request_id, 'prompt': body.text,
+        # Keep the user's original text for history and idempotency. Carry the
+        # product default in each turn too, so already-installed agents receive it.
+        spec = {'device_id': ident, 'request_id': body.request_id, 'prompt': body.text+'\n\n'+RESPONSE_STYLE,
                 'voice_text': body.text, 'engine': 'harness', 'conversation_id': body.conversation_id,
                 'assistant_chat': True, 'life_images': body.life_images, 'vision_model': model,
                 'interrupted': body.interrupted, 'chat_model': store.chat_preference(uid) or (life.providers.config.text_model if life.providers else '')}

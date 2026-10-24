@@ -21,6 +21,9 @@ def test_owned_conversation_reuses_binding_and_idempotent_work(agent):
     assert first.status_code==200,first.text
     task=first.json()['task'];spec=json.loads(task['specification'])
     assert spec['assistant_chat'] and spec['conversation_id']==conv and spec['engine']=='harness'
+    from server.core_v2.providers import RESPONSE_STYLE
+    assert spec['voice_text']=='你好，直接聊聊' and spec['prompt'].startswith(spec['voice_text']+'\n\n')
+    assert RESPONSE_STYLE in spec['prompt']
     assert chat(client,auth,conv,request_id=request).json()['task']['id']==task['id']
     assert chat(client,auth,conv,request_id=request,text='变更要求').status_code==409
     # No dispatch keyword or separate task mode is required.

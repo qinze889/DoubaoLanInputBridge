@@ -1,0 +1,27 @@
+{
+  "actual_local_Harness": true,
+  "isolated_account": true,
+  "regression_checks": 52,
+  "desktop_reinstalled": false,
+  "samples": [
+    {
+      "kind": "default_chat",
+      "characters": 65,
+      "text": "月亮绕地球转，白天它有时就在天空的另一侧，只是太阳太亮，天空的蓝光把它盖住了。所以傍晚太阳一弱，或者月亮位置合适时，白天也能看见。"
+    },
+    {
+      "kind": "explicit_detail_same_conversation",
+      "characters": 453,
+      "four_points": true
+    },
+    {
+      "kind": "actual_background_file_work",
+      "characters": 26,
+      "text": "文件已建在工作目录，内容核对为“回复风格验证成功”。",
+      "file_created_and_read": true
+    }
+  ],
+  "ok": true,
+  "release": "20261024-704729ebddf4",
+  "scope": "real cloud model and isolated local Harness, synthetic public question and temporary file; no microphone or foreground interaction"
+}

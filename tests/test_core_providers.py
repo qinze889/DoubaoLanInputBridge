@@ -43,6 +43,37 @@ def test_missing_usage_holds_reservation_instead_of_inventing_cost(tmp_path):
         assert app.state.store.wallet(user['user_id'])['reserved']>0
 
 
+@pytest.mark.parametrize('structured',[False,True])
+def test_concise_chat_policy_scoped_to_active_device_preserves_tools_and_full_output(tmp_path,structured):
+    from server.core_v2.providers import RESPONSE_STYLE
+    calls=[];complete_text='完整文稿内容。'*100
+    def upstream(req):
+        if req.method=='GET':return httpx.Response(200,json={'data':[{'id':'test-text'}]})
+        calls.append(json.loads(req.content))
+        return httpx.Response(200,json={'choices':[{'message':{'content':complete_text}}],'usage':{'total_tokens':5}})
+    app,user,provider=setup(tmp_path,upstream);store=app.state.store
+    if structured:provider.config.vision_model='test-text'
+    devices=[store.enroll(user['user_id'],name,['tasks']) for name in ['chat','other']]
+    for d in devices:store.authorize_device(user['user_id'],d['id'],['tasks'])
+    task=store.create_task(user['user_id'],{'device_id':devices[0]['id'],'request_id':secrets.token_hex(16),'prompt':'详细写完整文稿','engine':'harness','assistant_chat':True})
+    store.dispatch(devices[0]['id']);store.device_event(devices[0]['id'],task['id'],{'type':'task.state','state':'running'},'start')
+    original='保留已有的工具权限规则'
+    messages=[{'role':'system','content':[{'type':'text','text':original}] if structured else original},{'role':'user','content':'详细写完整文稿'}]
+    tools=[{'type':'function','function':{'name':'write','parameters':{'type':'object','properties':{'content':{'type':'string'}}}}}]
+    with TestClient(app) as client:
+        for credential,expected in [(devices[0]['token'],True),(devices[1]['token'],False),(user['token'],False)]:
+            result=client.post(PREFIX+'/model/v1/chat/completions',headers={'Authorization':'Bearer '+credential,'X-Request-ID':secrets.token_hex(16)},json={'model':'test-text','messages':messages,'tools':tools,'max_tokens':2048})
+            assert result.status_code==200,result.text
+            sent=calls[-1]
+            first=sent['messages'][0]['content']
+            assert (first[0]==messages[0]['content'][0] if structured else first.startswith(original))
+            assert sent['messages'][-1]==messages[-1]
+            instruction='\n'.join(p['text'] for p in first) if structured else first
+            assert (RESPONSE_STYLE in instruction)==expected
+            assert sent['tools']==tools and sent['max_tokens']==2048
+            assert result.json()['choices'][0]['message']['content']==complete_text
+
+
 def test_stream_usage_is_settled_after_complete_stream(tmp_path):
     def upstream(req):
         if req.method=='GET':return httpx.Response(200,json={'data':[{'id':'test-text'}]})
