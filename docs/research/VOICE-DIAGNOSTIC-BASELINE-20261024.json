@@ -1,0 +1,15 @@
+{
+  "scope": "isolated account, public server protocol probe before client rollout; not physical phone capture",
+  "ok": true,
+  "asr_first_partial_ms": 979,
+  "asr_final_after_end_ms": 478,
+  "model_first_content_ms": 2111,
+  "reply_tts_first_pcm_ms": 795,
+  "end_speech_to_reply_audio_ms": 3405,
+  "audio_before_model_done": false,
+  "remaining_reserved": 0,
+  "recent_30_gateway_requests_all_status_200": true,
+  "exact_user_phone_failure_identified": false,
+  "previous_client_error_diagnostics_available": false,
+  "interpretation": "Successful server requests do not establish physical microphone, playback or browser correctness."
+}

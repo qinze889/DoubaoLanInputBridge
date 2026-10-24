@@ -48,3 +48,7 @@
 - [公网语音与生图故障恢复、无限测试额度、连续修图验收](VOICE-IMAGE-RECOVERY-20261024.md) · [真实公网连续修图](REFERENCE-EDIT-PUBLIC-VALIDATION.json) · [模型能力分类与 Magpie 参考](../MODEL-CAPABILITIES.md)。
 
 - [Mac 开发版固定公网文字传输配置与当前验收范围](PUBLIC-TEXT-CONNECTION-20261024.md) · [脱敏验证](PUBLIC-TEXT-CONNECTION-VALIDATION.json)。
+
+- [按键说话、缓冲与播报失败恢复](../PUSH-TO-TALK.md) · [部署前公网语音诊断基线](VOICE-DIAGNOSTIC-BASELINE-20261024.json)。
+
+- [语音日志调查与按键说话交付](VOICE-PUSH-TO-TALK-20261024.md) · [真实公网按键链路](PUSH-TO-TALK-PUBLIC-VALIDATION.json)。

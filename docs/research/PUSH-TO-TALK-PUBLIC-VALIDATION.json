@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "actual_public_ASR": true,
+  "actual_local_DeepSeek_Harness": true,
+  "actual_streamed_TTS": true,
+  "synthetic_microphone": true,
+  "submissions": 1,
+  "ASR_fixture_words": true,
+  "microphone_off_after_release": true,
+  "release_to_first_audio_ms": 3790,
+  "task_state": "succeeded",
+  "reply_present": true
+}

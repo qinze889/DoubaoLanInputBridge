@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import math
+import logging
 import time
 from urllib.parse import urlsplit, urlunsplit
 
@@ -112,6 +113,7 @@ def mount_stream_asr(app, store, provider):
                 if writer in done:
                     await asyncio.wait_for(reader, 20)
         except (Fault, ValueError, KeyError, TypeError, asyncio.TimeoutError, WebSocketException, WebSocketDisconnect) as exc:
+            logging.getLogger(__name__).log(logging.INFO if isinstance(exc,WebSocketDisconnect) else logging.WARNING,'voice_asr_end code=%s received_bytes=%s sent_bytes=%s settled=%s',exc.code if isinstance(exc,Fault) else type(exc).__name__,received,sent,settled)
             with anyio.CancelScope(shield=True):
                 try:
                     await ws.send_json({'type': 'error', 'error': exc.code if isinstance(exc, Fault) else 'voice_connection_ended'})

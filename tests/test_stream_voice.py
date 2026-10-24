@@ -103,3 +103,27 @@ def test_stream_http_pre_execution_failure_refunds_without_private_details(tmp_p
         assert r.status_code==503 and r.json()['error']==code
         assert 'private upstream' not in r.text
         assert app.state.store.wallet(user['user_id'])=={'balance':100,'reserved':0}
+
+
+def test_stream_asr_failures_log_code_without_audio_or_auth(tmp_path,monkeypatch,caplog):
+    import server.core_v2.stream_voice as module
+    class Link:
+        def __init__(self):self.first=True
+        def __aiter__(self):return self
+        async def __anext__(self):
+            if self.first:self.first=False;return json.dumps({'type':'asr.ready'})
+            await asyncio.Future()
+        async def send(self,data):pass
+    class Connection:
+        async def __aenter__(self):return Link()
+        async def __aexit__(self,*args):pass
+    monkeypatch.setattr(module,'connect',lambda *args,**kwargs:Connection())
+    app,user=setup(tmp_path,lambda r:pytest.fail('HTTP ASR must not be used'))
+    with TestClient(app) as client,caplog.at_level('WARNING'):
+        with client.websocket_connect(PREFIX+'/voice/asr/stream') as ws:
+            ws.send_json({'token':user['token'],'request_id':'invalid-pcm-log-unique'})
+            assert ws.receive_json()['type']=='asr.ready'
+            ws.send_bytes(b'x')
+            assert ws.receive_json()['error']=='invalid_pcm_frame'
+    assert 'voice_asr_end code=invalid_pcm_frame' in caplog.text
+    assert user['token'] not in caplog.text and 'private-fixture-key' not in caplog.text
