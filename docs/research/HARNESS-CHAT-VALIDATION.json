@@ -24,7 +24,7 @@
   "image_to_actual_local_file": true,
   "followup_read_and_recall": true,
   "file": "isolated-test-workspace/picture-result.txt",
-  "user_account_keychain_confirmation": "pending, isolated account passed independently",
+  "user_account_keychain_confirmation": "allowed; original account verified separately in HARNESS-CHAT-ACCOUNT-VALIDATION.json",
   "file_sha256": "e7d57c59505c96b5d616fd40de7e703ba4807a9ba8764d2e3c0bffcc8c3824fd",
   "full_regression_passed": 390,
   "browser_suites": [

@@ -1,0 +1,22 @@
+{
+  "engine": "DeepSeek Harness",
+  "device": "installed Mac connector",
+  "turns": [
+    {
+      "task_id": "561efb06880c18200617da0ac75de720",
+      "first_text_seconds": 4.78,
+      "delta_count": 47,
+      "elapsed_seconds": 5.05
+    }
+  ],
+  "ok": true,
+  "same_session_recalled_code": true,
+  "photo_tool_called": true,
+  "image_to_actual_local_file": true,
+  "file": "/Users/tqq/Documents/声笺任务/验收/ChatWork-6560bfc3.txt",
+  "file_sha256": "c6e4720e15b94ab52e88eea3e8a32eb8cd278375376474b28ae1b120eb3aa2ec",
+  "followup_read_and_recall": true,
+  "keychain_confirmation": "allowed; original account and installed connector online",
+  "quota_recovery": "first run wrote file then failed on insufficient credits; granted 100 test credits and resumed same session to read without repeating writes",
+  "test_photo_removed": true
+}
