@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "mode": "public",
+  "phase": "online",
+  "fixed_https": true,
+  "phone_login_passed": true,
+  "actual_desktop_public_roundtrip": true,
+  "can_paste": false,
+  "development_device_separate_from_production": true,
+  "credentials_private_0600": true,
+  "phone_text_route_reaches_actual_desktop": true,
+  "empty_input_rejected_before_paste": true,
+  "actual_text_paste_verified": false,
+  "public_phone_ui": true,
+  "ready_to_send": true,
+  "credential_removed_from_url": true,
+  "permission_message_visible": true,
+  "browser_login_survives_reload": true
+}
