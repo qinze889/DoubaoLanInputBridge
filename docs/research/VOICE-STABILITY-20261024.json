@@ -1,6 +1,6 @@
 {
   "version": "2.0.0-preview.3",
-  "release": "20261024-de104c2e337c",
+  "release": "20261024-58e9cb029baf",
   "date": "2026-10-24",
   "reported_symptoms": [
     "press-to-talk ends while finger held",
@@ -38,6 +38,8 @@
     "user_confirmation": "已正常",
     "date": "2026-10-24",
     "phone_model_and_browser": "not supplied",
-    "text_layout_issue_reported_separately": true
-  }
+    "text_layout_issue_reported_separately": true,
+    "exact_static_revision": "not reported; user confirmed audio normal before the subsequent text-layout fix"
+  },
+  "public_touch_probe_release": "20261024-de104c2e337c"
 }
