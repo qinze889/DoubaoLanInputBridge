@@ -1,7 +1,7 @@
 "use strict";
 (()=>{
  const $=id=>document.getElementById(id),terminal=new Set(['succeeded','failed','cancelled','unknown']);
- let owner='',epoch=0,page='conversation',cid='',binding='',nextCursor=null,snapshot=null,historyMode='recent',workFilter='active',stick=true,loading=false,entered=false,silentClose=false,deviceSignature='',toastTimer=null,artMode='generate',releaseInfo={name:'声笺 Web',version:'2.0.0-preview.4',updated:'2026-10-24'};
+ let owner='',epoch=0,page='conversation',cid='',binding='',nextCursor=null,snapshot=null,historyMode='recent',workFilter='active',stick=true,loading=false,entered=false,silentClose=false,deviceSignature='',toastTimer=null,artMode='generate',releaseInfo={name:'声笺 Web',version:'2.0.0-preview.5',updated:'2026-10-24'};
  const acceptedTasks=new Map(),following=new Map(),objectUrls=new Set(),deviceExpanded=new Set();let pendingConfirmation=null;let historyRows=[],historyCursor=null,historyLoading=false,taskResult='',taskResultNode=null,taskLogs=null,taskReadButton=null;
  const titles={conversation:'对话',create:'创作',life:'记录',tasks:'工作',devices:'我的'};
  const friendlyStates={queued:'等待电脑',running:'进行中',awaiting_user:'等你确认',succeeded:'已完成',failed:'未完成',cancelled:'已取消',unknown:'需要核实'};

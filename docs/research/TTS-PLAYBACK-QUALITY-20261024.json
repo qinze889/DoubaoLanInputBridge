@@ -1,0 +1,62 @@
+{
+  "events": [
+    {
+      "type": "audio.ready",
+      "sample_rate": 24000,
+      "encoding": "pcm_s16le"
+    },
+    {
+      "type": "audio.finished"
+    }
+  ],
+  "samples": 177152,
+  "seconds": 7.381333333333333,
+  "peak": 0.946380615234375,
+  "clipped_samples": 0,
+  "chunks": 114,
+  "sizes": [
+    2048,
+    4096
+  ],
+  "first_audio": 0.925,
+  "interval_max": 0.196,
+  "input": "synthetic test sentence, not user recording",
+  "voice_unchanged": true,
+  "raw_clipping_detected": false,
+  "sample_rates_tested": [
+    16000,
+    24000,
+    44100,
+    48000
+  ],
+  "browser_render": {
+    "source_hz": 24000,
+    "target_hz": [
+      44100,
+      48000
+    ],
+    "packet_sizes": [
+      2048,
+      480
+    ],
+    "before_peak_boundary_difference_max": 0.088224,
+    "after_peak_boundary_difference_max": 4.8e-13
+  },
+  "jitter_replay": {
+    "same_captured_packet_times": true,
+    "old_gaps": 1,
+    "old_gap_total_ms": 11.224,
+    "new_gaps": 0,
+    "startup_cushion_ms": 60,
+    "previous_startup_ms": 25
+  },
+  "physical_phone_listening": "pending, no subjective quality claim",
+  "release_version": "2.0.0-preview.5",
+  "deployment": {
+    "release": "20261024-981d54690f8f",
+    "manifest_files": 35,
+    "manifest_verified": true,
+    "public_stream_matches_source": true,
+    "public_version": "2.0.0-preview.5"
+  }
+}

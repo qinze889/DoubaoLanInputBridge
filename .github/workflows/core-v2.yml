@@ -43,6 +43,7 @@ jobs:
           node scripts/test_voice_flow.cjs
           node scripts/smoke_harness_chat.cjs
           node scripts/test_voice_dsp.cjs
+          node scripts/test_pcm_playback.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: Shengjian-core-ui

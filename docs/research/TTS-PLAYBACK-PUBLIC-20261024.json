@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "version": "2.0.0-preview.5",
+  "actual_public_TTS": true,
+  "synthetic_account": true,
+  "muted_background_browser": true,
+  "output_rate": 48000,
+  "all_buffers_native_rate": true,
+  "echo_rate_matches": true,
+  "buffers": 88,
+  "packet_gaps": 0,
+  "tail_drained": true,
+  "heard_completed_segment": true,
+  "phone_subjective_listening": "pending",
+  "first_pcm_queued_ms": 1083,
+  "startup_cushion_ms": 60
+}

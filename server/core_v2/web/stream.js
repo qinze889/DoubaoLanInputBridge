@@ -89,6 +89,51 @@ class VoiceSentences {
     this.pending = "";
   }
 }
+// Keep the reconstruction filter's history across network packets. Letting each
+// AudioBufferSource resample an isolated 24 kHz packet creates edge transients.
+class PCMRateConverter {
+  constructor(rate) {
+    this.rate = rate;
+    this.step = 24000 / rate;
+    this.reset();
+    const cutoff = Math.min(1, rate / 24000) * 0.94;
+    this.filters = Array.from({ length: 1024 }, (_, phase) => {
+      const weights = new Float64Array(32);
+      let sum = 0;
+      for (let j = 0; j < 32; j++) {
+        const x = j - 15 - phase / 1024;
+        const sinc = Math.abs(x) < 1e-9 ? cutoff : Math.sin(Math.PI * cutoff * x) / (Math.PI * x);
+        weights[j] = sinc * (0.5 + 0.5 * Math.cos(Math.PI * x / 16));
+        sum += weights[j];
+      }
+      return weights.map((value) => value / sum);
+    });
+  }
+  reset() {
+    this.input = new Float32Array(0);
+    this.offset = this.received = this.emitted = 0;
+  }
+  push(values, final = false) {
+    const joined = new Float32Array(this.input.length + values.length);
+    joined.set(this.input);
+    joined.set(values, this.input.length);
+    this.input = joined;
+    this.received += values.length;
+    const end = final ? Math.ceil(this.received / this.step) : Math.max(0, Math.ceil((this.received - 16) / this.step));
+    const output = new Float32Array(Math.max(0, end - this.emitted));
+    for (let i = 0; i < output.length; i++, this.emitted++) {
+      const position = this.emitted * this.step, center = Math.floor(position);
+      const filter = this.filters[Math.min(1023, Math.floor((position - center) * 1024))];
+      let value = 0;
+      for (let j = 0; j < 32; j++) value += (this.input[center + j - 15 - this.offset] || 0) * filter[j];
+      output[i] = value;
+    }
+    const keep = Math.max(0, Math.floor(this.emitted * this.step) - 15 - this.offset);
+    this.input = this.input.slice(keep);
+    this.offset += keep;
+    return output;
+  }
+}
 class PCMPlayback {
   constructor(context, onStart = () => {}, echo = null) {
     this.context = context;
@@ -100,6 +145,8 @@ class PCMPlayback {
     this.onStart = onStart;
     this.echo = echo;
     this.segments = [];
+    this.rate = context.sampleRate || 24000;
+    this.converter = new PCMRateConverter(this.rate);
   }
   async running() {
     if(this.stopped)return false;
@@ -131,11 +178,16 @@ class PCMPlayback {
     this.tail = bytes.length % 2 ? bytes[bytes.length - 1] : null;
     const count = Math.floor(bytes.length / 2);
     if (!count) return;
-    const buffer = this.context.createBuffer(1, count, 24000),
-      values = buffer.getChannelData(0);
+    const values = new Float32Array(count);
     const view = new DataView(bytes.buffer, bytes.byteOffset, count * 2);
     for (let i = 0; i < count; i++)
       values[i] = view.getInt16(i * 2, true) / 32768;
+    this.schedule(this.converter.push(values));
+  }
+  schedule(values) {
+    if (this.stopped || !values.length) return;
+    const buffer = this.context.createBuffer(1, values.length, this.rate);
+    buffer.getChannelData(0).set(values);
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.connect(this.context.destination);
@@ -144,21 +196,31 @@ class PCMPlayback {
       try{source.disconnect();}catch{}
     };
     this.sources.add(source);
-    const at = Math.max(this.next, this.context.currentTime + 0.025);
+    // A small initial jitter cushion; do not insert a fresh safety gap into
+    // every packet that arrives less than 25 ms before its scheduled boundary.
+    const now = this.context.currentTime;
+    const at = this.next >= now + 0.005 ? this.next : now + 0.06;
     this.next = at + buffer.duration;
-    this.echo?.add(values, at);
+    this.echo?.add(values, at, this.rate);
     source.start(at);
     if (this.firstScheduled === undefined) this.firstScheduled = at;
     this.onStart();
   }
   async drain() {
+    this.finishSegment();
     while (!this.stopped && this.sources.size){
       if(!await this.running())return;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
   mark(text, start) {
+    this.finishSegment();
     this.segments.push({ text, start, end: this.next });
+  }
+  finishSegment() {
+    if (!this.converter.received || this.stopped) return;
+    this.schedule(this.converter.push(new Float32Array(0), true));
+    this.converter.reset();
   }
   heard() {
     return this.segments
@@ -175,7 +237,9 @@ class PCMPlayback {
       try{source.disconnect();}catch{}
     }
     this.sources.clear();
+    this.tail = null;
+    this.converter.reset();
   }
 }
 if (typeof module !== "undefined")
-  module.exports = { readEvents, VoiceSentences, PCMPlayback };
+  module.exports = { readEvents, VoiceSentences, PCMPlayback, PCMRateConverter };
