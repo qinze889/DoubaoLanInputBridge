@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, Header, Request, Response, WebSocket, WebS
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .store import CAPABILITIES, Fault, Store
+from .store import CAPABILITIES, Fault, Store, SESSION_TTL
 
 PREFIX = '/shengjian/api/v2'
 
@@ -195,7 +195,7 @@ def create_app(directory, admin_token=None, providers=None):
     cookie_name = '__Secure-shengjian_session'
 
     def remember(response, data):
-        response.set_cookie(cookie_name, data['token'], max_age=30*86400, secure=True, httponly=True, samesite='strict', path=PREFIX)
+        response.set_cookie(cookie_name, data['token'], max_age=SESSION_TTL, secure=True, httponly=True, samesite='strict', path=PREFIX)
         return {'ok': True, **data}
 
     @app.post(PREFIX+'/auth/session')
@@ -206,7 +206,7 @@ def create_app(directory, admin_token=None, providers=None):
         except Fault:
             response.delete_cookie(cookie_name, path=PREFIX, secure=True, httponly=True, samesite='strict')
             return {'ok': True, 'authenticated': False}
-        return {'ok': True, 'authenticated': True, 'token': token, 'user_id': owner['user_id']}
+        return remember(response, {'authenticated': True, 'token': token, 'user_id': owner['user_id'], 'expires_at': owner['expires']})
 
     @app.post(PREFIX+'/auth/qr')
     async def make_qr(uid=Depends(user), authorization: str | None = Header(default=None)):
@@ -318,7 +318,7 @@ def create_app(directory, admin_token=None, providers=None):
                     await ws.send_json(event)
                     cursor = event['seq']
                 await ws.send_json({'type': 'heartbeat', 'after': cursor})
-                await asyncio.sleep(.1)
+                await asyncio.sleep(.05)
         except (Fault, ValueError, KeyError, WebSocketDisconnect, asyncio.TimeoutError):
             await ws.close(code=1008)
 
@@ -343,7 +343,7 @@ def create_app(directory, admin_token=None, providers=None):
                     if answer['id'] not in sent_decisions:
                         await ws.send_json({'type': 'approval.answer', 'task_id': answer['task_id'], 'approval_id': answer['id'], **json.loads(answer['decision'])})
                         sent_decisions.add(answer['id'])
-                await asyncio.sleep(.25)
+                await asyncio.sleep(.05)
         try:
             token, principal, _ = await ws_auth(ws, device=True)
             ident = principal['id']

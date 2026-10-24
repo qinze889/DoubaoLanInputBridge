@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "headless_to_warm_sdk_existing_session_recall": true,
+  "no_new_blank_session": true
+}

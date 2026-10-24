@@ -77,3 +77,24 @@ def test_chat_capability_survives_real_device_protocol_without_metrics_grant(age
         assert ws.receive_json()['type']=='heartbeat'
         assert store.device(uid,device['id'])['metrics']=={'harness_chat':True}
         assert chat(client,auth,secrets.token_hex(16)).status_code==200
+
+
+def test_live_work_controls_bypass_queued_followup_and_keep_owner_scope(agent):
+    client,store,auth,device,app=agent
+    store.heartbeat(device['id'],{'harness_chat':True})
+    conv=secrets.token_hex(16)
+    work=chat(client,auth,conv,text='处理文件').json()['task']
+    store.dispatch(device['id'])
+    store.device_event(device['id'],work['id'],{'type':'task.state','state':'running'},'running')
+    followup=chat(client,auth,conv,text='补充一下说明').json()
+    assert followup['queued_behind']==work['id']
+    queued=followup['task']
+    status=chat(client,auth,conv,text='现在进度怎么样了',task_id=queued['id']).json()
+    assert status['action']=='status' and status['task']['id']==work['id']
+    cancel=chat(client,auth,conv,text='取消正在执行的任务',task_id=queued['id']).json()
+    assert cancel['task']['id']==work['id'] and cancel['task']['cancel_requested']
+    assert not store.task(work['user_id'],queued['id'])['cancel_requested']
+    assert cancel['task']['state']=='running' and '等待电脑' in cancel['reply']
+    # Only the computer acknowledgement can finish cancellation.
+    store.device_event(device['id'],work['id'],{'type':'task.state','state':'cancelled'},'cancel-ack')
+    assert store.task(work['user_id'],work['id'])['state']=='cancelled'

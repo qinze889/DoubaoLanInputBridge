@@ -68,6 +68,17 @@ async def harness_fixture(device_id):
         spec=json.loads(t['specification']);ident=t['id']
         if not spec.get('assistant_chat'):raise RuntimeError('Expected unified Harness Chat')
         store.device_event(device_id,ident,{'type':'task.state','state':'running'},'running')
+        if spec.get('voice_text')=='请在后台慢速验收':
+            store.device_event(device_id,ident,{'type':'task.log','text':json.dumps({'type':'tool_call','tool':'background_browser'})},'work-start')
+            for _ in range(120):
+                await asyncio.sleep(.1)
+                if store.task(t['user_id'],ident)['cancel_requested']:
+                    store.device_event(device_id,ident,{'type':'task.state','state':'cancelled'},'cancelled')
+                    break
+            else:
+                store.device_event(device_id,ident,{'type':'task.result','text':'后台验收完成'},'result')
+                store.device_event(device_id,ident,{'type':'task.state','state':'succeeded'},'done')
+            continue
         first='图中有绿色方块。' if spec['life_images'] else '这是第一句实时回答。'
         second='可以继续问这张图。' if spec['life_images'] else '这是稍后才生成的第二句。'
         store.device_event(device_id,ident,{'type':'task.delta','text':first},'delta-1')

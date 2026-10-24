@@ -13,6 +13,8 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 
 CAPABILITIES = {'tasks', 'screen', 'input', 'files', 'metrics'}
+SESSION_TTL = 180*86400
+
 TERMINAL = {'succeeded', 'failed', 'cancelled', 'unknown'}
 TRANSITIONS = {
     'queued': {'running', 'failed', 'cancelled', 'unknown'},
@@ -134,7 +136,7 @@ class Store:
 
     def session(self, uid):
         token = secrets.token_urlsafe(48)
-        expires = time.time()+30*86400
+        expires = time.time()+SESSION_TTL
         with self.tx() as db:
             db.execute('DELETE FROM sessions WHERE expires<=?', (time.time(),))
             db.execute('INSERT INTO sessions(token,user_id,expires) VALUES(?,?,?)', (digest(token), uid, expires))
@@ -162,16 +164,20 @@ class Store:
                 raise Fault('device_limit', 409)
             # A phone login is a client, never an execution connector.
             db.execute('INSERT INTO devices(id,user_id,name,token,capabilities) VALUES(?,?,?,?,?)', (ident, uid, name, digest(secrets.token_urlsafe(48)), '[]'))
-            db.execute('INSERT INTO sessions(token,user_id,expires,device_id) VALUES(?,?,?,?)', (digest(token), uid, now+30*86400, ident))
+            db.execute('INSERT INTO sessions(token,user_id,expires,device_id) VALUES(?,?,?,?)', (digest(token), uid, now+SESSION_TTL, ident))
             db.execute('UPDATE qr_tickets SET consumed=? WHERE ticket=?', (now, digest(ticket)))
-        return {'token': token, 'user_id': uid, 'device_id': ident, 'expires_at': now+30*86400}
+        return {'token': token, 'user_id': uid, 'device_id': ident, 'expires_at': now+SESSION_TTL}
 
     def authenticate(self, token, device=False):
         with self.lock:
             if device:
                 row = self.db.execute('SELECT * FROM devices WHERE token=? AND revoked=0', (digest(token),)).fetchone()
             else:
-                row = self.db.execute('SELECT user_id FROM sessions WHERE token=? AND expires>?', (digest(token), time.time())).fetchone()
+                now=time.time()
+                row = self.db.execute('SELECT user_id,expires FROM sessions WHERE token=? AND expires>?', (digest(token), now)).fetchone()
+                if row and row['expires'] < now+SESSION_TTL-86400:
+                    self.db.execute('UPDATE sessions SET expires=? WHERE token=?', (now+SESSION_TTL,digest(token)))
+                    row={'user_id':row['user_id'],'expires':now+SESSION_TTL}
         if not row:
             raise Fault('unauthorized', 401)
         return dict(row)

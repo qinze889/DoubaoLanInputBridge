@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "sdk_resume_after_cancel_without_replay": true,
+  "actual_local_background_process": true,
+  "queued_followup_did_not_replace_work_target": true,
+  "status_reply_ms": 9,
+  "cancel_confirmed_ms": 136,
+  "cancel_waited_for_computer_ack": true,
+  "owned_child_process_stopped": true,
+  "no_foreground_app_or_input_used": true,
+  "scope": "isolated account and real local Harness; HTTP timings exclude ASR/TTS and phone hardware"
+}

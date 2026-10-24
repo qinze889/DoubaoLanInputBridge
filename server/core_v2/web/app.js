@@ -1,7 +1,7 @@
 "use strict";
 const base = "/shengjian/api/v2",
   $ = (id) => document.getElementById(id);
-let token = sessionStorage.getItem("shengjian.session") || "",
+let token = "",
   currentTask = "",
   cursor = 0,
   stream = null,
@@ -106,6 +106,7 @@ function showPage(id) {
   if (id === "life") window.ShengjianLife?.refresh();
 }
 function logoutLocal() {
+  for(const stop of backgroundWork.values())stop();
   replyController?.abort();replyController=null;
   window.ShengjianVisual?.deactivate();
   window.ShengjianLife?.deactivate();
@@ -466,7 +467,7 @@ async function submitPrompt(prompt) {
   try {
     const selected = $("destination").value;
     if ($("engine").value === "harness" || selected === "chat") {
-      const visual=await window.ShengjianVisual?.snapshot(prompt) || {images:[]};
+      const visual=ShengjianAgent.control(prompt)?{images:[]}:(await window.ShengjianVisual?.snapshot(prompt) || {images:[]});
       if(owner!==token || operation!==composeEpoch)return;
       message("user",prompt,visual.images);
       await streamHarness(prompt,visual.images,owner,operation,selected);
@@ -698,6 +699,30 @@ async function speakStreaming(text) {
   speech.push(text);
   await speech.done();
 }
+const backgroundWork=new Map();
+function watchBackgroundWork(id,owner,after=0,hasWork=false){
+ if(backgroundWork.has(id)||owner!==token)return;
+ if(backgroundWork.size>=32)backgroundWork.values().next().value();
+ let socket,cursor=after,closed=false,result="";
+ const stop=()=>{closed=true;socket?.close();backgroundWork.delete(id);};
+ backgroundWork.set(id,stop);
+ function connect(){
+  if(closed||owner!==token)return stop();
+  socket=new WebSocket(location.origin.replace(/^http/,"ws")+base+"/tasks/"+id+"/stream");
+  socket.onopen=()=>{if(owner!==token)return stop();socket.send(JSON.stringify({token:owner,after:cursor}));};
+  socket.onmessage=e=>{
+   if(owner!==token)return stop();
+   const item=JSON.parse(e.data);if(!item.seq||item.seq<=cursor)return;cursor=item.seq;
+   if(item.type==="task.log"){try{const l=JSON.parse(item.text);if(l.type==="tool_call"&&l.tool!=="see_user_image")hasWork=true;}catch{}}
+   if(item.type==="task.result")result=item.text||"";
+   if(item.type==="task.state"&&["succeeded","failed","cancelled","unknown"].includes(item.state)){
+    stop();if(!hasWork&&item.state==="succeeded")return;agentReport(item.state==="succeeded"?"后台工作已完成。"+result.slice(0,600):"后台工作"+(labels[item.state]||item.state)+"。");
+   }
+  };
+  socket.onclose=()=>{if(!closed)setTimeout(connect,2000);};
+ }
+ connect();
+}
 async function streamHarness(prompt,images,owner,operation,selected) {
   const terminal=new Set(["succeeded","failed","cancelled","unknown"]);
   const key="shengjian.chat."+chatOwner+"."+selected;
@@ -714,6 +739,7 @@ async function streamHarness(prompt,images,owner,operation,selected) {
     return;
   }
   const id=data.task.id;
+  busy=false;$("compose").querySelector("[type=submit]").disabled=false;
   currentTask=id;
   $("messages").append(button("查看本轮工作与确认",()=>openTask(id)));
   const controller=new AbortController();replyController=controller;
@@ -722,12 +748,12 @@ async function streamHarness(prompt,images,owner,operation,selected) {
   const turn={history:[...messages,{role:"user",content:prompt}],images,text:"",voiced:$("speak").checked,complete:false,speechEnd:session?.utterance?.speechEnd,harness:true};
   if(session)session.replyTurn=turn;
   const speech=session && turn.voiced?speechPipeline(turn):null;
-  const node=el("div","正在连接本机 DeepSeek Harness…","message assistant");turn.node=node;$("messages").append(node);
+  const node=el("div",data.queued_behind?"补充已排队，当前工作继续运行。可随时询问进度或取消任务。":"正在连接本机 DeepSeek Harness…","message assistant");turn.node=node;$("messages").append(node);
   let cursor=0, socket, result="", settled=false, approvalSeen=new Set();
   try {
     await new Promise((resolve,reject)=>{
       const finish=(failure)=>{if(settled)return;settled=true;socket?.close();controller.signal.removeEventListener("abort",abort);failure?reject(failure):resolve();};
-      const abort=()=>{harnessInterrupted=true;finish(new DOMException("Interrupted","AbortError"));};
+      const abort=()=>{harnessInterrupted=true;if(owner===token)watchBackgroundWork(id,owner,cursor,turn.work);finish(new DOMException("Interrupted","AbortError"));};
       controller.signal.addEventListener("abort",abort,{once:true});
       function connect(){
         if(settled || controller.signal.aborted)return;
@@ -736,6 +762,7 @@ async function streamHarness(prompt,images,owner,operation,selected) {
         socket.onmessage=e=>{
           if(settled || owner!==token || operation!==composeEpoch)return;
           const item=JSON.parse(e.data);if(!item.seq||item.seq<=cursor)return;cursor=item.seq;
+          if(item.type==="task.log"){try{const log=JSON.parse(item.text);if(log.type==="tool_call"&&log.tool!=="see_user_image")turn.work=true;}catch{}}
           if(item.type==="task.delta"){
             if(!turn.text && session)session.metrics={...session.metrics,first_token_ms:Math.round(performance.now()-session.replyStart)};
             turn.text+=item.text||"";node.textContent=turn.text;speech?.push(item.text||"");
@@ -1253,25 +1280,36 @@ document.addEventListener("visibilitychange", () => {
     stopLive("已暂停麦克风，返回后请重新开启实时对话。电脑任务继续运行。");
 });
 window.addEventListener("pagehide", () => stopLive());
+let restoringLogin=false, lastSessionRenewal=0, pendingLoginTicket="";
 async function restoreLogin() {
-  const ticket = new URLSearchParams(location.hash.slice(1)).get("login");
+  if(restoringLogin)return;
+  restoringLogin=true;
+  pendingLoginTicket=new URLSearchParams(location.hash.slice(1)).get("login") || pendingLoginTicket;
+  const ticket=pendingLoginTicket;
   if (ticket) history.replaceState(null, "", location.pathname + location.search);
-  if (ticket && token) logoutLocal();
   const operation = ++authEpoch;
   try {
-    if (ticket) {
-      const data = await json("/auth/qr/redeem", { ticket });
-      if (operation !== authEpoch) return;
-      token = data.token;
-      sessionStorage.removeItem("shengjian.session");
-    } else if (!token) {
-      const data = await json("/auth/session", {});
-      if (operation !== authEpoch) return;
-      if (data.authenticated) token = data.token;
+    // An old QR URL must never discard a valid remembered browser session.
+    if(!token){
+      const data=await json('/auth/session',{});
+      if(operation!==authEpoch)return;
+      if(data.authenticated)token=data.token;
     }
-    if (token) await enter();
-  } catch (failure) { if (operation === authEpoch) error(failure); }
+    if(!token && ticket){
+      const data=await json('/auth/qr/redeem',{ticket});
+      if(operation!==authEpoch)return;
+      token=data.token;sessionStorage.removeItem('shengjian.session');
+    }
+    if(token){pendingLoginTicket="";await enter();lastSessionRenewal=Date.now();}
+  } catch(failure){if(failure.message==="qr_expired")pendingLoginTicket="";if(operation===authEpoch)error(failure);}
+  finally{restoringLogin=false;}
 }
+window.addEventListener('online',()=>{if(!token)restoreLogin();else refresh().catch(error);});
+window.addEventListener('pageshow',()=>{if(!token)restoreLogin();});
+setInterval(async()=>{
+ if(!token || document.hidden || Date.now()-lastSessionRenewal<6*3600000)return;
+ try{const owner=token;const d=await json('/auth/session',{});if(owner===token&&d.authenticated)lastSessionRenewal=Date.now();}catch{}
+},60000);
 window.addEventListener("hashchange", restoreLogin);
 restoreLogin();
 

@@ -101,7 +101,7 @@ Mac / Windows 的“连接手机”页新增账号登录、注册码注册和语
 
 `POST /auth/qr` 使用已登录的电脑 token 生成 120 秒、一次性票据；刷新立即作废同一会话的旧票据。二维码只包含 `/console#login=...`，票据放 URL fragment，不进入 HTTP 请求 URL 或 Referer，页面读取后立即清除。`POST /auth/qr/redeem` 原子消费票据、登记无执行能力的手机设备，并签发独立登录 token；电脑退出后未兑换的票据失效，已登录手机可在设备页单独撤销。此二维码提供账号访问，请只让自己的手机扫描。
 
-网页登录使用 30 天 `Secure; HttpOnly; SameSite=Strict` Cookie，长期凭据不再写入 JS 持久存储。页面重开通过同源 `POST /auth/session` 恢复内存中的会话，用于现有 Bearer / WebSocket 协议；原有会话存储仅兼容旧页面。退出必须取得云端撤销回执，离线时明确报错并保留状态。认证入口拒绝跨站 Origin / Sec-Fetch-Site 请求。
+网页登录使用180天滚动续期的 `Secure; HttpOnly; SameSite=Strict` Cookie，长期凭据不再写入 JS 持久存储。页面重开通过同源 `POST /auth/session` 恢复内存中的会话，用于现有 Bearer / WebSocket 协议；不会用旧二维码票据覆盖有效登录态。退出必须取得云端撤销回执，离线时明确报错并保留状态。认证入口拒绝跨站 Origin / Sec-Fetch-Site 请求。
 
 iOS 增加 App 内“对话”页，使用限定声笺域名的 WKWebView 与持久 Cookie；扫码识别到云端入口后直接切换此页。旧配对信息仍保存在 Keychain。首次语音需系统麦克风许可；这是 App 内网页语音，尚非独立原生音频引擎。完整 iOS 构建及真机权限、Cookie 冷启动验收仍需 Xcode 和签名环境。
 

@@ -1,0 +1,28 @@
+{
+  "engine": "DeepSeek Harness",
+  "mode": "isolated account, real Mac SDK worker and cloud vision/text models",
+  "turns": [
+    {
+      "first_text_seconds": 1.83,
+      "deltas": 57,
+      "elapsed_seconds": 2.34
+    },
+    {
+      "first_text_seconds": 10.41,
+      "deltas": 69,
+      "elapsed_seconds": 10.67
+    },
+    {
+      "first_text_seconds": 3.38,
+      "deltas": 46,
+      "elapsed_seconds": 3.9
+    }
+  ],
+  "ok": true,
+  "same_session_recalled_code": true,
+  "photo_tool_called": true,
+  "image_to_actual_local_file": true,
+  "followup_read_and_recall": true,
+  "file": "isolated-test-workspace/picture-result.txt",
+  "file_sha256": "9d9060b990629b19014663b83684bb416f9c7ae47179cca0b46e3a858206dc44"
+}

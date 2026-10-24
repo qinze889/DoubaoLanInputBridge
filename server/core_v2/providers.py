@@ -157,6 +157,14 @@ class Providers:
                 if selected!=self.config.text_model:data.pop('reasoning_effort',None)
             elif data.get('model') not in {m['id'] for m in models}:
                 raise Fault('model_not_allowed',403)
+            # The pinned local Harness does not send an effort field. Apply only the
+            # already-verified low profile to its active Chat/Work text stream.
+            if not image_ids and data.get('stream') and data.get('model')==self.config.text_model and self.config.voice_effort=='low' and 'reasoning_effort' not in data:
+                try: identity=store.authenticate(request.headers.get('authorization','')[7:],device=True)
+                except Fault: identity=None
+                if identity:
+                    active=[t for t in store.tasks(uid) if t['device_id']==identity['id'] and t['state']=='running' and json.loads(t['specification']).get('assistant_chat')]
+                    if active:data['reasoning_effort']='low'
             if 'reasoning_effort' in data and (self.config.voice_effort != 'low' or data['reasoning_effort'] != 'low' or data['model'] != self.config.text_model):
                 raise Fault('unsupported_reasoning_effort')
             messages=data.get('messages')

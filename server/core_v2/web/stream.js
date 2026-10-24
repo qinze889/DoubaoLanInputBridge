@@ -57,15 +57,15 @@ class VoiceSentences {
           break;
         }
       }
-      const maximum = this.first ? 16 : 64;
+      const maximum = this.first ? 12 : 64;
       if (!cut && Array.from(this.pending).length >= maximum)
         cut = Array.from(this.pending).slice(0, maximum).join("").length;
       if (!cut) {
-        if (this.first && this.pending.length >= 6 && !this.timer)
+        if (this.first && this.pending.length >= 4 && !this.timer)
           this.timer = setTimeout(() => {
             this.timer = null;
             if (this.first) this.flush();
-          }, 140);
+          }, 80);
         return;
       }
       const piece = this.pending.slice(0, cut);

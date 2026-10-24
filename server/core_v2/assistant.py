@@ -17,7 +17,8 @@ def intent(text):
     if value in {'停一下', '停止播报', '停止说话', '别说了', '暂停播报'}: return 'silence'
     if re.fullmatch(r'(?:取消|停止|终止)(?:当前|这个|刚才的|正在执行的)?(?:电脑)?任务', value): return 'cancel'
     if re.fullmatch(r'(?:查看|查询|汇报|报告|说一下)?(?:当前|这个|刚才的|现在的)?任务(?:进度|状态|结果|怎么样了|做到哪了|完成了吗|做完了吗)', value): return 'status'
-    if value in {'进度怎么样了', '做到哪了', '做完了吗', '当前进度', '汇报进度', '汇报结果'}: return 'status'
+    if value in {'进度怎么样了', '现在进度怎么样', '现在进度怎么样了', '进度如何', '做到哪里了', '现在做到哪了', '做到哪了', '做完了吗', '当前进度', '汇报进度', '汇报结果'}: return 'status'
+    if value in {'取消正在执行的任务', '停止正在执行的任务', '取消刚才的任务', '取消这个工作'}: return 'cancel'
     if value in {'电脑状态', '查看电脑状态', '电脑运行情况', '电脑负载', '电脑怎么样了'}: return 'metrics'
     if value in {'允许本次操作', '允许这次操作', '批准本次操作'}: return 'allow'
     if value in {'拒绝本次操作', '拒绝这次操作', '不允许本次操作'}: return 'deny'
@@ -47,8 +48,20 @@ def mount(app, store, user, peers):
     @app.post(PREFIX+'/assistant/chat')
     async def chat(body: Chat, uid=Depends(user)):
         if intent(body.text) != 'task':
-            return await turn(Turn(text=body.text, request_id=body.request_id, device_id=body.device_id,
-                                   task_id=body.task_id), uid)
+            # A queued follow-up must not replace the running Work as the control target.
+            with store.lock:
+                bound=store.db.execute('SELECT * FROM assistant_conversations WHERE id=?',(body.conversation_id,)).fetchone()
+            target=body.task_id
+            selected=body.device_id
+            if bound:
+                binding=store.conversation(uid,body.conversation_id,selected)
+                selected=binding['device_id']
+                candidates=[t for t in store.tasks(uid) if t['device_id']==selected and json.loads(t['specification']).get('conversation_id')==body.conversation_id and t['state'] not in TERMINAL]
+                running=[t for t in candidates if t['state'] in {'running','awaiting_user'}]
+                if running:target=min(running,key=lambda t:t['created'])['id']
+                elif candidates:target=min(candidates,key=lambda t:t['created'])['id']
+            return await turn(Turn(text=body.text, request_id=body.request_id, device_id=selected,
+                                   task_id=target), uid)
         old = store.task_by_request(uid, body.request_id)
         if old:
             spec = json.loads(old['specification'])
@@ -81,8 +94,9 @@ def mount(app, store, user, peers):
                 'voice_text': body.text, 'engine': 'harness', 'conversation_id': body.conversation_id,
                 'assistant_chat': True, 'life_images': body.life_images, 'vision_model': model,
                 'interrupted': body.interrupted}
+        ahead=next((t['id'] for t in reversed(store.tasks(uid)) if t['device_id']==ident and t['state'] in {'running','awaiting_user'}),None)
         created = store.create_task(uid, spec)
-        return {'ok': True, 'action': 'chat', 'task': created, 'conversation_id': body.conversation_id}
+        return {'ok': True, 'action': 'chat', 'task': created, 'conversation_id': body.conversation_id,'queued_behind':ahead}
 
     @app.post(PREFIX+'/assistant/turn')
     async def turn(body: Turn, uid=Depends(user)):
@@ -125,7 +139,14 @@ def mount(app, store, user, peers):
             reply = '任务'+STATES[task['state']]+'。'
             if task['cancel_requested'] and task['state'] not in TERMINAL: reply += '正在等待电脑确认取消。'
             if detail['result']: reply += detail['result'][:600]
-            elif detail['latest']: reply += detail['latest'][:240]
+            elif detail['latest']:
+                try:
+                    log=json.loads(detail['latest'])
+                    if log.get('type')=='tool_call':
+                        names={'bash':'后台命令','read':'读取文件','write':'写入文件','background_browser':'后台浏览器','mac_desktop':'后台控件','see_user_image':'图片识别'}
+                        reply+='正在处理'+names.get(log.get('tool'),'电脑工作')+'。'
+                    else:reply+='电脑仍在处理，可继续补充要求或请求取消。'
+                except (ValueError,TypeError):reply+=detail['latest'][:160]
             return result(reply)
         if action == 'cancel':
             cancelled = store.cancel(uid, task['id'])

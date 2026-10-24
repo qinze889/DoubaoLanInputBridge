@@ -1,0 +1,70 @@
+{
+  "baseline": {
+    "phase": "before",
+    "measurements": [
+      {
+        "trial": 1,
+        "first_text_seconds": 3.928,
+        "first_audio_packet_seconds": 4.65
+      },
+      {
+        "trial": 2,
+        "first_text_seconds": 2.288,
+        "first_audio_packet_seconds": 2.961
+      },
+      {
+        "trial": 3,
+        "first_text_seconds": 2.484,
+        "first_audio_packet_seconds": 3.249
+      }
+    ],
+    "scope": "API submit after ASR final to first real TTS PCM packet; excludes phone capture, ASR and hardware playback; isolated account and local Harness"
+  },
+  "server_only": {
+    "phase": "after",
+    "measurements": [
+      {
+        "trial": 1,
+        "first_text_seconds": 4.05,
+        "first_audio_packet_seconds": 4.745
+      },
+      {
+        "trial": 2,
+        "first_text_seconds": 2.644,
+        "first_audio_packet_seconds": 3.233
+      },
+      {
+        "trial": 3,
+        "first_text_seconds": 2.429,
+        "first_audio_packet_seconds": 3.099
+      }
+    ],
+    "scope": "API submit after ASR final to first real TTS PCM packet; excludes phone capture, ASR and hardware playback; isolated account and local Harness"
+  },
+  "warm_sdk": {
+    "phase": "warm",
+    "measurements": [
+      {
+        "trial": 1,
+        "first_text_seconds": 3.081,
+        "first_audio_packet_seconds": 3.918
+      },
+      {
+        "trial": 2,
+        "first_text_seconds": 1.509,
+        "first_audio_packet_seconds": 2.215
+      },
+      {
+        "trial": 3,
+        "first_text_seconds": 1.363,
+        "first_audio_packet_seconds": 1.987
+      }
+    ],
+    "scope": "API submit after ASR final to first real TTS PCM packet; excludes phone capture, ASR and hardware playback; isolated account and local Harness"
+  },
+  "baseline_audio_packet_median_seconds": 3.249,
+  "warm_audio_packet_median_seconds": 2.215,
+  "median_reduction_percent": 31.8,
+  "sample_size_per_phase": 3,
+  "limits": "Small sequential samples; cache state and upstream load vary. First real TTS PCM packet, not physical phone sound. Does not include microphone endpointing or ASR. No synthetic acknowledgement is counted. Cold-start sample remains slower."
+}

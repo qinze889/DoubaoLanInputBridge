@@ -43,6 +43,8 @@ class Connector:
         self.lock = asyncio.Lock()
         self.execution_slot = asyncio.Semaphore(1)
         self.last_task = None
+        self.chat_engine = None
+        self.chat_task = None
         self.personal = PersonalStore(self.data.parent/'personal', config.get('device_id', 'standalone'))
         self.browser = BackgroundBrowser(self.data.parent/'browser'/config.get('device_id', 'standalone'))
 
@@ -73,6 +75,19 @@ class Connector:
         while True:
             await self.send({'type':'heartbeat', 'metrics':self.metrics()})
             await asyncio.sleep(10)
+
+    def warm_engine(self):
+        if self.chat_engine is None:
+            from .sdk import SDKHarness
+            self.chat_engine=SDKHarness(self.config['harness_executable'],self.workspace,
+                lambda body:self.emit(self.chat_task,body),self.config,self.data/'harness')
+            self.chat_engine.local_tools=LocalTools(self.personal,self.browser)
+        return self.chat_engine
+
+    async def warm_chat(self):
+        if self.config.get('harness_executable') and self.config.get('text_model'):
+            try:await self.warm_engine().start()
+            except (EngineError,OSError,ValueError):pass  # Startup will fail explicitly on a requested turn.
 
     async def execute(self, task):
         try:
@@ -112,13 +127,16 @@ class Connector:
                 await self.emit(ident, {'type': 'task.state', 'state': 'succeeded'})
                 return
             if task['engine'] == 'harness' and self.config.get('harness_executable') and self.config.get('text_model'):
-                from .harness import HarnessEngine
-                engine = HarnessEngine(self.config['harness_executable'] if isinstance(self.config['harness_executable'],list) else Path(self.config['harness_executable']).expanduser(), self.workspace,
-                    lambda body: self.emit(ident, body), self.config, self.data / 'harness')
-                engine.local_tools = LocalTools(self.personal, self.browser)
                 if task.get('assistant_chat'):
+                    engine=self.warm_engine()
+                    self.chat_task=ident
                     engine.conversation_id=task['conversation_id']
                     engine.visual_task=task
+                else:
+                    from .harness import HarnessEngine
+                    engine = HarnessEngine(self.config['harness_executable'] if isinstance(self.config['harness_executable'],list) else Path(self.config['harness_executable']).expanduser(), self.workspace,
+                        lambda body: self.emit(ident, body), self.config, self.data / 'harness')
+                    engine.local_tools = LocalTools(self.personal, self.browser)
             elif task['engine'] == 'codex' and self.config.get('codex_executable'):
                 engine = CodexEngine(Path(self.config['codex_executable']).expanduser(), self.workspace,
                                      lambda body: self.emit(ident, body))
@@ -160,6 +178,7 @@ class Connector:
             if ready.get('type') != 'ready':
                 raise EngineError('Device authentication failed')
             beat = asyncio.create_task(self.heartbeat())
+            warm = asyncio.create_task(self.warm_chat())
             try:
                 async for raw in ws:
                     message = json.loads(raw)
@@ -182,10 +201,12 @@ class Connector:
                         await beat
             finally:
                 beat.cancel()
+                warm.cancel()
                 pending = list(self.active.values())
                 for task in pending:
                     task.cancel()
-                await asyncio.gather(beat, *pending, return_exceptions=True)
+                await asyncio.gather(beat, warm, *pending, return_exceptions=True)
+                if self.chat_engine:await self.chat_engine.close()
                 self.ws = None
 
     async def run(self):

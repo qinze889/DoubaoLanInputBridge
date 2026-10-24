@@ -26,7 +26,7 @@
     <main>
       <section id="auth" class="card narrow">
         <h1>随时，与电脑对话</h1>
-        <p class="muted">登录后查看设备、发起任务和语音对话。登录保留 30 天；共用设备请在用完后退出。</p>
+        <p class="muted">登录后查看设备、发起任务和语音对话。本浏览器登录保留 180 天并随使用续期；共用设备请在用完后退出。</p>
         <form id="login-form">
           <label
             >用户名<input
@@ -52,6 +52,7 @@
         </form>
       </section>
       <div id="workspace" hidden>
+        <p class="muted">已记住此浏览器。下次直接打开<a href="/shengjian/api/v2/console">声笺固定入口</a>，也可收藏或添加到手机主屏幕，无需重新扫码。</p>
         <nav aria-label="页面">
           <button data-page="conversation" class="selected">对话</button
           ><button data-page="devices">设备</button

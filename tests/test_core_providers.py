@@ -111,3 +111,21 @@ def test_verified_voice_effort_is_opt_in_and_leaves_task_requests_unchanged(tmp_
         assert captured[-1]['reasoning_effort']=='low'
         assert client.post(PREFIX+'/model/v1/chat/completions',headers=headers,json=body).status_code==200
         assert 'reasoning_effort' not in captured[-1]
+
+
+def test_active_harness_chat_gets_verified_low_effort_without_changing_other_clients(tmp_path):
+    seen=[]
+    def upstream(req):
+        if req.method=='GET':return httpx.Response(200,json={'data':[{'id':'test-text'}]})
+        seen.append(json.loads(req.content))
+        return httpx.Response(200,content=b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: {"usage":{"total_tokens":1}}\n\ndata: [DONE]\n\n')
+    app,user,provider=setup(tmp_path,upstream);provider.config.voice_effort='low'
+    with TestClient(app) as c:
+        store=app.state.store;device=store.enroll(user['user_id'],'desktop',['tasks']);store.authorize_device(user['user_id'],device['id'],['tasks'])
+        t=store.create_task(user['user_id'],{'device_id':device['id'],'request_id':'low-profile-test-123','engine':'harness','prompt':'hello','assistant_chat':True})
+        store.dispatch(device['id']);store.device_event(device['id'],t['id'],{'type':'task.state','state':'running'},'run')
+        assert request(c,device,stream=True).status_code==200
+        assert seen[-1]['reasoning_effort']=='low'
+        r=c.post(PREFIX+'/model/v1/chat/completions',headers={'Authorization':'Bearer '+user['token'],'X-Request-ID':'user-low-profile-test-123'},json={'model':'test-text','messages':[{'role':'user','content':'hello'}],'max_tokens':50,'stream':True})
+        assert r.status_code==200
+        assert 'reasoning_effort' not in seen[-1]

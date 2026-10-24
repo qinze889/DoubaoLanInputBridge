@@ -57,7 +57,7 @@ def test_cookie_flags(cloud):
     ticket = client.post(PREFIX+'/auth/qr', headers=auth).json()['ticket']
     response = client.post(PREFIX+'/auth/qr/redeem', json={'ticket': ticket})
     value = response.headers['set-cookie'].lower()
-    assert 'httponly' in value and 'secure' in value and 'samesite=strict' in value and 'max-age=2592000' in value
+    assert 'httponly' in value and 'secure' in value and 'samesite=strict' in value and 'max-age='+str(180*86400) in value
 
 
 def test_qr_once_separate_token_device_revocation_and_refresh(cloud):
@@ -124,3 +124,18 @@ def test_native_boundary_keeps_bearer_in_vault_and_reuses_login(tmp_path):
     assert calls[-1] == ('/auth/qr', 'private-bearer')
     resumed.perform('logout')
     assert not resumed.perform('status')['authenticated']
+
+
+def test_browser_session_rolling_lifetime_and_cookie_refresh(cloud,monkeypatch):
+    from server.core_v2.store import SESSION_TTL
+    client,store,auth,parent=cloud
+    original=time.time()
+    child=store.redeem_qr(store.qr_ticket(parent['token'])['ticket'],'phone')
+    monkeypatch.setattr('server.core_v2.store.time.time',lambda:original+40*86400)
+    assert store.authenticate(child['token'])['expires']>original+SESSION_TTL
+    client.cookies.set('__Secure-shengjian_session',child['token'])
+    resumed=client.post(PREFIX+'/auth/session')
+    assert resumed.json()['authenticated']
+    assert 'Max-Age='+str(SESSION_TTL) in resumed.headers['set-cookie']
+    store.revoke(parent['user_id'],child['device_id'])
+    assert not client.post(PREFIX+'/auth/session').json()['authenticated']
