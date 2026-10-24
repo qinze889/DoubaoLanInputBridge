@@ -33,6 +33,7 @@ jobs:
         run: |
           node scripts/smoke_image_generation.cjs
           node scripts/smoke_reference_edit.cjs
+          node scripts/smoke_answer_focus.cjs
           node scripts/smoke_product_ui.cjs
           node scripts/smoke_life_ui.cjs
           node scripts/smoke_mobile_ui.cjs

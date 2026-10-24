@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-24",
+  "version": "2.0.0-preview.2",
+  "release": "20261024-ae7b49e21cbd",
+  "scope": "Web presentation only; no model, audio protocol or desktop binary changes",
+  "checks": [
+    "first streamed text reveals without waiting for the full answer",
+    "one 240 ms fade per new reply",
+    "short answer centered at 20–26 px",
+    "old messages muted with normal history available",
+    "manual wheel, touch or paging exits focus",
+    "explicit return to latest answer",
+    "typing focus and draft preserved",
+    "complete long answer remains available",
+    "history restore does not replay animation or model request",
+    "new conversation and logout clear visual state",
+    "320/390/1100 px, light/dark",
+    "prefers-reduced-motion shows text directly"
+  ],
+  "browser_suites_passed": [
+    "smoke_answer_focus",
+    "smoke_product_ui",
+    "smoke_harness_chat",
+    "smoke_push_to_talk"
+  ],
+  "limits": [
+    "Phone keyboard, gesture feel and voice acoustics still require physical-device experience.",
+    "Fade is visual only, not an operating-system window or keyboard focus change."
+  ]
+}

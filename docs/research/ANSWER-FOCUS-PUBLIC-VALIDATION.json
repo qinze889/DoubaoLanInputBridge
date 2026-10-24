@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "version": "2.0.0-preview.2",
+  "actual_public_model": true,
+  "actual_local_Harness": true,
+  "one_request": true,
+  "one_entrance": true,
+  "font_px": 20,
+  "reply_characters": 7,
+  "input_focus_preserved": true,
+  "user_scroll_exits_focus": true,
+  "explicit_return": true,
+  "history_restore_without_replay": true,
+  "synthetic_account": true,
+  "no_microphone_or_foreground_control": true
+}

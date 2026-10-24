@@ -765,7 +765,7 @@ async function streamHarness(prompt,images,owner,operation,selected) {
           if(item.type==="task.log"){try{const log=JSON.parse(item.text);if(log.type==="tool_call"&&log.tool!=="see_user_image"){turn.work=true;workLink.hidden=false;window.ShengjianProduct?.workStarted(id,prompt);}}catch{}}
           if(item.type==="task.delta"){
             if(!turn.text && session)session.metrics={...session.metrics,first_token_ms:Math.round(performance.now()-session.replyStart)};
-            turn.text+=item.text||"";node.textContent=turn.text;speech?.push(item.text||"");
+            turn.text+=item.text||"";node.textContent=turn.text;window.ShengjianProduct?.revealReply(node);speech?.push(item.text||"");
           } else if(item.type==="task.result")result=item.text||"";
           else if(item.type==="task.approval" && !approvalSeen.has(item.approval_id)){
             workLink.hidden=false;turn.work=true;window.ShengjianProduct?.workStarted(id,prompt);approvalSeen.add(item.approval_id);notice("电脑需要确认，请打开本轮工作卡片；也可说允许本次操作或拒绝本次操作。");
@@ -773,7 +773,7 @@ async function streamHarness(prompt,images,owner,operation,selected) {
             busy=false;$("compose").querySelector("[type=submit]").disabled=false;
           } else if(item.type==="task.state" && terminal.has(item.state)) {
             if(item.state!=="succeeded")return finish(new Error("本轮"+(labels[item.state]||item.state)+"，请查看工作记录；不会自动重试操作。"));
-            if(!turn.text){turn.text=result;node.textContent=result;speech?.push(result);}
+            if(!turn.text){turn.text=result;node.textContent=result;window.ShengjianProduct?.revealReply(node);speech?.push(result);}
             finish();
           }
           $("messages").scrollTop=$("messages").scrollHeight;window.ShengjianProduct?.scrollConversation();

@@ -8,19 +8,19 @@
     />
     <meta name="color-scheme" content="light dark" />
     <title>声笺 · 随身助理</title>
-    <link rel="stylesheet" href="console/app.css?v=2.0.0-preview.1" />
-    <script src="console/pcm.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/vad.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/voice-flow.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/stream.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/echo.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/agent.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/visual.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/life.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/imagegen.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/app.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/push-to-talk.js?v=2.0.0-preview.1" defer></script>
-    <script src="console/product.js?v=2.0.0-preview.1" defer></script>
+    <link rel="stylesheet" href="console/app.css?v=2.0.0-preview.2" />
+    <script src="console/pcm.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/vad.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/voice-flow.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/stream.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/echo.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/agent.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/visual.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/life.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/imagegen.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/app.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/push-to-talk.js?v=2.0.0-preview.2" defer></script>
+    <script src="console/product.js?v=2.0.0-preview.2" defer></script>
   </head>
   <body>
     <header class="app-header"><a class="brand" href="/shengjian/api/v2/console" aria-label="声笺首页"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>声笺</a><button id="profile-open" class="avatar" type="button" aria-label="我的账号" hidden>笺</button></header>
@@ -36,7 +36,8 @@
           <button type="button" id="computer-status" class="connection-status" aria-label="查看电脑连接">正在连接电脑</button>
           <div id="active-work-strip" hidden></div>
           <div id="chat-space" class="conversation-surface">
-            <div class="conversation-scroll" id="conversation-scroll"><button type="button" id="history-more" class="subtle-button" hidden>查看更早消息</button><p id="conversation-status" class="muted" role="status"></p><div class="welcome" id="welcome"><div class="welcome-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i></div><h1>今天，从哪件事开始？</h1><p>说出来，或者轻轻记下来。</p><div class="suggestions"><button type="button" data-prompt="帮我梳理一下今天的计划">梳理今天的计划</button><button type="button" data-prompt="汇报今天电脑情况">看看电脑近况</button><button type="button" id="suggest-photo">聊聊一张照片</button><button type="button" id="suggest-create">创作一张图片</button></div></div><div id="messages" role="log" aria-live="polite"></div></div>
+            <div class="conversation-scroll" id="conversation-scroll" tabindex="0" aria-label="对话内容"><button type="button" id="history-more" class="subtle-button" hidden>查看更早消息</button><p id="conversation-status" class="muted" role="status"></p><div class="welcome" id="welcome"><div class="welcome-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i></div><h1>今天，从哪件事开始？</h1><p>说出来，或者轻轻记下来。</p><div class="suggestions"><button type="button" data-prompt="帮我梳理一下今天的计划">梳理今天的计划</button><button type="button" data-prompt="汇报今天电脑情况">看看电脑近况</button><button type="button" id="suggest-photo">聊聊一张照片</button><button type="button" id="suggest-create">创作一张图片</button></div></div><div id="messages" role="log" aria-live="polite"></div></div>
+            <button type="button" id="latest-answer" class="latest-answer" hidden>回到最新回答</button>
             <div class="composer-dock"><section class="visual-panel" aria-label="当前图片" hidden><video id="visual-video" muted autoplay playsinline hidden></video><img id="visual-photo" alt="当前对话图片" hidden><div class="visual-caption"><p id="visual-status" role="status">图片就绪后即可提问。</p><button id="visual-clear" type="button" disabled>移除</button></div></section>
               <form id="compose" class="composer"><div class="input-row"><button id="attachments-open" type="button" class="icon-button" aria-label="添加照片或打开摄像头"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><label for="prompt" class="sr-only">输入或说出你的想法</label><textarea id="prompt" rows="1" maxlength="16000" required placeholder="想聊什么，或想做什么…"></textarea><button class="primary send-button" type="submit" aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 4-7 7M12 4l7 7M12 4v16"/></svg></button></div>
                 <div class="voice-mode-picker" role="group" aria-label="语音方式"><button type="button" data-voice-mode="live" aria-pressed="true">实时对话</button><button type="button" data-voice-mode="hold" aria-pressed="false">按键说话</button></div><div class="voice-controls"><button type="button" id="realtime" aria-pressed="false">开始实时对话</button><button type="button" id="push-to-talk" class="push-to-talk" aria-pressed="false" hidden>按住说话，松开发送</button><button type="button" id="stop-speech" class="subtle-button" aria-label="停止播报" hidden>停止播报</button></div>
