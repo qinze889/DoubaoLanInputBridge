@@ -223,7 +223,7 @@ async function refresh() {
     json("/tasks"),
   ]);
   if (owner !== token || !token) return;
-  $("balance").textContent = `可用 ${me.balance} 积分 · 预留 ${me.reserved}`;
+  $("balance").textContent = me.unlimited?`无限测试积分 · 测试调用不扣减`:`可用 ${me.balance} 积分 · 预留 ${me.reserved}`;
   window.ShengjianVisual?.activate(me.user_id, {json, fetchImage:id=>api('/life/images/'+id)});
   window.ShengjianLife?.activate(me.user_id, { json, image: (blob, id) => api('/life/images', blob, 'POST', {raw: true, requestId: id}), fetchImage: id => api('/life/images/'+id) });
   window.ShengjianImages?.activate(me.user_id,{json, file:id=>api('/images/jobs/'+id+'/file'),preview:id=>api('/life/images/'+id)});
@@ -502,14 +502,15 @@ async function submitPrompt(prompt) {
   const submit = $("compose").querySelector("[type=submit]");
   submit.disabled = true;
   stopSpeech();
+  const imageIntent=window.ShengjianImages?.intent(prompt);
   try {
-    if(window.ShengjianImages?.isGeneration(prompt)){
-      if(window.ShengjianVisual?.hasContext())throw new Error('当前只支持文字生图；请先结束看图，参考图编辑尚未接入。');
-      const job=await window.ShengjianImages.generate(prompt);
+    if(imageIntent){
+      const edited=imageIntent==='edit';
+      const job=await window.ShengjianImages.generate(prompt,{edit:edited});
       if(owner!==token || operation!==composeEpoch)return;
-      message('user',prompt);message('assistant','已提交后台生图。你可以继续聊天，或到“生成图片”查看进度。');
-      $('prompt').value='';$('messages').append(button('查看生图进度',()=>window.ShengjianImages.open()));
-      if(live&&$('speak').checked)speak('已经开始生成图片，你可以继续聊天。').catch(error);
+      message('user',prompt);message('assistant',edited?'调整已排队，会基于选定图片或上一版结果继续修改。':'已提交后台生图。你可以继续聊天，或到“生成图片”查看进度。');
+      $('prompt').value='';$('messages').append(button('查看图片与版本',()=>window.ShengjianImages.open()));
+      if(live&&$('speak').checked)speak(edited?'已收到调整，会接着上一版修改。':'已经开始生成图片，你可以继续聊天。').catch(error);
       return;
     }
     const selected = $("destination").value;
@@ -554,7 +555,7 @@ async function submitPrompt(prompt) {
   } catch (e) {
     if(e.name==="AbortError")return;
     if (owner === token && operation === composeEpoch) {
-      if (live) stopLive("对话请求未完成，请确认后重新开启");
+      if (live && !imageIntent) stopLive("对话请求未完成，请确认后重新开启");
       error(e);
     }
   } finally {
@@ -1360,5 +1361,5 @@ setInterval(async()=>{
 window.addEventListener("hashchange", restoreLogin);
 restoreLogin();
 
-window.addEventListener('shengjian:visual-change',()=>{interruptReply();const content='用户已结束看图，当前没有提供图片或摄像头画面。可以回顾历史对话，但不能声称看到当前环境。';messages=messages.filter(m=>m.role!=='system'||m.content!==content);if(!window.ShengjianVisual?.hasContext())messages=[...messages,{role:'system',content}];});
+window.addEventListener('shengjian:visual-change',event=>{if(event.detail?.origin==='image-edit')return;interruptReply();const content='用户已结束看图，当前没有提供图片或摄像头画面。可以回顾历史对话，但不能声称看到当前环境。';messages=messages.filter(m=>m.role!=='system'||m.content!==content);if(!window.ShengjianVisual?.hasContext())messages=[...messages,{role:'system',content}];});
 window.ShengjianConversation={async openVisual(start=false){if(agentMode)$('agent-mode').click();$('destination').value='chat';showPage('conversation');if(start&&!live)await $('realtime').onclick();}};

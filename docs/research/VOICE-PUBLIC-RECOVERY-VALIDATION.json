@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "same_test_account_unlimited": true,
+  "public_https_to_actual_native_agent": true,
+  "chat_state": "succeeded",
+  "chat_seconds": 3.35,
+  "real_tts_audio_received": true,
+  "tts_bytes": 8109
+}

@@ -1,0 +1,23 @@
+{
+  "model": "workbuddy/cn:hunyuan-image-alpha-edit",
+  "protocol": "images_edits",
+  "status": 200,
+  "seconds": 7.7,
+  "submissions": 1,
+  "ok": true,
+  "width": 1024,
+  "height": 1024,
+  "bytes": 191535,
+  "sha256": "eeab91b829040d2b39d158ee6b2ffc8f2bbba6e465a395240cafd7cfa3ea50b4",
+  "corner_rgb": [
+    255,
+    223,
+    72
+  ],
+  "center_rgb": [
+    21,
+    85,
+    217
+  ],
+  "source": "WorkBuddy 原生 Images Edits"
+}

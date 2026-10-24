@@ -60,21 +60,24 @@
           <details id="model-settings" class="model-settings card">
             <summary><span class="model-dot"></span><span id="current-model-name">选择对话模型</span><span class="model-settings-label">模型与连接 ⌄</span></summary>
             <div class="model-grid">
-              <label>对话与工作模型<select id="chat-model" disabled><option>正在加载模型…</option></select></label>
-              <label>识图模型<select id="chat-vision-model" disabled><option>正在加载模型…</option></select></label>
-              <label>生图模型<select id="image-model" disabled><option>正在加载生图模型…</option></select></label>
+              <label>聊天与工作 · 文字／工具<select id="chat-model" disabled><option>正在加载模型…</option></select></label>
+              <label>识图 · 图片 → 文字<select id="chat-vision-model" disabled><option>正在加载模型…</option></select></label>
+              <label>生图 · 文字 → 图片<select id="image-model" disabled><option>正在加载生图模型…</option></select></label>
+              <label>改图 · 图片 → 图片<select id="image-edit-model" disabled><option>正在加载改图模型…</option></select></label>
               <label>发送到<select id="destination"><option value="chat">自动选择电脑</option></select></label>
               <label>执行引擎<select id="engine"><option value="harness">DeepSeek Harness</option><option value="codex">Codex</option></select></label>
             </div>
             <label class="inline"><input type="checkbox" id="speak" checked>语音回复</label>
-            <p id="model-note" class="muted">选择自动保存；下一轮生效，正在执行的工作保持原模型。</p>
+            <p id="model-note" class="muted">四类模型分别保存，只列出实测可用的选项；下一轮生效，正在执行的任务保持原模型。</p>
             <span id="balance" class="muted"></span>
           </details>
           <div class="conversation-modes" aria-label="对话方式"><button type="button" data-conversation-mode="chat" class="selected" aria-pressed="true">聊天与工作</button><button type="button" data-conversation-mode="image" aria-pressed="false">生成图片</button></div>
           <section id="image-space" class="card" hidden>
             <div id="image-live-banner" hidden role="status">实时语音仍在聆听 <button type="button" id="image-stop-live">结束实时对话</button></div>
-            <span class="eyebrow">灵感画室</span><h2>把想象，变成图片。</h2><p class="muted">选择生图模型，描述你想看到的画面。</p>
-            <form id="image-form"><label for="image-prompt" class="sr-only">图片描述</label><textarea id="image-prompt" rows="4" maxlength="1500" placeholder="例如：一只坐在窗边的小黑猫，温暖阳光，水彩插画…" required></textarea><div class="actions"><button type="submit" class="primary" id="create-image">生成图片</button><span id="image-cost" class="muted"></span></div></form>
+            <span class="eyebrow">灵感画室</span><h2>把想象，变成图片。</h2><p class="muted">选择模型，上传参考图，或描述新的画面。</p>
+            <section id="image-reference" class="image-reference"><img id="image-reference-photo" alt="本轮修改的参考图" hidden><div><strong id="image-reference-label">先上传参考图，或直接描述新图片</strong><p id="image-reference-status" class="muted">上传／拍照后说“背景改成白色”，再说“亮一点”即可继续调整。</p><div class="actions"><label class="life-file-button">上传参考图<input id="image-reference-upload" type="file" accept="image/*"></label><label class="life-file-button">拍照改图<input id="image-reference-camera" type="file" accept="image/*" capture="environment"></label><button type="button" id="image-reference-clear">重新创作</button></div></div></section>
+            <button type="button" id="image-start-live">开始实时语音</button>
+            <form id="image-form"><label for="image-prompt" class="sr-only">图片描述</label><textarea id="image-prompt" rows="3" maxlength="1500" placeholder="例如：一只坐在窗边的小黑猫，温暖阳光，水彩插画…" required></textarea><div class="actions"><button type="submit" class="primary" id="create-image">生成图片</button><span id="image-cost" class="muted"></span></div></form>
             <p id="image-status" role="status"></p><p class="muted">提交后在云端生成，离开页面也会继续。生成图片标记为 AI 作品，保存在生活记录中。</p>
             <div id="image-gallery"></div>
           </section>

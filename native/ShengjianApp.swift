@@ -522,7 +522,7 @@ struct ConnectionView:View {
                                     }
                                 }
                             }.animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.86), value: model.connectedURL).overlay(RoundedRectangle(cornerRadius:24).stroke(Color.black.opacity(0.045),lineWidth:1))
-                            HStack(spacing:6) { Image(systemName:model.connectionMode == "lan" ? "wifi" : "globe"); Text(model.connectionMode == "lan" ? "同一 Wi-Fi，扫一扫" : "用手机相机扫一扫") }.font(.system(size:13,weight:.medium)).foregroundStyle(.secondary)
+                            HStack(spacing:6) { Image(systemName:model.connectionMode == "lan" ? "wifi" : "globe"); Text(model.connectionMode == "lan" ? "文件传输码 · 仅同一 Wi-Fi" : "文件传输码 · 手机扫码") }.font(.system(size:13,weight:.medium)).foregroundStyle(.secondary)
                             if !model.connectedURL.isEmpty {
                                 HStack(spacing:18) {
                                     Button { model.copyConnection() } label: { Label(model.copied ? "已复制" : "复制连接",systemImage:model.copied ? "checkmark" : "link") }
@@ -589,35 +589,40 @@ struct CloudAccountCard: View {
     @ViewState private var expires = Date.distantPast
     @ViewState private var working = false
     @ViewState private var failure = ""
+    @ViewState private var showLoginQR = false
+    private let publicURL = "https://test.xjiaoai.com/shengjian/api/v2/console"
     var body: some View {
         Card {
-            VStack(alignment: .leading, spacing: 14) {
-                Label("账号 · 实时语音与任务", systemImage: "person.crop.circle").font(.headline)
-                if authenticated {
-                    HStack(spacing: 24) {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            if context.date < expires && !qr.isEmpty {
-                                QRCode(value: qr).padding(12).frame(width: 168, height: 168).background(.white, in: RoundedRectangle(cornerRadius: 16))
-                            } else { Text("二维码已过期，请刷新").frame(width: 168, height: 168) }
-                        }
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("已登录，手机扫码即可对话").font(.subheadline.weight(.medium))
-                            Text("登录保留 30 天。二维码两分钟有效、仅可使用一次，请只让自己的手机扫描。").font(.caption).foregroundStyle(.secondary)
-                            Button("刷新语音二维码") { Task { await run("qr") } }.disabled(working)
-                            Button("退出账号") { Task { await run("logout") } }.disabled(working)
-                        }
-                    }
-                } else {
-                    HStack(spacing: 24) {
-                        QRCode(value: "https://test.xjiaoai.com/shengjian/api/v2/console").padding(12).frame(width: 168, height: 168).background(.white, in: RoundedRectangle(cornerRadius: 16))
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("手机扫码，直接测试实时对话").font(.subheadline.weight(.medium))
-                            Text("手机已登录即可直接使用。也可在下方登录电脑，生成免登录二维码。下次打开自动复用登录态。").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 16) {
+                Label("公网语音 · 图片创作 · 电脑 Agent", systemImage: "globe").font(.headline)
+                HStack(spacing: 26) {
+                    QRCode(value: publicURL).padding(16).frame(width:220,height:220).background(.white,in:RoundedRectangle(cornerRadius:20))
+                    VStack(alignment:.leading,spacing:12) {
+                        Text("手机用流量也能扫").font(.title3.weight(.semibold))
+                        Text("这是固定公网入口，不会因两分钟到期而失效。手机浏览器登录后保留 180 天，并随使用续期。").font(.subheadline).foregroundStyle(.secondary)
+                        Text("已登录的手机，下次直接打开收藏即可。下方文件传输二维码只负责所选网络连接。").font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button("复制公网入口") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(publicURL,forType:.string) }
+                            Button("打开网页版") { if let url=URL(string:publicURL) { NSWorkspace.shared.open(url) } }
+                        }.buttonStyle(.bordered)
+                        if authenticated {
+                            HStack { Button("为新手机生成免登录码") { Task { await run("qr") } }.disabled(working); Button("退出账号") { Task { await run("logout") } }.disabled(working) }
                         }
                     }
-                    TextField("用户名", text: $username).textContentType(.username)
-                    SecureField("密码（至少 12 位）", text: $password).textContentType(.password)
-                    if registering { TextField("注册码 / 邀请码", text: $invitation) }
+                }
+                if authenticated && showLoginQR {
+                    HStack(spacing:20) {
+                        TimelineView(.periodic(from:.now,by:1)) { context in
+                            if context.date < expires && !qr.isEmpty { QRCode(value:qr).padding(12).frame(width:150,height:150).background(.white,in:RoundedRectangle(cornerRadius:16)) }
+                            else { Text("免登录码已到期").frame(width:150,height:150) }
+                        }
+                        VStack(alignment:.leading,spacing:10) { Text("免登录码仅限你自己的新设备，两分钟内可使用一次。常用手机请扫上面的固定入口。").font(.caption).foregroundStyle(.secondary); Button("刷新免登录码") { Task { await run("qr") } }.disabled(working); Button("收起") { showLoginQR=false } }
+                    }
+                }
+                if !authenticated {
+                    Text("电脑登录后可为自己的新手机生成免登录码；手机已经登录时可直接扫上方固定入口。").font(.caption).foregroundStyle(.secondary)
+                    HStack { TextField("用户名",text:$username).textContentType(.username); SecureField("密码（至少 12 位）",text:$password).textContentType(.password) }
+                    if registering { TextField("注册码 / 邀请码",text:$invitation) }
                     HStack {
                         Button(registering ? "注册并登录" : "登录") { Task { await run(registering ? "register" : "login") } }.buttonStyle(.borderedProminent).disabled(working || username.isEmpty || password.isEmpty)
                         Button(registering ? "已有账号" : "使用注册码注册") { registering.toggle() }.disabled(working)
@@ -627,7 +632,7 @@ struct CloudAccountCard: View {
                 if !failure.isEmpty { Text(failure).font(.caption).foregroundStyle(.red) }
             }.textFieldStyle(.roundedBorder)
         }.task { if model.online && !model.preview { await run("status") } }
-         .onChange(of: model.online) { _, online in if online { Task { await run("status") } } }
+         .onChange(of:model.online) { _,online in if online { Task { await run("status") } } }
     }
     private func run(_ action: String) async {
         guard !working else { return }
@@ -639,9 +644,11 @@ struct CloudAccountCard: View {
             if action == "login" || action == "register" { password = ""; invitation = "" }
             authenticated = result["authenticated"] as? Bool ?? false
             if authenticated {
-                let ticket = action == "qr" ? result : try await model.api("/desktop/account/qr", body: [:])
-                qr = ticket["url"] as? String ?? ""
-                expires = Date(timeIntervalSince1970: ticket["expires_at"] as? Double ?? 0)
+                if action == "qr" {
+                    qr = result["url"] as? String ?? ""
+                    expires = Date(timeIntervalSince1970: result["expires_at"] as? Double ?? 0)
+                    showLoginQR = true
+                }
             } else { qr = "" }
         } catch { failure = error.localizedDescription }
     }

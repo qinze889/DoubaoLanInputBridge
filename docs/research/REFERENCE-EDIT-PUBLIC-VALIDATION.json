@@ -1,0 +1,77 @@
+{
+  "public_https": true,
+  "submissions": 3,
+  "jobs": [
+    {
+      "operation": "generate",
+      "version": 1,
+      "model": "workbuddy/cn:hunyuan-image-alpha",
+      "state": "succeeded",
+      "seconds_waited": 15.83,
+      "width": 1024,
+      "height": 1024,
+      "sha256": "71378ebe7d085beb013602e83ef304695b642eb8e13865057e93f8fbd8eba45b",
+      "corner_rgb": [
+        227,
+        225,
+        224
+      ],
+      "center_rgb": [
+        5,
+        128,
+        215
+      ]
+    },
+    {
+      "operation": "edit",
+      "version": 1,
+      "model": "workbuddy/cn:hunyuan-image-alpha-edit",
+      "state": "succeeded",
+      "seconds_waited": 7.52,
+      "width": 1024,
+      "height": 1024,
+      "sha256": "f7b3a69bcf809c232ec846079fe17b19fc711a43e4f295b1bd3ddb6dcedb48b3",
+      "corner_rgb": [
+        255,
+        229,
+        65
+      ],
+      "center_rgb": [
+        18,
+        84,
+        221
+      ]
+    },
+    {
+      "operation": "edit",
+      "version": 2,
+      "model": "workbuddy/cn:hunyuan-image-alpha-edit",
+      "state": "succeeded",
+      "seconds_waited": 12.5,
+      "width": 1024,
+      "height": 1024,
+      "sha256": "6962a9a7cf5c7c2febb362f9050ec81349be773471cd1aed48a209b7fd6b8599",
+      "corner_rgb": [
+        137,
+        251,
+        149
+      ],
+      "center_rgb": [
+        29,
+        94,
+        235
+      ]
+    }
+  ],
+  "isolated_fixture_account": true,
+  "ok": true,
+  "queued_followup": true,
+  "idempotent_same_job": true,
+  "settled_once": true,
+  "capability_groups": [
+    "chat",
+    "image_edit",
+    "image_generate",
+    "vision"
+  ]
+}

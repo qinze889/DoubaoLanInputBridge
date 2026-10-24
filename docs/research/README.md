@@ -44,3 +44,5 @@
 - [语音首音、后台工作控制与长期扫码登录](../VOICE-LATENCY.md)：常驻 SDK 小样本首个TTS数据包中位数约2.22秒；真实进程取消与恢复、旧二维码复用及180天滚动续期。
 
 - [手机 Responses 生图接入与兼容边界](../IMAGE-GENERATION.md) · [真实公网双模型验证](IMAGE-GENERATION-PUBLIC-VALIDATION.json)。
+
+- [公网语音与生图故障恢复、无限测试额度、连续修图验收](VOICE-IMAGE-RECOVERY-20261024.md) · [真实公网连续修图](REFERENCE-EDIT-PUBLIC-VALIDATION.json) · [模型能力分类与 Magpie 参考](../MODEL-CAPABILITIES.md)。

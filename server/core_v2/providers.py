@@ -24,6 +24,7 @@ class ProviderConfig:
     vision_model: str = ''
     chat_models: tuple = ()
     image_models: tuple = ()
+    image_edit_models: tuple = ()
     image_credits: int = 10
     image_asset_origin: str = ''
     voice_key: str = ''
@@ -42,9 +43,11 @@ class ProviderConfig:
         if not isinstance(chat_models,list):raise ValueError('Chat models must be a JSON list')
         image_models=json.loads(os.getenv('SHENGJIAN_IMAGE_MODELS','[]'))
         if not isinstance(image_models,list):raise ValueError('Image models must be a JSON list')
+        image_edit_models=json.loads(os.getenv('SHENGJIAN_IMAGE_EDIT_MODELS','[]'))
+        if not isinstance(image_edit_models,list):raise ValueError('Edit models must be a JSON list')
         return cls(model_base=os.getenv('SHENGJIAN_MODEL_BASE_URL','').rstrip('/'), model_key=os.getenv('SHENGJIAN_MODEL_API_KEY',''),
                    text_model=os.getenv('SHENGJIAN_TEXT_MODEL',''), vision_model=os.getenv('SHENGJIAN_VISION_MODEL',''),
-                   chat_models=tuple(chat_models), image_models=tuple(image_models),
+                   chat_models=tuple(chat_models), image_models=tuple(image_models),image_edit_models=tuple(image_edit_models),
                    image_credits=int(os.getenv('SHENGJIAN_IMAGE_CREDITS','10')),
                    image_asset_origin=os.getenv('SHENGJIAN_IMAGE_ASSET_ORIGIN','').rstrip('/'),
                    audio_base=os.getenv('SHENGJIAN_AUDIO_BASE_URL','').rstrip('/'), audio_key=os.getenv('SHENGJIAN_AUDIO_API_KEY',''),
@@ -69,6 +72,7 @@ class Providers:
             raise ValueError('Voice effort must be empty or an upstream-verified low profile')
         if len(config.chat_models)>20 or any(not isinstance(m,str) or not 1<=len(m)<=256 for m in config.chat_models):raise ValueError('Invalid verified chat model configuration')
         if len(config.image_models)>20 or any(not isinstance(m,str) or not 1<=len(m)<=256 for m in config.image_models):raise ValueError('Invalid verified image model configuration')
+        if len(config.image_edit_models)>20 or any(not isinstance(m,str) or not 1<=len(m)<=256 for m in config.image_edit_models):raise ValueError('Invalid verified edit model configuration')
         if type(config.image_credits) is not int or not 1<=config.image_credits<=10000:raise ValueError('Invalid image credit rate')
         if config.image_asset_origin:
             origin=urlsplit(config.image_asset_origin)

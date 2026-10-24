@@ -49,6 +49,12 @@ class Credit(Input):
     request_id: str = Field(min_length=16, max_length=128)
 
 
+class Quota(Input):
+    user_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    unlimited: bool
+    request_id: str = Field(min_length=16,max_length=128)
+
+
 class Settlement(Input):
     user_id: str = Field(min_length=32, max_length=32)
     actual: int = Field(ge=0, le=1_000_000)
@@ -236,6 +242,11 @@ def create_app(directory, admin_token=None, providers=None):
         store.credit(body.user_id, body.amount, body.request_id)
         return {'ok': True}
 
+    @app.patch(PREFIX+'/admin/quota', dependencies=[Depends(admin)])
+    async def quota(body:Quota):
+        store.set_unlimited(body.user_id,body.unlimited,body.request_id)
+        return {'ok':True,'unlimited':store.unlimited(body.user_id)}
+
     @app.get(PREFIX+'/usage')
     async def usage(uid=Depends(user)):
         return {'ok': True, 'usage': store.usages(uid)}
@@ -247,7 +258,7 @@ def create_app(directory, admin_token=None, providers=None):
 
     @app.get(PREFIX+'/me')
     async def me(uid=Depends(user)):
-        return {'ok': True, 'user_id': uid, **store.wallet(uid)}
+        return {'ok': True, 'user_id': uid, 'unlimited':store.unlimited(uid), **store.wallet(uid)}
 
     @app.post(PREFIX+'/devices')
     async def enroll(body: Device, uid=Depends(user)):
@@ -408,6 +419,8 @@ def create_app(directory, admin_token=None, providers=None):
     mount_assistant(app, store, user, peers)
     mount_life(app, life, user)
     mount_images(app, images, user)
+    from .model_capabilities import mount as mount_capabilities
+    mount_capabilities(app,providers,life,user)
     if providers:
         providers.mount(app, store, user)
     static = Path(__file__).parent/'web'

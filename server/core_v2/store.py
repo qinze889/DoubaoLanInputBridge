@@ -73,6 +73,10 @@ class Store:
         CREATE TABLE IF NOT EXISTS grants(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), amount INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), status TEXT NOT NULL DEFAULT 'pending', decision TEXT);
         ''')
+        for table,column in [('users','unlimited'),('usage','unlimited')]:
+            if column not in {r[1] for r in self.db.execute('PRAGMA table_info('+table+')')}:
+                self.db.execute('ALTER TABLE '+table+' ADD COLUMN '+column+' INTEGER NOT NULL DEFAULT 0')
+        self.db.execute('CREATE TABLE IF NOT EXISTS quota_changes(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),unlimited INTEGER NOT NULL,created REAL NOT NULL)')
         version = self.db.execute('PRAGMA user_version').fetchone()[0]
         if version > 2:
             raise RuntimeError('Database schema is newer than this service')
@@ -191,6 +195,21 @@ class Store:
         with self.lock:
             return dict(self.db.execute('SELECT balance,reserved FROM users WHERE id=?', (uid,)).fetchone())
 
+    def unlimited(self, uid):
+        with self.lock:
+            row=self.db.execute('SELECT unlimited FROM users WHERE id=?',(uid,)).fetchone()
+        if not row:raise Fault('user_not_found',404)
+        return bool(row['unlimited'])
+
+    def set_unlimited(self, uid, value, request_id):
+        with self.tx() as db:
+            old=db.execute('SELECT * FROM quota_changes WHERE id=?',(request_id,)).fetchone()
+            if old:
+                if old['user_id']!=uid or old['unlimited']!=int(value):raise Fault('idempotency_conflict',409)
+                return
+            if not db.execute('UPDATE users SET unlimited=? WHERE id=?',(int(value),uid)).rowcount:raise Fault('user_not_found',404)
+            db.execute('INSERT INTO quota_changes VALUES(?,?,?,?)',(request_id,uid,int(value),time.time()))
+
     def credit(self, uid, amount, request_id):
         with self.tx() as db:
             old = db.execute('SELECT * FROM grants WHERE id=?', (request_id,)).fetchone()
@@ -208,10 +227,12 @@ class Store:
             old = db.execute('SELECT * FROM usage WHERE id=?', (usage_id,)).fetchone()
             if old:
                 raise Fault('usage_already_submitted' if old['user_id'] == uid and old['fingerprint'] == fingerprint else 'idempotency_conflict', 409)
-            changed = db.execute('UPDATE users SET balance=balance-?,reserved=reserved+? WHERE id=? AND balance>=?', (amount, amount, uid, amount)).rowcount
+            unlimited=bool(db.execute('SELECT unlimited FROM users WHERE id=?',(uid,)).fetchone()['unlimited'])
+            changed = unlimited or db.execute('UPDATE users SET balance=balance-?,reserved=reserved+? WHERE id=? AND balance>=?', (amount, amount, uid, amount)).rowcount
             if not changed:
                 raise Fault('insufficient_credits', 402)
             db.execute('INSERT INTO usage(id,user_id,amount,state,fingerprint,created) VALUES(?,?,?,\'reserved\',?,?)', (usage_id, uid, amount, fingerprint, time.time()))
+            if unlimited:db.execute('UPDATE usage SET unlimited=1 WHERE id=?',(usage_id,))
 
     def settle(self, uid, usage_id, actual):
         with self.tx() as db:
@@ -224,7 +245,8 @@ class Store:
                 return
             if not 0 <= actual <= row['amount']:
                 raise Fault('usage_requires_reconciliation', 409)
-            db.execute('UPDATE users SET reserved=reserved-?,balance=balance+? WHERE id=?', (row['amount'], row['amount']-actual, uid))
+            if not row['unlimited']:
+                db.execute('UPDATE users SET reserved=reserved-?,balance=balance+? WHERE id=?', (row['amount'], row['amount']-actual, uid))
             db.execute("UPDATE usage SET actual=?,state='settled' WHERE id=?", (actual, usage_id))
 
     def usages(self, uid):
