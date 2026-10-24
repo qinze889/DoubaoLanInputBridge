@@ -128,6 +128,14 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.locator("#workspace").waitFor({ state: "visible" });
+    await page.locator('#model-settings summary').click();
+    await page.locator('#chat-model').selectOption('fixture-text-alternative');
+    await page.waitForFunction(()=>document.querySelector('#current-model-name').textContent==='fixture text alternative');
+    await page.reload();await page.locator('#workspace').waitFor({state:'visible'});
+    await page.locator('#model-settings summary').click();
+    assert.equal(await page.locator('#chat-model').inputValue(),'fixture-text-alternative');
+    await page.locator('#chat-vision-model').selectOption('fixture-vision-alternative');
+    await page.waitForFunction(()=>document.querySelector('#life-vision-model').value==='fixture-vision-alternative' && !document.querySelector('#chat-vision-model').disabled);
     await page.locator("#speak").uncheck();
     await page.locator("#prompt").fill("测试对话");
     await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -415,6 +423,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       window.Audio = window.originalAudio;
     });
     await page.getByRole("button", { name: "对话", exact: true }).click();
+    await page.locator("#model-settings").evaluate(n=>n.open=false);
     const out = path.resolve("artifacts/core-ui");
     fs.mkdirSync(out, { recursive: true });
     for (const colorScheme of ["light", "dark"]) {
@@ -422,6 +431,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
       for (const viewport of [
         { width: 1100, height: 780 },
         { width: 390, height: 844 },
+        { width: 320, height: 740 },
       ]) {
         await page.setViewportSize(viewport);
         assert(
@@ -436,6 +446,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
         });
       }
     }
+    await page.locator("#model-settings").evaluate(n=>n.open=true);
     // Final ASR can create, inspect, continue and cancel real durable fixture tasks.
     const agentDevice = await page.evaluate(async () => (await json('/devices')).devices.find(d => d.name === '测试电脑').id);
     await page.request.post(origin + '/__test/agent-online/' + agentDevice);
@@ -507,7 +518,7 @@ const VoiceEndpoint = require("../server/core_v2/web/vad.js");
     await page.waitForTimeout(200);
     assert.equal(await page.locator("#messages").textContent(), "");
     assert.equal(await page.locator("#prompt").inputValue(), "");
-    assert.equal(await page.locator("#task-list").textContent(), "");
+    assert.equal(await page.locator("#task-list button").count(), 0);
     assert.equal(await page.locator("#device-config").textContent(), "");
     assert(
       !(await page

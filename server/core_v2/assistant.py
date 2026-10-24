@@ -45,6 +45,28 @@ def mount(app, store, user, peers):
         life_images: list[str] = Field(default_factory=list, max_length=2)
         interrupted: bool = False
 
+    class Preference(Input):
+        chat_model: str = Field(min_length=1,max_length=256)
+
+    async def model_options(uid):
+        provider=app.state.life.providers
+        if not provider or not provider.readiness()['models']:return {'ok':True,'chat_model':'','chat_models':[]}
+        await provider.models()
+        models=list(dict.fromkeys([provider.config.text_model,*provider.config.chat_models]))
+        selected=store.chat_preference(uid) or provider.config.text_model
+        return {'ok':True,'chat_model':selected,'chat_models':[{'id':m,'name':m.removeprefix('workbuddy/cn:'),'verified':True} for m in models if m in provider.discovered_ids]}
+
+    @app.get(PREFIX+'/assistant/preferences')
+    async def preferences(uid=Depends(user)):
+        return await model_options(uid)
+
+    @app.patch(PREFIX+'/assistant/preferences')
+    async def preference(body:Preference,uid=Depends(user)):
+        options=await model_options(uid)
+        if body.chat_model not in {m['id'] for m in options['chat_models']}:raise Fault('chat_model_not_verified',400)
+        store.chat_preference(uid,body.chat_model)
+        return await model_options(uid)
+
     @app.post(PREFIX+'/assistant/chat')
     async def chat(body: Chat, uid=Depends(user)):
         if intent(body.text) != 'task':
@@ -93,7 +115,7 @@ def mount(app, store, user, peers):
         spec = {'device_id': ident, 'request_id': body.request_id, 'prompt': body.text,
                 'voice_text': body.text, 'engine': 'harness', 'conversation_id': body.conversation_id,
                 'assistant_chat': True, 'life_images': body.life_images, 'vision_model': model,
-                'interrupted': body.interrupted}
+                'interrupted': body.interrupted, 'chat_model': store.chat_preference(uid) or (life.providers.config.text_model if life.providers else '')}
         ahead=next((t['id'] for t in reversed(store.tasks(uid)) if t['device_id']==ident and t['state'] in {'running','awaiting_user'}),None)
         created = store.create_task(uid, spec)
         return {'ok': True, 'action': 'chat', 'task': created, 'conversation_id': body.conversation_id,'queued_behind':ahead}

@@ -1,0 +1,28 @@
+{
+  "scope": "isolated account, real cloud proxy and local SDK Harness; no foreground interaction",
+  "models": [
+    {
+      "id": "workbuddy/cn:deepseek-v4.1-flash",
+      "saved_preference": true,
+      "task_model_snapshot": true,
+      "actual_local_file_write_and_read": true,
+      "seconds": 8.55
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v4-flash",
+      "saved_preference": true,
+      "task_model_snapshot": true,
+      "actual_local_file_write_and_read": true,
+      "seconds": 5.04
+    },
+    {
+      "id": "workbuddy/cn:deepseek-v4-pro",
+      "saved_preference": true,
+      "task_model_snapshot": true,
+      "actual_local_file_write_and_read": true,
+      "seconds": 7.51
+    }
+  ],
+  "vision_choices": 24,
+  "ok": true
+}

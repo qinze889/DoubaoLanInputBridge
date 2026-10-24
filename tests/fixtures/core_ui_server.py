@@ -26,7 +26,7 @@ class Stream(httpx.AsyncByteStream):
             yield b'data: {"usage":{"total_tokens":5}}\n\ndata: [DONE]\n\n'
 
 def upstream(request):
-    if request.method=='GET':return httpx.Response(200,json={'data':[{'id':'fixture-text'},{'id':'fixture-vision'},{'id':'fixture-vision-alternative'}]})
+    if request.method=='GET':return httpx.Response(200,json={'data':[{'id':'fixture-text'},{'id':'fixture-text-alternative'},{'id':'fixture-vision'},{'id':'fixture-vision-alternative'}]})
     if request.url.path.endswith('/audio/speech/stream'):return httpx.Response(200,stream=Stream(audio=True))
     body=json.loads(request.content)
     if body.get('model') in {'fixture-vision','fixture-vision-alternative'} and body.get('stream'):return httpx.Response(200,stream=Stream(visual=True),headers={'Content-Type':'text/event-stream'})
@@ -38,7 +38,7 @@ def upstream(request):
     return httpx.Response(200,json={'choices':[{'message':{'content':'已收到你的消息。'}}],'usage':{'total_tokens':5}})
 os.environ['SHENGJIAN_LIFE_VISION_MODELS']=json.dumps(['fixture-vision','fixture-vision-alternative'])
 app=create_app(sys.argv[1],admin_token='fixture-admin-'+'x'*40,providers=Providers(
-    ProviderConfig(model_base='http://127.0.0.1:1/v1',model_key='fixture-only',text_model='fixture-text',vision_model='fixture-vision',audio_base='http://127.0.0.1:1/v1',audio_key='fixture-audio-only',audio_stream=os.getenv('SHENGJIAN_FIXTURE_STREAM')=='1'),httpx.MockTransport(upstream)))
+    ProviderConfig(model_base='http://127.0.0.1:1/v1',model_key='fixture-only',text_model='fixture-text',chat_models=('fixture-text-alternative',),vision_model='fixture-vision',audio_base='http://127.0.0.1:1/v1',audio_key='fixture-audio-only',audio_stream=os.getenv('SHENGJIAN_FIXTURE_STREAM')=='1'),httpx.MockTransport(upstream)))
 @app.post('/__test/complete/{ident}')
 async def complete_fixture(ident: str):
     store=app.state.store

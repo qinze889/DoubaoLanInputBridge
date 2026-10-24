@@ -98,3 +98,49 @@ def test_live_work_controls_bypass_queued_followup_and_keep_owner_scope(agent):
     # Only the computer acknowledgement can finish cancellation.
     store.device_event(device['id'],work['id'],{'type':'task.state','state':'cancelled'},'cancel-ack')
     assert store.task(work['user_id'],work['id'])['state']=='cancelled'
+
+
+def test_chat_model_choice_owned_persistent_and_frozen_per_task(agent):
+    import httpx
+    from server.core_v2.providers import Providers, ProviderConfig
+    client,store,auth,device,app=agent
+    seen=[]
+    def upstream(req):
+        if req.method=='GET':return httpx.Response(200,json={'data':[{'id':'chat-default'},{'id':'chat-pro'}]})
+        seen.append(json.loads(req.content)['model'])
+        return httpx.Response(200,json={'choices':[{'message':{'content':'ok'}}],'usage':{'total_tokens':1}})
+    provider=Providers(ProviderConfig(model_base='https://fixture.invalid/v1',model_key='fixture-key',text_model='chat-default',chat_models=('chat-pro',)),httpx.MockTransport(upstream))
+    app.state.life.providers=provider
+    # Fixture app had no provider routes; mount the same proxy for real dispatch tests.
+    from server.core_v2.app import PREFIX
+    def account(authorization=None):return store.authenticate(authorization[7:])['user_id']
+    provider.mount(app,store,account)
+    path=PREFIX+'/assistant/preferences'
+    assert client.get(path,headers=auth).json()['chat_model']=='chat-default'
+    assert client.patch(path,headers=auth,json={'chat_model':'unverified'}).status_code==400
+    assert client.patch(path,headers=auth,json={'chat_model':'chat-pro'}).json()['chat_model']=='chat-pro'
+    store.heartbeat(device['id'],{'harness_chat':True})
+    conv=secrets.token_hex(16);request=secrets.token_hex(16)
+    task=chat(client,auth,conv,request_id=request).json()['task']
+    assert json.loads(task['specification'])['chat_model']=='chat-pro'
+    client.patch(path,headers=auth,json={'chat_model':'chat-default'})
+    assert json.loads(chat(client,auth,conv,request_id=request).json()['task']['specification'])['chat_model']=='chat-pro'
+    store.dispatch(device['id']);store.device_event(device['id'],task['id'],{'type':'task.state','state':'running'},'running')
+    def proxy(credential):
+        return client.post(PREFIX+'/model/v1/chat/completions',headers={'Authorization':'Bearer '+credential,'X-Request-ID':secrets.token_hex(16)},json={'model':'chat-default','messages':[{'role':'user','content':'test'}],'max_tokens':1})
+    response=proxy(device['token'])
+    assert response.status_code==200,response.text
+    assert response.headers['x-chat-model']=='chat-pro' and seen[-1]=='chat-pro'
+    # A different device cannot inherit this running turn's model override.
+    second=store.enroll(task['user_id'],'other',['tasks']);store.authorize_device(task['user_id'],second['id'],['tasks'])
+    assert proxy(second['token']).headers['x-chat-model']=='chat-default'
+    other=store.register('model-other','model-other-password',store.invite())
+    other_auth={'Authorization':'Bearer '+other['token']}
+    assert client.get(path,headers=other_auth).json()['chat_model']=='chat-default'
+    client.patch(path,headers=auth,json={'chat_model':'chat-pro'})
+    from server.core_v2.store import Store
+    from pathlib import Path
+    database=store.db.execute('PRAGMA database_list').fetchone()[2]
+    reopened=Store(Path(database).parent)
+    assert reopened.chat_preference(task['user_id'])=='chat-pro'
+    reopened.db.close()

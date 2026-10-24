@@ -18,6 +18,7 @@ let token = "",
 let authEpoch = 0;
 let agentMode = false, computerDevices = [];
 let chatOwner="", harnessInterrupted=false;
+let modelOwner="", modelSaving=false;
 let reportEpoch = 0, agentAckPending = false, reportSpeaking = false;
 const labels = {
   queued: "排队中",
@@ -54,6 +55,8 @@ const errors = {
   chat_computer_offline: "会话绑定的电脑离线，请打开声笺并启用 Agent。",
   chat_agent_update_required: "电脑 Agent 需要更新后才能接收统一 Chat 对话。",
   model_result_unknown: "模型未确认结果，请查看任务状态后再操作。",
+  chat_model_not_verified: "这个模型尚未通过工具调用验证，请选择列表中的模型。",
+  chat_model_not_available: "所选对话模型暂不可用，请在模型与连接中重新选择。",
   model_provider_not_configured: "对话来源尚未配置。",
   model_discovery_failed: "暂时无法连接对话来源。",
   capability_not_granted: "请先在设备页开启这台电脑的任务能力。",
@@ -105,6 +108,25 @@ function showPage(id) {
     .forEach((b) => b.classList.toggle("selected", b.dataset.page === id));
   if (id === "life") window.ShengjianLife?.refresh();
 }
+function modelName(id) { const names={'workbuddy/cn:deepseek-v4.1-flash':'DeepSeek V4.1 Flash','workbuddy/cn:deepseek-v4-flash':'DeepSeek V4 Flash','workbuddy/cn:deepseek-v4-pro':'DeepSeek V4 Pro'};return names[id] || id.replace('workbuddy/cn:', '').replaceAll('-', ' '); }
+async function loadModels(owner) {
+  const data=await json('/assistant/preferences');
+  if(owner!==token || !token)return;
+  const select=$('chat-model'); select.replaceChildren();
+  for(const item of data.chat_models)select.add(new Option(modelName(item.id), item.id));
+  if(data.chat_model && !data.chat_models.some(m=>m.id===data.chat_model))select.add(new Option('原模型暂不可用，请重新选择',data.chat_model));
+  select.value=data.chat_model;select.disabled=!data.chat_models.length;
+  $('current-model-name').textContent=data.chat_model?modelName(data.chat_model):'模型尚未配置';
+  modelOwner=owner;
+}
+$('chat-model').onchange=async()=>{
+  const owner=token, select=$('chat-model');modelSaving=true;select.disabled=true;
+  try{const data=await json('/assistant/preferences',{chat_model:select.value},'PATCH');if(owner!==token)return;
+    $('current-model-name').textContent=modelName(data.chat_model);$('model-note').textContent='已保存。下一轮对话和新工作使用此模型，正在执行的任务保持原模型。';
+  }catch(e){if(owner===token){error(e);await loadModels(owner).catch(error);}}
+  finally{if(owner===token){modelSaving=false;select.disabled=false;}}
+};
+for(const suggestion of document.querySelectorAll('[data-prompt]'))suggestion.onclick=()=>{$('prompt').value=suggestion.dataset.prompt;$('prompt').focus();};
 function logoutLocal() {
   for(const stop of backgroundWork.values())stop();
   replyController?.abort();replyController=null;
@@ -127,6 +149,9 @@ function logoutLocal() {
   token = "";
   agentMode = false;
   computerDevices = [];
+  modelOwner="";modelSaving=false;
+  $("chat-model").replaceChildren(new Option("正在载入模型…",""));$("chat-model").disabled=true;
+  $("current-model-name").textContent="选择模型";$("work-overview").replaceChildren();
   chatOwner="";harnessInterrupted=false;
   $("agent-mode").setAttribute("aria-pressed", "false");
   sessionStorage.removeItem("shengjian.session");
@@ -199,7 +224,11 @@ async function refresh() {
   window.ShengjianVisual?.activate(me.user_id, {json, fetchImage:id=>api('/life/images/'+id)});
   window.ShengjianLife?.activate(me.user_id, { json, image: (blob, id) => api('/life/images', blob, 'POST', {raw: true, requestId: id}), fetchImage: id => api('/life/images/'+id) });
   chatOwner=me.user_id;
+  if(modelOwner!==owner && !modelSaving)await loadModels(owner).catch(e=>{$('model-note').textContent='模型列表暂未载入，可稍后刷新。';error(e);});
+  if(owner!==token)return;
   computerDevices = devices.devices.filter(d => !d.revoked && d.grants.includes("tasks"));
+  $("computer-status").textContent=computerDevices.some(d=>d.online)?"电脑已连接":"电脑未连接";
+  $("computer-status").dataset.online=String(computerDevices.some(d=>d.online));
   const selected = $("destination").value;
   $("destination").replaceChildren(new Option("Chat · 本机 DeepSeek Harness", "chat"));
   $("device-list").replaceChildren();
@@ -276,7 +305,12 @@ async function refresh() {
     $("destination").value = selected;
   if (live && $("destination").value !== live.destination)
     stopLive("目标设备已不可用，实时对话已暂停");
+  $('work-overview').replaceChildren();
+  for(const [title,states] of [['进行中',['queued','running']],['待处理',['awaiting_user','unknown']],['已完成',['succeeded']]]){
+    const stat=el('article',undefined,'work-stat');stat.append(el('strong',String(tasks.tasks.filter(t=>states.includes(t.state)).length)),el('span',title));$('work-overview').append(stat);
+  }
   $("task-list").replaceChildren();
+  if(!tasks.tasks.length)$('task-list').append(el('p','还没有工作记录。在对话中说出要完成的事，进度会显示在这里。','muted'));
   for (const task of tasks.tasks) {
     const b = button(
       (

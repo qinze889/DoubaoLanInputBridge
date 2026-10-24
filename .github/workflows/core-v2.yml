@@ -31,6 +31,7 @@ jobs:
         env:
           SHENGJIAN_TEST_PYTHON: python
         run: |
+          node scripts/smoke_mobile_ui.cjs
           node scripts/smoke_core_ui.cjs
           node scripts/smoke_stream_voice.cjs
           node scripts/smoke_harness_chat.cjs

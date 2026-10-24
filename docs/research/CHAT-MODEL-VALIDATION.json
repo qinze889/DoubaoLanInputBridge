@@ -1,0 +1,20 @@
+[
+  {
+    "id": "workbuddy/cn:deepseek-v4.1-flash",
+    "status": 200,
+    "tools_stream_verified": true,
+    "first_tool_seconds": 2.08
+  },
+  {
+    "id": "workbuddy/cn:deepseek-v4-flash",
+    "status": 200,
+    "tools_stream_verified": true,
+    "first_tool_seconds": 1.88
+  },
+  {
+    "id": "workbuddy/cn:deepseek-v4-pro",
+    "status": 200,
+    "tools_stream_verified": true,
+    "first_tool_seconds": 2.63
+  }
+]

@@ -65,6 +65,7 @@ class Store:
           dispatched REAL, cancel_requested INTEGER NOT NULL DEFAULT 0, UNIQUE(user_id,request_id));
         CREATE TABLE IF NOT EXISTS events(task_id TEXT NOT NULL REFERENCES tasks(id), seq INTEGER NOT NULL, event_id TEXT NOT NULL,
           body TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(task_id,seq), UNIQUE(task_id,event_id));
+        CREATE TABLE IF NOT EXISTS assistant_preferences(user_id TEXT PRIMARY KEY REFERENCES users(id), chat_model TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS assistant_conversations(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
           device_id TEXT NOT NULL REFERENCES devices(id), created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS usage(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), amount INTEGER NOT NULL,
@@ -285,6 +286,12 @@ class Store:
         sequence = db.execute('SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE task_id=?', (task_id,)).fetchone()[0]
         db.execute('INSERT INTO events VALUES(?,?,?,?,?)', (task_id, sequence, event_id or secrets.token_hex(16), encode(body), time.time()))
         return sequence
+
+    def chat_preference(self, uid, model=None):
+        with self.tx() as db:
+            db.execute('INSERT OR IGNORE INTO assistant_preferences(user_id) VALUES(?)',(uid,))
+            if model is not None:db.execute('UPDATE assistant_preferences SET chat_model=? WHERE user_id=?',(model,uid))
+            return db.execute('SELECT chat_model FROM assistant_preferences WHERE user_id=?',(uid,)).fetchone()[0]
 
     def conversation(self, uid, ident, device_id=None):
         with self.tx() as db:

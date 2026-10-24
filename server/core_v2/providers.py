@@ -22,6 +22,7 @@ class ProviderConfig:
     model_key: str = ''
     text_model: str = ''
     vision_model: str = ''
+    chat_models: tuple = ()
     voice_key: str = ''
     voice_effort: str = ''
     audio_base: str = ''
@@ -34,8 +35,11 @@ class ProviderConfig:
 
     @classmethod
     def from_environment(cls):
+        chat_models=json.loads(os.getenv('SHENGJIAN_CHAT_MODELS','[]'))
+        if not isinstance(chat_models,list):raise ValueError('Chat models must be a JSON list')
         return cls(model_base=os.getenv('SHENGJIAN_MODEL_BASE_URL','').rstrip('/'), model_key=os.getenv('SHENGJIAN_MODEL_API_KEY',''),
                    text_model=os.getenv('SHENGJIAN_TEXT_MODEL',''), vision_model=os.getenv('SHENGJIAN_VISION_MODEL',''),
+                   chat_models=tuple(chat_models),
                    audio_base=os.getenv('SHENGJIAN_AUDIO_BASE_URL','').rstrip('/'), audio_key=os.getenv('SHENGJIAN_AUDIO_API_KEY',''),
                    audio_stream=os.getenv('SHENGJIAN_AUDIO_STREAM','')=='1',
                    voice_key=os.getenv('SHENGJIAN_DOUBAO_API_KEY',''), voice_effort=os.getenv('SHENGJIAN_VOICE_REASONING_EFFORT',''), speaker=os.getenv('SHENGJIAN_DOUBAO_SPEAKER',''),
@@ -56,6 +60,7 @@ class Providers:
             raise ValueError('Invalid credit rate')
         if config.voice_effort not in {'', 'low'}:
             raise ValueError('Voice effort must be empty or an upstream-verified low profile')
+        if len(config.chat_models)>20 or any(not isinstance(m,str) or not 1<=len(m)<=256 for m in config.chat_models):raise ValueError('Invalid verified chat model configuration')
         self.cached_models = None
         self.discovered_ids = set()
         self.models_at = 0
@@ -95,11 +100,11 @@ class Providers:
             except (httpx.HTTPError, ValueError):
                 raise Fault('model_discovery_failed', 503) from None
             ids={r['id'] for r in data.get('data',[]) if isinstance(r,dict) and isinstance(r.get('id'),str) and len(r['id'])<=256}
-            selected={m for m in [self.config.text_model,self.config.vision_model] if m}
+            selected={m for m in [self.config.text_model,self.config.vision_model,*self.config.chat_models] if m}
             if not selected <= ids:
                 raise Fault('configured_model_not_available', 503)
             self.discovered_ids = ids
-            self.cached_models=[{'id':m,'object':'model','input_modalities':['text','image'] if m==self.config.vision_model else ['text']} for m in sorted(selected)]
+            self.cached_models=[{'id':m,'object':'model','input_modalities':['text','image'] if m==self.config.vision_model else ['text']} for m in [self.config.text_model,*sorted(selected-{self.config.text_model})]]
             self.models_at=asyncio.get_running_loop().time()
             return self.cached_models
 
@@ -157,15 +162,24 @@ class Providers:
                 if selected!=self.config.text_model:data.pop('reasoning_effort',None)
             elif data.get('model') not in {m['id'] for m in models}:
                 raise Fault('model_not_allowed',403)
+            if not image_ids:
+                try:chat_device=store.authenticate(request.headers.get('authorization','')[7:],device=True)
+                except Fault:chat_device=None
+                if chat_device:
+                    active_chat=[t for t in store.tasks(uid) if t['device_id']==chat_device['id'] and t['state']=='running' and json.loads(t['specification']).get('assistant_chat')]
+                    if len(active_chat)==1:
+                        selected=json.loads(active_chat[0]['specification']).get('chat_model') or self.config.text_model
+                        if selected not in {self.config.text_model,*self.config.chat_models} or selected not in self.discovered_ids:raise Fault('chat_model_not_available',503)
+                        data['model']=selected
             # The pinned local Harness does not send an effort field. Apply only the
             # already-verified low profile to its active Chat/Work text stream.
-            if not image_ids and data.get('stream') and data.get('model')==self.config.text_model and self.config.voice_effort=='low' and 'reasoning_effort' not in data:
+            if not image_ids and data.get('stream') and data.get('model') in {self.config.text_model,*self.config.chat_models} and self.config.voice_effort=='low' and 'reasoning_effort' not in data:
                 try: identity=store.authenticate(request.headers.get('authorization','')[7:],device=True)
                 except Fault: identity=None
                 if identity:
                     active=[t for t in store.tasks(uid) if t['device_id']==identity['id'] and t['state']=='running' and json.loads(t['specification']).get('assistant_chat')]
                     if active:data['reasoning_effort']='low'
-            if 'reasoning_effort' in data and (self.config.voice_effort != 'low' or data['reasoning_effort'] != 'low' or data['model'] != self.config.text_model):
+            if 'reasoning_effort' in data and (self.config.voice_effort != 'low' or data['reasoning_effort'] != 'low' or data['model'] not in {self.config.text_model,*self.config.chat_models}):
                 raise Fault('unsupported_reasoning_effort')
             messages=data.get('messages')
             if not isinstance(messages,list) or not 1<=len(messages)<=100 or any(not isinstance(m,dict) or m.get('role') not in {'system','developer','user','assistant','tool'} for m in messages):
@@ -267,7 +281,7 @@ class Providers:
                     with anyio.CancelScope(shield=True):
                         await upstream.aclose()
                         await client.aclose()
-            return StreamingResponse(generate(),media_type='text/event-stream' if data.get('stream') else 'application/json',headers={'X-Usage-ID':usage_id,**({'X-Vision-Model':data['model']} if image_ids else {})})
+            return StreamingResponse(generate(),media_type='text/event-stream' if data.get('stream') else 'application/json',headers={'X-Usage-ID':usage_id,'X-Chat-Model':data['model'],**({'X-Vision-Model':data['model']} if image_ids else {})})
 
         @app.get(PREFIX+'/voice/capabilities')
         async def voice_capabilities(uid=Depends(user)):
