@@ -58,9 +58,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
-      - run: python -m pip install -r requirements-windows.txt
+      - run: python scripts/ci_check.py python -m pip install -r requirements-windows.txt
       - name: Windows regression and protocol tests
-        run: python -m pytest -q tests
+        run: python scripts/ci_check.py python -m pytest -q tests
       - name: Fetch verified Cloudflare binary
         shell: pwsh
         run: |
@@ -71,9 +71,9 @@ jobs:
           Copy-Item docs/cloudflared-LICENSE tools/cloudflared/LICENSE
       - name: Build Windows apps with bundled tunnel
         shell: pwsh
-        run: ./scripts/build_tauri.ps1 -PythonExe (Get-Command python).Source
+        run: python scripts/ci_check.py pwsh -NoProfile -File scripts/build_tauri.ps1 -PythonExe (Get-Command python).Source
       - name: Verify sidecar process ownership including one-file bootloader
-        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
+        run: python scripts/ci_check.py cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
       - name: Verify installed upgrade and two-way transfer
         shell: pwsh
         run: |
