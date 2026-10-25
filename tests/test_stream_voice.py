@@ -127,3 +127,17 @@ def test_stream_asr_failures_log_code_without_audio_or_auth(tmp_path,monkeypatch
             assert ws.receive_json()['error']=='invalid_pcm_frame'
     assert 'voice_asr_end code=invalid_pcm_frame' in caplog.text
     assert user['token'] not in caplog.text and 'private-fixture-key' not in caplog.text
+
+
+def test_coalesced_network_chunk_keeps_each_audio_record_and_total_accounting(tmp_path):
+    payload=base64.b64encode(b'\0'*2400).decode()
+    events=[{'type':'audio.ready','sample_rate':24000,'encoding':'pcm_s16le'}]+[{'type':'audio.chunk','data':payload} for _ in range(120)]+[{'type':'audio.finished'}]
+    wire=''.join(json.dumps(e)+'\n' for e in events)
+    assert len(wire)>128*1024
+    app,user=setup(tmp_path,lambda req:httpx.Response(200,content=wire))
+    with TestClient(app) as client:
+        response=client.post(PREFIX+'/voice/speech/stream',headers={'Authorization':'Bearer '+user['token']},json={'input':'完整播报','request_id':'coalesced-audio-request-id'})
+        result=[json.loads(line) for line in response.text.splitlines()]
+        assert sum(item['type']=='audio.chunk' for item in result)==120
+        assert result[-1]['type']=='audio.finished'
+        assert app.state.store.wallet(user['user_id'])=={'balance':99,'reserved':0}

@@ -318,7 +318,8 @@ class Store:
         if body.get('type')!='task.log':return False
         try:log=json.loads(body.get('text',''))
         except (ValueError,TypeError):return False
-        return isinstance(log,dict) and log.get('type')=='tool_call' and log.get('tool')!='see_user_image'
+        return isinstance(log,dict) and log.get('type')=='tool_call' and log.get('tool') not in {
+            'see_user_image','media_models','create_image','edit_image','view_conversation_image','image_job_status'}
 
     def _event(self, db, task_id, body, event_id=None):
         if self.work_event(body):db.execute('UPDATE tasks SET is_work=1 WHERE id=?',(task_id,))

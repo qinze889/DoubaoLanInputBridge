@@ -21,6 +21,8 @@ class HarnessEngine(CodexEngine):
         if 'permission_mode' in config:
             from .permissions import install_policy
             install_policy(self.data, config['permission_mode'])
+        from .media import install_media_plugin
+        self.media_home_plugin=install_media_plugin(self.data) if len(self.command)>1 else False
         self.decisions = {}
         self.approval_token = secrets.token_urlsafe(48)
         self.local_tools = None
@@ -111,9 +113,10 @@ class HarnessEngine(CodexEngine):
                 'api': 'openai-completions', 'apiKeyEnv': 'SHENGJIAN_DEVICE_TOKEN',
                 'compat': {'supportsStore': False, 'supportsDeveloperRole': False, 'supportsReasoningEffort': False, 'maxTokensField': 'max_tokens'},
                 'baseURL': self.config['server'].rstrip('/') + '/model/v1',
-                'models': [{'id': model, 'name': '声笺模型', 'contextWindow': 32768, 'maxTokens': 2048, 'input': ['text'], 'reasoning': False}],
+                'models': [{'id': model, 'name': '声笺模型', 'contextWindow': self.config.get('context_window',32768), 'maxTokens': self.config.get('max_tokens',8192), 'input': ['text'], 'reasoning': False}],
                 'retryPolicy': {'mode': 'normal', 'maxRetries': 0}}}}},
-            {'insert': [{'id': 'shengjian-approval', 'name': plugin}]+([{'id': 'shengjian-desktop', 'name': str(Path(__file__).with_name('dsh_desktop.mjs').resolve())}] if self.local_tools else [])},
+            {'insert': [{'id': 'shengjian-approval', 'name': plugin}]+([{'id': 'shengjian-desktop', 'name': str(Path(__file__).with_name('dsh_desktop.mjs').resolve())},
+                *([{'id':'shengjian-conversation-media','name':str(Path(__file__).with_name('dsh_media.mjs').resolve())}] if not self.media_home_plugin else [])] if self.local_tools else [])},
         ]
 
     async def run(self, prompt):
@@ -133,6 +136,8 @@ class HarnessEngine(CodexEngine):
             env['SHENGJIAN_DESKTOP_URL'] = f'http://127.0.0.1:{port}/desktop-tool'
             env['SHENGJIAN_TOOLS_MODULE'] = str(Path(self.command[1]).resolve().parents[3]/'@deepseek-ai/dsh-tools/lib/index.js')
         env['SHENGJIAN_VISION_URL']=f'http://127.0.0.1:{port}/vision-tool'
+        env['SHENGJIAN_MEDIA_URL']=self.config['server'].rstrip('/')+'/assistant/media-tool'
+        if len(self.command)>1:env['SHENGJIAN_TOOLS_MODULE']=str(Path(self.command[1]).resolve().parents[3]/'@deepseek-ai/dsh-tools/lib/index.js')
         options = {'start_new_session': True} if os.name != 'nt' else {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
         resume=[]
         session_file=None

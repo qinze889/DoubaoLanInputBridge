@@ -10,6 +10,9 @@ from .store import Fault, TERMINAL
 from .providers import RESPONSE_STYLE
 
 STATES = {'queued': '排队中', 'running': '执行中', 'awaiting_user': '等待你的确认', 'succeeded': '已完成', 'failed': '失败', 'cancelled': '已取消', 'unknown': '结果未知，需要检查电脑'}
+MEDIA_TOOLS = '''你可以通过已注册的工具在当前对话里完成图片工作。media_models 提供实际可用的生图、修图、识图模型及本会话图片编号；按用户选择使用对应模型，聊天模型负责理解完整上下文和决定调用。
+需要生成图片时用 create_image，自行根据整段对话整理完整画面描述；修改时用 edit_image 延续前图，识图时用 view_conversation_image。不要只截取最后一句，不要让用户重新去创作页提交，也不要用浏览器模拟这些图片功能。
+生图和修图提交后独立运行，图片自动显示在本次对话下方。提交后继续自然对话，不轮询等待、不阻塞下一轮，不把“已排队”说成“已完成”。用户追问进度时可以调用 image_job_status。完整画面提示只放在工具参数里，不逐句复述或播报；提交后简短确认即可，把话题留给用户正在进行的交流。'''
 
 
 def intent(text):
@@ -120,7 +123,8 @@ def mount(app, store, user, peers):
         store.conversation(uid, body.conversation_id, ident)
         # Keep the user's original text for history and idempotency. Carry the
         # product default in each turn too, so already-installed agents receive it.
-        spec = {'device_id': ident, 'request_id': body.request_id, 'prompt': body.text+'\n\n'+RESPONSE_STYLE,
+        media_ready=getattr(app.state,'media_ready',lambda _id:False)(ident)
+        spec = {'device_id': ident, 'request_id': body.request_id, 'prompt': body.text+'\n\n'+RESPONSE_STYLE+('\n\n'+MEDIA_TOOLS if media_ready else ''),
                 'voice_text': body.text, 'engine': 'harness', 'conversation_id': body.conversation_id,
                 'assistant_chat': True, 'life_images': body.life_images, 'vision_model': model,
                 'interrupted': body.interrupted, 'chat_model': store.chat_preference(uid) or (life.providers.config.text_model if life.providers else '')}

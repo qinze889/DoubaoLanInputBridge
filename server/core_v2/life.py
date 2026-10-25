@@ -35,14 +35,14 @@ class LifeService:
         if chosen and chosen not in self.vision_models:raise Fault('vision_model_not_available',409)
         return chosen
 
-    async def model(self, uid, messages, call_id, vision=False, vision_model=None):
+    async def model(self, uid, messages, call_id, vision=False, vision_model=None, vision_max_tokens=512):
         provider=self.providers
         if not provider or not provider.readiness()['models']: raise Fault('model_provider_not_configured',503)
         models=await provider.models()
         model=(vision_model or provider.config.vision_model) if vision else provider.config.text_model
         allowed=model in self.vision_models and model in provider.discovered_ids if vision else model in {m['id'] for m in models}
         if not model or not allowed: raise Fault('vision_model_not_available' if vision else 'model_provider_not_configured',503)
-        payload={'model':model,'messages':messages,'max_tokens':4096 if not vision else 512,'stream':False}
+        payload={'model':model,'messages':messages,'max_tokens':4096 if not vision else min(4096,max(512,vision_max_tokens)),'stream':False}
         if not vision:
             payload['tools']=[{'type':'function','function':{'name':'record_life_day','description':'提交客观每日摘要和有原始记录来源的记忆。没有可沉淀事实时 memories 为空数组。','parameters':{'type':'object','properties':{'summary':{'type':'string'},'memories':{'type':'array','maxItems':20,'items':{'type':'object','properties':{'key':{'type':'string'},'text':{'type':'string'},'kind':{'type':'string','enum':['event','fact','preference']},'sources':{'type':'array','items':{'type':'string'}}},'required':['key','text','kind','sources'],'additionalProperties':False}}},'required':['summary','memories'],'additionalProperties':False}}}]
             payload['tool_choice']={'type':'function','function':{'name':'record_life_day'}}

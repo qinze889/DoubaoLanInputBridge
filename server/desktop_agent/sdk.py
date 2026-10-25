@@ -29,6 +29,11 @@ class SDKHarness(HarnessEngine):
     async def start_owned(self):
         if self.process and self.process.returncode is None:
             return
+        try:
+            facts=await asyncio.to_thread(self.model_facts)
+            if type(facts.get('context_window')) is int and 4096<=facts['context_window']<=2000000:self.config['context_window']=facts['context_window']
+            self.config['max_tokens']=min(8192,facts.get('max_output_tokens',8192))
+        except Exception:pass
         overlay = self.data / 'sdk.patch.json'
         overlay.write_text(json.dumps(self.overlay()))
         overlay.chmod(384)
@@ -45,7 +50,12 @@ class SDKHarness(HarnessEngine):
         self.reason = None
         self.opened = set()
         self.reader = asyncio.create_task(self.read_sdk())
-        await self.rpc('initialize', {'cwd': str(self.workspace), 'provider': 'shengjian', 'model': self.config['text_model'], 'maxTokens': 2048})
+        await self.rpc('initialize', {'cwd': str(self.workspace), 'provider': 'shengjian', 'model': self.config['text_model'], 'maxTokens': self.config.get('max_tokens',8192)})
+
+    def model_facts(self):
+        import urllib.request
+        request=urllib.request.Request(self.config['server'].rstrip('/')+'/assistant/media-capabilities',headers={'Authorization':'Bearer '+self.config['token']})
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=8) as response:return json.load(response)
 
     async def read_sdk(self):
         try:

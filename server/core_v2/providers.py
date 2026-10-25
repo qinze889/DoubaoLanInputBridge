@@ -3,6 +3,7 @@ import asyncio
 import base64
 from dataclasses import dataclass
 import json
+import logging
 import math
 import os
 import secrets
@@ -17,7 +18,7 @@ from .store import Fault, digest, encode
 
 
 RESPONSE_STYLE = '''声笺默认表达方式：
-先判断用户有没有明确要求详细。没有时，用简单、自然、容易听懂的中文直接给答案，默认1—2句、约30—80字，最多3个短句。日常解释只给一句结论，最多再补一句必要原因，说完即止。不加标题、编号、延伸知识或“顺带一提”。
+用自然、容易听懂的中文先直接回应当前问题，结合这段对话的背景充分说明。保持简洁，但不要机械限制句数或字数，也不要只看用户最后一句。需要讨论、比较、推演或创作时完整展开，让对话自然延续。简单问题简短回答，复杂问题给足内容。
 不加寒暄、套话或重复总结，不复述用户的问题，不主动扩展无关背景，不反复问“是否需要更多帮助”。少用术语，必要术语用日常话解释。
 执行工作时直接汇报结果、必要的异常和下一步，不逐条播报内部工具、思考或执行日志。未完成、结果未知或需要用户操作时如实说清，不省略重要事实，不把计划说成已完成。
 用户明确要求详细解释、完整方案、清单、代码或文稿时，按要求提供完整内容，必要的步骤与交付文件不受默认篇幅限制。不要为缩短回答而删改工具参数、结构化输出或文件内容。
@@ -128,6 +129,12 @@ class Providers:
             if not selected <= ids:
                 raise Fault('configured_model_not_available', 503)
             self.discovered_ids = ids
+            self.model_contexts = {row['id']: {
+                'context_window': min(2000000, int(row.get('context_length') or row.get('context_window') or 32768)),
+                'max_output_tokens': min(128000, int(row.get('max_output_tokens') or 8192))}
+                for row in data['data'] if isinstance(row,dict) and row.get('id') in selected
+                and isinstance(row.get('context_length') or row.get('context_window') or 32768,int)
+                and isinstance(row.get('max_output_tokens') or 8192,int)}
             self.cached_models=[{'id':m,'object':'model','input_modalities':['text','image'] if m==self.config.vision_model else ['text']} for m in [self.config.text_model,*sorted(selected-{self.config.text_model})]]
             self.models_at=asyncio.get_running_loop().time()
             return self.cached_models
@@ -207,13 +214,16 @@ class Providers:
             if 'reasoning_effort' in data and (self.config.voice_effort != 'low' or data['reasoning_effort'] != 'low' or data['model'] not in {self.config.text_model,*self.config.chat_models}):
                 raise Fault('unsupported_reasoning_effort')
             messages=data.get('messages')
-            if not isinstance(messages,list) or not 1<=len(messages)<=100 or any(not isinstance(m,dict) or m.get('role') not in {'system','developer','user','assistant','tool'} for m in messages):
+            if not isinstance(messages,list) or not 1<=len(messages)<=20000 or any(not isinstance(m,dict) or m.get('role') not in {'system','developer','user','assistant','tool'} for m in messages):
                 raise Fault('invalid_messages')
             if any(isinstance(m.get('content'),list) for m in messages) and data['model']!=self.config.vision_model and not image_ids:
                 raise Fault('model_does_not_accept_images')
             maximum=data.get('max_completion_tokens',data.get('max_tokens',2048))
             if type(maximum) is not int or not 1<=maximum<=8192:
                 raise Fault('invalid_max_tokens')
+            if active_chat and not image_ids:
+                maximum=min(8192,getattr(self,'model_contexts',{}).get(data['model'],{}).get('max_output_tokens',8192))
+                data['max_completion_tokens' if 'max_completion_tokens' in data else 'max_tokens']=maximum
             if 'max_tokens' not in data and 'max_completion_tokens' not in data:
                 data['max_tokens']=maximum
             for message in messages:
@@ -255,6 +265,13 @@ class Providers:
             reserve=math.ceil((len(encode(data).encode())+8192+maximum)/1000)*self.config.token_credits
             store.reserve(uid,usage_id,reserve,digest(encode(data)))
             headers={'Authorization':'Bearer '+self.config.model_key,'Content-Type':'application/json','X-Request-ID':usage_id}
+            def model_failure(code,status=None):
+                logging.getLogger(__name__).warning('model_stream_end code=%s upstream_status=%s model=%s',code,status,data['model'])
+                if len(active_chat)==1:
+                    with store.tx() as db:
+                        current=db.execute('SELECT state FROM tasks WHERE id=?',(active_chat[0]['id'],)).fetchone()
+                        if current and current['state']=='running':
+                            store._event(db,active_chat[0]['id'],{'type':'model.failure','code':code,'upstream_status':status})
             if data.get('stream'):
                 data['stream_options']={'include_usage':True}
             def settle(usage):
@@ -267,11 +284,14 @@ class Providers:
             except httpx.ConnectError:
                 await client.aclose()
                 store.settle(uid,usage_id,0)
+                model_failure('model_connection_failed')
                 raise Fault('model_connection_failed',503) from None
             except httpx.HTTPError:
                 await client.aclose()
+                model_failure('model_result_unknown')
                 raise Fault('model_result_unknown',502) from None
             if upstream.status_code != 200:
+                model_failure('model_upstream_failed',upstream.status_code)
                 if 400<=upstream.status_code<500:
                     store.settle(uid,usage_id,0)
                 await upstream.aclose()
@@ -288,10 +308,9 @@ class Providers:
                             raise Fault('model_response_too_large',502)
                         if data.get('stream'):
                             pending+=decoder.decode(chunk)
-                            if len(pending)>256*1024:
-                                raise Fault('model_event_too_large',502)
                             while '\n' in pending:
                                 line,pending=pending.split('\n',1)
+                                if len(line)>256*1024:raise Fault('model_event_too_large',502)
                                 if line.startswith('data: '):
                                     if line.strip()=='data: [DONE]':done=True
                                     else:
@@ -299,6 +318,7 @@ class Providers:
                                             item=json.loads(line[6:])
                                             if item.get('usage'):usage=item['usage']
                                         except ValueError:pass
+                            if len(pending)>256*1024:raise Fault('model_event_too_large',502)
                             yield chunk
                         else:
                             buffer.extend(chunk)
@@ -309,8 +329,10 @@ class Providers:
                     elif done:
                         settle(usage)
                     else:
+                        model_failure('model_result_unknown')
                         yield b'data: {"error":{"message":"model_result_unknown"}}\n\n'
-                except (httpx.HTTPError,ValueError,Fault):
+                except (httpx.HTTPError,ValueError,Fault) as failure:
+                    model_failure(failure.code if isinstance(failure,Fault) else 'model_result_unknown')
                     yield b'data: {"error":{"message":"model_result_unknown"}}\n\n' if data.get('stream') else b'{"error":"model_result_unknown"}'
                 finally:
                     import anyio

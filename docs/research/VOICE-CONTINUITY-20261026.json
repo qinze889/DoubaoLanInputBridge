@@ -1,0 +1,16 @@
+{
+  "synthetic_account": true,
+  "no_user_recording": true,
+  "tts_http_status": 200,
+  "tts_first_pcm_seconds": 2.72,
+  "tts_complete": true,
+  "tts_seconds": 2.9,
+  "asr_ready": true,
+  "asr_final_characters": 14,
+  "asr_final": true,
+  "asr_partials": 9,
+  "asr_elapsed_seconds": 3.51,
+  "ok": true,
+  "date": "2026-10-26",
+  "measurement": "Server PCM first packet from synthetic TTS request; excludes ASR, model and physical playback latency."
+}

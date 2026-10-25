@@ -17,8 +17,8 @@ const {spawn}=require('node:child_process'),fs=require('node:fs'),os=require('no
   for(const colorScheme of ['light','dark']){await page.emulateMedia({colorScheme});await page.waitForTimeout(180);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:path.join(out,'image-generation-'+colorScheme+'.png'),fullPage:true});}
   const download=page.waitForEvent('download');await page.getByRole('link',{name:'保存 PNG'}).click();assert((await download).suggestedFilename().endsWith('.png'));
   await page.getByRole('button',{name:'聊这张图',exact:true}).click();await page.locator('#visual-photo').waitFor({state:'visible'});assert(await page.locator('#image-space').isHidden());
-  await page.locator('#visual-clear').click();await page.locator('#prompt').fill('帮我生成一张绿色森林图片');await page.locator('.send-button').click();await page.locator('#create:not([hidden])').waitFor();
+  await page.locator('#visual-clear').click();await page.locator('[data-page=create]').click();await page.locator('#image-prompt').fill('帮我生成一张绿色森林图片');await page.locator('#create-image').click();await page.waitForFunction(()=>document.querySelectorAll('.generated-card').length===2);
   await logoutUser(page);await login('browser-second','browser-password-456');await page.locator('[data-conversation-mode=image]').click();await page.getByText('第一张作品，从一句描述开始。',{exact:true}).waitFor();assert.equal(await page.locator('.generated-card').count(),0);assert.equal(errors.length,0,errors.join('\n'));
-  console.log(JSON.stringify({ok:true,checks:['select-and-persist-image-model','Responses-to-real-PNG','reload-job-recovery','PNG-download','generated-image-to-voice-chat-context','explicit-chat-image-routing','light-dark-mobile','account-isolation'],screenshots:out}));
+  console.log(JSON.stringify({ok:true,checks:['select-and-persist-image-model','Responses-to-real-PNG','reload-job-recovery','PNG-download','generated-image-to-voice-chat-context','explicit-creation-page','light-dark-mobile','account-isolation'],screenshots:out}));
  }finally{await browser?.close();server.kill('SIGTERM');}
 })().catch(e=>{console.error(e);process.exitCode=1;});

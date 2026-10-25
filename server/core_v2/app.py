@@ -152,6 +152,17 @@ def create_app(directory, admin_token=None, providers=None):
 
     @app.middleware('http')
     async def boundaries(request, call_next):
+        model_request=request.url.path == PREFIX+'/model/v1/chat/completions' and request.method=='POST'
+        if model_request:
+            try:
+                raw=request.headers.get('authorization','')
+                if not raw.startswith('Bearer '):raise Fault('unauthorized',401)
+                try:store.authenticate(raw[7:])
+                except Fault:
+                    device=store.authenticate(raw[7:],device=True)
+                    grants=json.loads(device['grants']) if isinstance(device['grants'],str) else device['grants']
+                    if 'tasks' not in grants:raise Fault('capability_not_granted',403)
+            except Fault as error:return JSONResponse({'ok':False,'error':error.code},status_code=error.status)
         if request.url.path == PREFIX+'/life/images' and request.method=='POST':
             try:user(request.headers.get('authorization'))
             except Fault as error:return JSONResponse({'ok':False,'error':error.code},status_code=error.status)
@@ -162,7 +173,7 @@ def create_app(directory, admin_token=None, providers=None):
         total, chunks = 0, []
         async for chunk in request.stream():
             total += len(chunk)
-            limit = 8*1024*1024 if request.url.path == PREFIX+'/life/images' and request.method=='POST' else 128*1024
+            limit = 8*1024*1024 if model_request or (request.url.path == PREFIX+'/life/images' and request.method=='POST') else 128*1024
             if total > limit:
                 return JSONResponse({'ok': False, 'error': 'body_too_large'}, status_code=413)
             chunks.append(chunk)
@@ -426,6 +437,8 @@ def create_app(directory, admin_token=None, providers=None):
     mount_voice_diagnostics(app,store,user)
     from .conversations import mount as mount_conversations
     mount_conversations(app,store,user)
+    from .conversation_media import mount as mount_conversation_media
+    mount_conversation_media(app,store,user)
     if providers:
         providers.mount(app, store, user)
     static = Path(__file__).parent/'web'
@@ -435,7 +448,7 @@ def create_app(directory, admin_token=None, providers=None):
             return FileResponse(static/'index.html',headers={'Cache-Control':'no-cache'})
         @app.get(PREFIX+'/console/{asset}')
         async def asset(asset: str):
-            if asset not in {'app.js', 'app.css', 'pcm.js', 'voice-flow.js', 'push-to-talk.js', 'product.js', 'product-version.json', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js', 'life.js', 'visual.js', 'imagegen.js'}:
+            if asset not in {'app.js', 'app.css', 'pcm.js', 'voice-flow.js', 'push-to-talk.js', 'product.js', 'conversation-media.js', 'product-version.json', 'vad.js', 'stream.js', 'capture-worklet.js', 'echo.js', 'agent.js', 'life.js', 'visual.js', 'imagegen.js'}:
                 raise Fault('not_found', 404)
             return FileResponse(static/asset,headers={'Cache-Control':'no-cache'})
     return app

@@ -36,7 +36,7 @@ def upstream(request):
         from PIL import Image
         image=io.BytesIO();Image.new('RGB',(128,96),'#2b795b').save(image,'PNG')
         return httpx.Response(200,json={'status':'completed','output':[{'type':'image_generation_call','status':'completed','result':base64.b64encode(image.getvalue()).decode()}],'usage':{'credit':2}})
-    if request.method=='GET':return httpx.Response(200,json={'data':[{'id':'fixture-text'},{'id':'fixture-text-alternative'},{'id':'fixture-image-a'},{'id':'fixture-image-b'},{'id':'fixture-edit'},{'id':'fixture-vision'},{'id':'fixture-vision-alternative'}]})
+    if request.method=='GET':return httpx.Response(200,json={'data':[{'id':'fixture-text','context_length':1000000,'max_output_tokens':128000},{'id':'fixture-text-alternative'},{'id':'fixture-image-a'},{'id':'fixture-image-b'},{'id':'fixture-edit'},{'id':'fixture-vision'},{'id':'fixture-vision-alternative'}]})
     if request.url.path.endswith('/audio/speech/stream'):return httpx.Response(200,stream=Stream(audio=True))
     body=json.loads(request.content)
     if body.get('model') in {'fixture-vision','fixture-vision-alternative'} and body.get('stream'):return httpx.Response(200,stream=Stream(visual=True),headers={'Content-Type':'text/event-stream'})

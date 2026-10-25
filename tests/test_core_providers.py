@@ -70,7 +70,7 @@ def test_concise_chat_policy_scoped_to_active_device_preserves_tools_and_full_ou
             assert sent['messages'][-1]==messages[-1]
             instruction='\n'.join(p['text'] for p in first) if structured else first
             assert (RESPONSE_STYLE in instruction)==expected
-            assert sent['tools']==tools and sent['max_tokens']==2048
+            assert sent['tools']==tools and sent['max_tokens']==(8192 if expected else 2048)
             assert result.json()['choices'][0]['message']['content']==complete_text
 
 
@@ -84,6 +84,34 @@ def test_stream_usage_is_settled_after_complete_stream(tmp_path):
         response=request(client,user,stream=True)
         assert '[DONE]' in response.text
         assert app.state.store.wallet(user['user_id'])=={'balance':99,'reserved':0}
+
+
+def test_coalesced_model_records_are_not_a_single_oversized_event(tmp_path):
+    record=b'data: '+json.dumps({'choices':[{'delta':{'content':'a'*1000}}]}).encode()+b'\n\n'
+    body=record*300+b'data: {"usage":{"total_tokens":2}}\n\ndata: [DONE]\n\n'
+    assert len(body)>256*1024
+    def upstream(req):
+        return httpx.Response(200,json={'data':[{'id':'test-text'}]}) if req.method=='GET' else httpx.Response(200,content=body)
+    app,user,_=setup(tmp_path,upstream)
+    with TestClient(app) as client:
+        response=request(client,user,stream=True)
+        assert response.content==body and 'model_result_unknown' not in response.text
+        assert app.state.store.wallet(user['user_id'])=={'balance':99,'reserved':0}
+
+
+def test_chat_failure_event_identifies_upstream_without_private_error_body(tmp_path):
+    def upstream(req):
+        return httpx.Response(200,json={'data':[{'id':'test-text'}]}) if req.method=='GET' else httpx.Response(503,json={'error':'private upstream details'})
+    app,user,_=setup(tmp_path,upstream);store=app.state.store
+    device=store.enroll(user['user_id'],'desktop',['tasks']);store.authorize_device(user['user_id'],device['id'],['tasks'])
+    task=store.create_task(user['user_id'],{'device_id':device['id'],'request_id':secrets.token_hex(16),'prompt':'test','engine':'harness','assistant_chat':True})
+    store.dispatch(device['id']);store.device_event(device['id'],task['id'],{'type':'task.state','state':'running'},'started')
+    with TestClient(app) as client:
+        assert request(client,device,stream=True).status_code==502
+        events=store.events(user['user_id'],task['id'],0)
+        assert events[-1]['type']=='model.failure' and events[-1]['upstream_status']==503
+        assert 'private upstream details' not in json.dumps(events)
+        assert store.task(user['user_id'],task['id'])['state']=='running'
 
 
 @pytest.mark.parametrize('status,held',[(401,False),(429,False),(500,True)])

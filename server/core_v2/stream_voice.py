@@ -177,19 +177,22 @@ async def streaming_speech(provider, store, uid, body):
         import codecs
         decoder = codecs.getincrementaldecoder('utf-8')()
         pending = ''
+        upstream_reason = ''
         try:
             async for chunk in upstream.aiter_bytes():
                 pending += decoder.decode(chunk)
-                if len(pending) > 128*1024:
-                    raise Fault('audio_response_too_large', 502)
                 while '\n' in pending:
                     raw, pending = pending.split('\n', 1)
+                    if len(raw)>128*1024:
+                        raise Fault('audio_response_too_large',502)
                     if not raw:
                         continue
                     item = json.loads(raw)
                     kind = item.get('type')
                     if kind == 'error':
                         code = item.get('error')
+                        if code in REFUNDABLE | {'tts_incomplete','tts_session_rejected','audio_result_unknown','audio_result_too_large'}:
+                            upstream_reason=code
                         if code in REFUNDABLE and not total:
                             store.settle(uid, body.request_id, 0)
                         raise Fault(code if code in REFUNDABLE else 'audio_result_unknown', 502)
@@ -210,9 +213,13 @@ async def streaming_speech(provider, store, uid, body):
                         complete = True
                         yield encoded({'type': kind})
                         return
+                if len(pending)>128*1024:
+                    raise Fault('audio_response_too_large',502)
             if not complete:
                 raise Fault('audio_result_unknown', 502)
         except (Fault, httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            logging.getLogger(__name__).warning('voice_tts_end code=%s cause=%s pcm_bytes=%s',
+                exc.code if isinstance(exc,Fault) else type(exc).__name__,upstream_reason or 'transport_or_parse',total)
             yield encoded({'type': 'error', 'error': exc.code if isinstance(exc, Fault) else 'audio_result_unknown'})
         finally:
             with anyio.CancelScope(shield=True):

@@ -28,6 +28,11 @@ const {
   );
   assert.equal(output[0].choices[0].delta.content, "你好。");
   assert(output[1].done);
+  const combined=Array.from({length:400},()=>JSON.stringify({type:'audio.chunk',data:'a'.repeat(800)})+'\n').join('');
+  let coalesced=0;
+  await readEvents(new Response(combined),'ndjson',()=>coalesced++);
+  assert.equal(coalesced,400,'a large network read may contain many valid small audio records');
+  await assert.rejects(()=>readEvents(new Response(JSON.stringify({data:'a'.repeat(300000)})+'\n'),'ndjson',()=>{}),/voice_stream_invalid/);
   const sentences = [];
   const segmenter = new VoiceSentences((text) => sentences.push(text));
   segmenter.push("这是第一句实时回答。后续内容");

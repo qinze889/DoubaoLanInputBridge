@@ -1,7 +1,7 @@
 "use strict";
 (()=>{
  const $=id=>document.getElementById(id),terminal=new Set(['succeeded','failed','cancelled','unknown']);
- let owner='',epoch=0,page='conversation',cid='',binding='',nextCursor=null,snapshot=null,historyMode='recent',workFilter='active',stick=true,loading=false,entered=false,silentClose=false,deviceSignature='',toastTimer=null,artMode='generate',releaseInfo={name:'声笺 Web',version:'2.0.0-preview.5',updated:'2026-10-24'};
+ let owner='',epoch=0,page='conversation',cid='',binding='',nextCursor=null,snapshot=null,historyMode='recent',workFilter='active',stick=true,loading=false,entered=false,silentClose=false,deviceSignature='',toastTimer=null,artMode='generate',releaseInfo={name:'声笺 Web',version:'2.0.0-preview.6',updated:'2026-10-24'};
  const acceptedTasks=new Map(),following=new Map(),objectUrls=new Set(),deviceExpanded=new Set();let pendingConfirmation=null;let historyRows=[],historyCursor=null,historyLoading=false,taskResult='',taskResultNode=null,taskLogs=null,taskReadButton=null;
  const titles={conversation:'对话',create:'创作',life:'记录',tasks:'工作',devices:'我的'};
  const friendlyStates={queued:'等待电脑',running:'进行中',awaiting_user:'等你确认',succeeded:'已完成',failed:'未完成',cancelled:'已取消',unknown:'需要核实'};
@@ -136,7 +136,7 @@
  function restoreTurn(turn,prepend=false){
   if(turn.task_id)acceptedTasks.set(turn.task_id,cid);
   const holder=document.createDocumentFragment(),userBubble=node('div',turn.user_text,'message user');holder.append(userBubble);
-  const assistant=node('div',turn.assistant_text||(terminal.has(turn.state)?'本轮'+(friendlyStates[turn.state]||'已结束'):'正在回复…'),'message assistant');holder.append(assistant);
+  const assistant=node('div',turn.assistant_text||(terminal.has(turn.state)?'本轮'+(friendlyStates[turn.state]||'已结束'):'正在回复…'),'message assistant');if(turn.task_id)assistant.dataset.chatTask=turn.task_id;holder.append(assistant);
   if(turn.is_work||['failed','unknown','awaiting_user'].includes(turn.state)){const link=action('查看工作进展',()=>openTask(turn.task_id),'work-turn-link');if(turn.task_id)holder.append(link);}
   if(prepend)$('messages').prepend(holder);else $('messages').append(holder);
   messageAdded(userBubble,'user',turn.user_text,turn.images,{restored:true});messageAdded(assistant,'assistant',turn.assistant_text||assistant.textContent,[],{restored:true});
@@ -151,7 +151,7 @@
   if(!/^[a-f0-9]{32}$/.test(id))return;saveDraft();epoch++;const version=epoch,uid=owner;clearConversation(!entered||(!navigate&&page!=='conversation'));cid=id;$('prompt').value='';resizeInput();loading=true;$('conversation-status').textContent='正在恢复对话…';messageCount();
   if(navigate){closeDialogs();showPage('conversation');}localStorage.setItem(key('active'),cid);$('compose').querySelector('[type=submit]').disabled=true;for(const id of ['realtime','push-to-talk','attachments-open','image-start-live','image-push-to-talk'])$(id).disabled=true;
   try{const data=await json('/assistant/conversations/'+id);if(!same(uid,version)||cid!==id)return;binding=data.conversation.device_id;const destination=$('destination');if([...destination.options].some(o=>o.value===binding))destination.value=binding;
-   for(const turn of data.turns)restoreTurn(turn);messages=data.turns.flatMap(t=>[{role:'user',content:t.user_text},...(t.assistant_text?[{role:'assistant',content:t.assistant_text}]:[])]).slice(-20);currentTask=[...data.turns].reverse().find(t=>t.task_id)?.task_id||'';nextCursor=data.next_cursor;$('history-more').hidden=!nextCursor;
+   for(const turn of data.turns)restoreTurn(turn);messages=data.turns.flatMap(t=>[{role:'user',content:t.user_text},...(t.assistant_text?[{role:'assistant',content:t.assistant_text}]:[])]).slice(-200);currentTask=[...data.turns].reverse().find(t=>t.task_id)?.task_id||'';nextCursor=data.next_cursor;$('history-more').hidden=!nextCursor;
    $('conversation-status').textContent=data.turns.length?'':'从一句话开始这段对话。';$('prompt').value=sessionStorage.getItem(key('draft.'+cid))||'';resizeInput();
    const photo=[...data.turns].reverse().find(t=>t.images?.length);if(photo&&page==='conversation'&&!window.ShengjianVisual?.hasContext())void window.ShengjianVisual?.useSaved(photo.images[0],null,{open:false,origin:'conversation-history'}).catch(()=>{});
    if(data.conversation.archived)notice('这是已归档的对话，继续发送后会移回最近列表。');
@@ -190,7 +190,7 @@
   jobSubmitted(job,edit){selectArtMode(edit?'edit':'generate');$('image-prompt').value='';closeDialogs();showPage('create');},
   confirm:confirmAction,navigated,closeDialogs,showCreation(){if(page!=='create')showPage('create');},messageAdded,revealReply,scrollConversation,
   conversationFor(){return owner?cid:null;},
-  turnAccepted(id,data){if(!owner||id!==cid)return;if(data.task?.id){acceptedTasks.set(data.task.id,cid);if(acceptedTasks.size>1000)acceptedTasks.delete(acceptedTasks.keys().next().value);}sessionStorage.removeItem(key('draft.'+cid));if(data.task?.device_id)binding=data.task.device_id;localStorage.setItem(key('active'),cid);if(data.action==='chat'||data.device_id||data.task)void json('/assistant/conversations/'+cid,{archived:false},'PATCH').catch(()=>{});},
+  turnAccepted(id,data){if(!owner||id!==cid)return;if(data.task?.id){acceptedTasks.set(data.task.id,cid);if(acceptedTasks.size>1000)acceptedTasks.delete(acceptedTasks.keys().next().value);}let accepted=data.task?.specification;try{if(typeof accepted==='string')accepted=JSON.parse(accepted);}catch{}if(sessionStorage.getItem(key('draft.'+cid))===(accepted?.voice_text||accepted?.prompt))sessionStorage.removeItem(key('draft.'+cid));if(data.task?.device_id)binding=data.task.device_id;localStorage.setItem(key('active'),cid);if(data.action==='chat'||data.device_id||data.task)void json('/assistant/conversations/'+cid,{archived:false},'PATCH').catch(()=>{});},
   workStarted(){void refresh().catch(error);},taskOpened,taskEvent,
   taskReportElsewhere(id,state){const origin=acceptedTasks.get(id);if(!origin||origin===cid)return false;notice(state==='succeeded'?'一项后台工作已完成。':'有一项后台处理需要查看。');$('notice').append(action('查看',()=>openTask(id),'subtle-button'));void refresh().catch(error);return true;},
   presentNotice(text){clearTimeout(toastTimer);if(!text)return;const close=action('×',()=>notice(''));close.setAttribute('aria-label','关闭提示');close.style.cssText='background:transparent;border:0;color:inherit;min-height:24px;padding:0 0 0 12px;float:right';$('notice').append(close);if(/^(?:已复制|设置已保存|模型已保存)/.test(text))toastTimer=setTimeout(()=>notice(''),3500);},

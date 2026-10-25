@@ -3,14 +3,19 @@ async function readEvents(response, format, onEvent, signal) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = "",
-    eventLines = [];
+    eventLines = [], eventSize = 0;
   async function line(raw) {
     raw = raw.replace(/\r$/, "");
     if (format === "sse") {
-      if (raw.startsWith("data:")) eventLines.push(raw.slice(5).trimStart());
+      if (raw.startsWith("data:")) {
+        eventSize+=raw.length;
+        if(eventSize>256*1024)throw new Error('voice_stream_invalid');
+        eventLines.push(raw.slice(5).trimStart());
+      }
       else if (!raw && eventLines.length) {
         const data = eventLines.join("\n");
         eventLines = [];
+        eventSize = 0;
         await onEvent(data === "[DONE]" ? { done: true } : JSON.parse(data));
       }
     } else if (raw) await onEvent(JSON.parse(raw));
@@ -20,12 +25,13 @@ async function readEvents(response, format, onEvent, signal) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const { value, done } = await reader.read();
       pending += decoder.decode(value, { stream: !done });
-      if (pending.length > 256 * 1024) throw new Error("流式响应超过限制");
       let index;
       while ((index = pending.indexOf("\n")) >= 0) {
+        if(index>256*1024)throw new Error("voice_stream_invalid");
         await line(pending.slice(0, index));
         pending = pending.slice(index + 1);
       }
+      if (pending.length > 256 * 1024) throw new Error("voice_stream_invalid");
       if (done) {
         if (pending) await line(pending);
         if (format === "sse") await line("");

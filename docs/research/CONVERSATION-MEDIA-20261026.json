@@ -1,0 +1,73 @@
+{
+  "synthetic_account": true,
+  "runtime": {
+    "context_window": 1000000,
+    "default_max_tokens": 8192,
+    "text_model": "workbuddy/cn:deepseek-v4.1-flash",
+    "tools": [
+      "media_models",
+      "create_image",
+      "edit_image",
+      "view_conversation_image",
+      "image_job_status"
+    ]
+  },
+  "turns": [
+    {
+      "state": "succeeded",
+      "tools": []
+    },
+    {
+      "state": "succeeded",
+      "tools": [
+        "media_models",
+        "create_image"
+      ]
+    },
+    {
+      "state": "succeeded",
+      "tools": []
+    },
+    {
+      "state": "succeeded",
+      "tools": [
+        "image_job_status",
+        "view_conversation_image",
+        "view_conversation_image"
+      ]
+    },
+    {
+      "state": "succeeded",
+      "tools": [
+        "edit_image"
+      ]
+    }
+  ],
+  "full_context_prompt": true,
+  "image_state_before_followup": "running",
+  "no_duplicate_job": true,
+  "image_state": "succeeded",
+  "png_valid": true,
+  "edit_parent_preserved": true,
+  "ok": true,
+  "date": "2026-10-26",
+  "python_tests_passed": 434,
+  "cloud_release": "20261026-c4bdb46d14d8",
+  "known_limits": [
+    "Upstream chat returned a transient 502 in an earlier independent run. No automatic operation replay.",
+    "Vision tool completion took 84.61 seconds in the final run; no low-latency vision claim.",
+    "The million-token context declaration and runtime were verified; not a million-token stress test.",
+    "Physical phone speaker/microphone continuity still requires listening on device."
+  ],
+  "public_browser": {
+    "ok": true,
+    "real_public_images_inline": true,
+    "selected_version_attached": true,
+    "image_width": 1024,
+    "mobile_320": true,
+    "landscape": true,
+    "light_dark": true,
+    "reload_without_replay": true,
+    "console_errors": 0
+  }
+}

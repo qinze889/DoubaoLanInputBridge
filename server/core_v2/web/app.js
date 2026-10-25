@@ -67,6 +67,7 @@ const errors = {
   chat_computer_offline: "会话绑定的电脑离线，请打开声笺并启用 Agent。",
   chat_agent_update_required: "电脑 Agent 需要更新后才能接收统一 Chat 对话。",
   model_result_unknown: "模型未确认结果，请查看任务状态后再操作。",
+  chat_model_unavailable:"对话上游暂时中断，这轮没有自动重试。麦克风仍可使用，可以继续说；图片和电脑工作请先核对进度。",
   image_job_busy: "已有图片正在后台生成，请稍后查看结果。",
   image_model_not_available: "暂无可用生图模型，请在模型与连接中重新选择。",
   chat_model_not_verified: "这个模型尚未通过工具调用验证，请选择列表中的模型。",
@@ -448,9 +449,10 @@ async function submitPrompt(prompt) {
   const submit = $("compose").querySelector("[type=submit]");
   submit.disabled = true;
   stopSpeech();
-  const imageIntent=window.ShengjianProduct?.creationIntent(prompt)||window.ShengjianImages?.intent(prompt);
+  const creating=document.body.dataset.activePage==='create';
+  const imageIntent=creating?(window.ShengjianProduct?.creationIntent(prompt)||window.ShengjianImages?.intent(prompt)):null;
   try {
-    if(await window.ShengjianProduct?.creationControl(prompt))return;
+    if(creating&&await window.ShengjianProduct?.creationControl(prompt))return;
     if(imageIntent){
       const edited=imageIntent==='edit';
       const job=await window.ShengjianImages.generate(prompt,{edit:edited});
@@ -504,7 +506,7 @@ async function submitPrompt(prompt) {
     if(e.name==="AbortError")return;
     if (owner === token && operation === composeEpoch) {
       reportVoiceFailure("reply",e,live?.mode||"text");
-      if (live && !imageIntent) stopLive("对话请求未完成，请确认后重新开启");
+      if (live && !imageIntent && e.message!=="chat_model_unavailable") stopLive("对话请求未完成，请确认后重新开启");
       error(e);
     }
   } finally {
@@ -670,19 +672,25 @@ function speechPipeline(turn = null) {
   // Register before the first audio arrives so pending synthesis can also be stopped.
   playback = player;
   let chain = Promise.resolve(),
-    failure = null;
+    failure = null, consecutiveFailures=0, reportedFailure=false;
   const sentences = new VoiceSentences((text) => {
     chain = chain
       .then(async () => {
-        if (epoch === speechEpoch && !failure) await streamAudio(text, epoch, player);
+        if (epoch === speechEpoch && !failure) {
+          await streamAudio(text, epoch, player);
+          consecutiveFailures=0;
+        }
       })
       .catch((e) => {
         if (epoch === speechEpoch) {
-          failure = e;
+          consecutiveFailures++;
+          const fatal=/^(?:unauthorized|audio_busy|audio_rejected|insufficient_credits|tts_login_required|streaming_voice_not_configured|invalid_audio_format|audio_context_)/.test(e.message||'');
+          if(fatal||consecutiveFailures>=2)failure=e;
           reportVoiceFailure("playback",e,session.mode||"live");
           // Valid audio already queued must finish even if a later segment fails.
           // Do not retry a paid segment whose synthesis result is uncertain.
-          error(e);liveState("语音播报未完成，文字回复继续显示。可以继续说话或按住重试。");
+          if(!reportedFailure){error(e);reportedFailure=true;}
+          liveState(failure?"语音连接未恢复，完整文字继续显示。":"有一小段播报中断，后续继续；完整文字会保留。");
         }
       });
   });
@@ -719,7 +727,7 @@ function watchBackgroundWork(id,owner,after=0,hasWork=false){
   socket.onmessage=e=>{
    if(owner!==token)return stop();
    const item=JSON.parse(e.data);if(!item.seq||item.seq<=cursor)return;cursor=item.seq;
-   if(item.type==="task.log"){try{const l=JSON.parse(item.text);if(l.type==="tool_call"&&l.tool!=="see_user_image")hasWork=true;}catch{}}
+   if(item.type==="task.log"){try{const l=JSON.parse(item.text);if(l.type==="tool_call"&&!["see_user_image","media_models","create_image","edit_image","view_conversation_image","image_job_status"].includes(l.tool))hasWork=true;}catch{}}
    if(item.type==="task.result")result=item.text||"";
    if(item.type==="task.state"&&["succeeded","failed","cancelled","unknown"].includes(item.state)){
     stop();if(!hasWork&&item.state==="succeeded")return;if(window.ShengjianProduct?.taskReportElsewhere(id,item.state))return;agentReport(item.state==="succeeded"?"后台工作已完成。"+result.slice(0,600):"后台工作"+(labels[item.state]||item.state)+"。");
@@ -744,7 +752,7 @@ async function streamHarness(prompt,images,owner,operation,selected) {
   window.ShengjianProduct?.turnAccepted(conversation,data);
 
   if(owner!==token || operation!==composeEpoch)return;
-  $("prompt").value="";
+  if($("prompt").value.trim()===prompt)$("prompt").value="";
   if(data.action!=="chat") {
     message("assistant",data.reply);
     if($("speak").checked)await speak(data.reply);
@@ -760,8 +768,8 @@ async function streamHarness(prompt,images,owner,operation,selected) {
   const turn={history:[...messages,{role:"user",content:prompt}],images,text:"",voiced:$("speak").checked,complete:false,speechEnd:session?.utterance?.speechEnd,harness:true};
   if(session)session.replyTurn=turn;
   const speech=session && turn.voiced?speechPipeline(turn):null;
-  const node=el("div",data.queued_behind?"补充已排队，当前工作继续运行。可随时询问进度或取消任务。":"正在思考…","message assistant");turn.node=node;$("messages").append(node);
-  let cursor=0, socket, result="", settled=false, approvalSeen=new Set();
+  const node=el("div",data.queued_behind?"补充已排队，当前工作继续运行。可随时询问进度或取消任务。":"正在思考…","message assistant");turn.node=node;node.dataset.chatTask=id;$("messages").append(node);window.ShengjianConversationMedia?.poll();
+  let cursor=0, socket, result="", settled=false, modelFailed=false, approvalSeen=new Set();
   try {
     await new Promise((resolve,reject)=>{
       const finish=(failure)=>{if(settled)return;settled=true;socket?.close();controller.signal.removeEventListener("abort",abort);failure?reject(failure):resolve();};
@@ -774,7 +782,8 @@ async function streamHarness(prompt,images,owner,operation,selected) {
         socket.onmessage=e=>{
           if(settled || owner!==token || operation!==composeEpoch)return;
           const item=JSON.parse(e.data);if(!item.seq||item.seq<=cursor)return;cursor=item.seq;
-          if(item.type==="task.log"){try{const log=JSON.parse(item.text);if(log.type==="tool_call"&&log.tool!=="see_user_image"){turn.work=true;workLink.hidden=false;window.ShengjianProduct?.workStarted(id,prompt);}}catch{}}
+          if(item.type==="model.failure")modelFailed=true;
+          if(item.type==="task.log"){try{const log=JSON.parse(item.text);if(log.type==="tool_call"&&!["see_user_image","media_models","create_image","edit_image","view_conversation_image","image_job_status"].includes(log.tool)){turn.work=true;workLink.hidden=false;window.ShengjianProduct?.workStarted(id,prompt);}}catch{}}
           if(item.type==="task.delta"){
             if(!turn.text && session)session.metrics={...session.metrics,first_token_ms:Math.round(performance.now()-session.replyStart)};
             turn.text+=item.text||"";node.textContent=turn.text;window.ShengjianProduct?.revealReply(node);speech?.push(item.text||"");
@@ -784,7 +793,7 @@ async function streamHarness(prompt,images,owner,operation,selected) {
             // Keep listening while the owned work waits; a new spoken control goes through the same task API.
             busy=false;$("compose").querySelector("[type=submit]").disabled=false;
           } else if(item.type==="task.state" && terminal.has(item.state)) {
-            if(item.state!=="succeeded")return finish(new Error("本轮"+(labels[item.state]||item.state)+"，请查看工作记录；不会自动重试操作。"));
+            if(item.state!=="succeeded")return finish(new Error(item.state==="failed"&&modelFailed?"chat_model_unavailable":"本轮"+(labels[item.state]||item.state)+"，请查看工作记录；不会自动重试操作。"));
             if(!turn.text){turn.text=result;node.textContent=result;window.ShengjianProduct?.revealReply(node);speech?.push(result);}
             finish();
           }
@@ -796,11 +805,14 @@ async function streamHarness(prompt,images,owner,operation,selected) {
     });
     if(owner!==token || operation!==composeEpoch)return;
     if(!turn.text)throw new Error("本机未返回对话结果，请查看工作记录。");
-    messages=[...turn.history,{role:"assistant",content:result||turn.text}].slice(-20);
+    messages=[...turn.history,{role:"assistant",content:result||turn.text}].slice(-200);
     window.ShengjianLife?.capture("assistant",result||turn.text,images);turn.lifeRecorded=true;
     if(speech)await speech.done();else if(turn.voiced)await speak(result||turn.text);
     turn.complete=true;window.ShengjianProduct?.messageAdded(node,"assistant",result||turn.text,images);
     await refresh();
+  } catch(failure) {
+    if(failure.message==="chat_model_unavailable"&&speech)await speech.done();
+    throw failure;
   } finally {socket?.close();if(replyController===controller)replyController=null;}
 }
 function stopAgentSpeech() { reportEpoch++; stopSpeech(); }

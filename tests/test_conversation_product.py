@@ -23,6 +23,9 @@ def test_owned_history_archive_models_and_work_classification(tmp_path):
     with TestClient(app) as c:
         r=post(c,u,d,cid,'第一句日常聊天');assert r.status_code==200,r.text;t=r.json()['task']['id'];assert r.json()['task']['is_work']==0
         start(s,d,t);event(s,d,t,{'type':'task.log','text':json.dumps({'type':'tool_call','tool':'see_user_image'})});assert s.task(u['user_id'],t)['is_work']==0
+
+        for media in ['media_models','create_image','edit_image','view_conversation_image','image_job_status']:
+            event(s,d,t,{'type':'task.log','text':json.dumps({'type':'tool_call','tool':media})});assert s.task(u['user_id'],t)['is_work']==0
         event(s,d,t,{'type':'task.delta','text':'中间'});finish(s,d,t,'完整回复')
         t2=post(c,u,d,cid,'帮我在后台打开网页').json()['task']['id'];start(s,d,t2);event(s,d,t2,{'type':'task.log','text':json.dumps({'type':'tool_call','tool':'background_browser','private':'must not appear in transcript'})});assert s.task(u['user_id'],t2)['is_work']==1;finish(s,d,t2)
         data=c.get(PREFIX+'/assistant/conversations/'+cid,headers=auth(u)).json();assert len(data['turns'])==2;assert data['turns'][0]['assistant_text']=='完整回复';assert 'private' not in json.dumps(data)

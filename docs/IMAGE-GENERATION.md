@@ -9,13 +9,13 @@
 | Hunyuan Image Alpha / WorkBuddy | `workbuddy/cn:hunyuan-image-alpha` | 1024×1024，可解码 PNG |
 | MiniMax Image-01 | `minimax/image-01` | 1024×1024，可解码 PNG |
 
-也可在对话中明确输入或说“帮我生成一张……图片”“帮我画一只……”。识别完成后会提交云端生图任务；不需要电脑 Agent 在线，不会占用电脑前台。可以继续聊天，之后到生图区查看。图片支持保存 PNG、“聊这张图”，后者把生成结果接到现有视觉工具和语音对话。
+对话中的文字和语音始终交给本机 DeepSeek Harness。主模型结合完整会话，通过 `media_models` 查询真实上游与账号选择，再决定调用 `create_image`、`edit_image` 或 `view_conversation_image`。没有关键词截取或浏览器自动跳转。图片任务独立运行，生成结果直接出现在本次对话下方，生成期间可继续聊天或工作；支持保存图片和继续调整。此路径需要电脑 Agent 在线并已加载媒体工具；独立“创作”页仍可直接使用云端任务，不要求电脑在线。
 
 生成作品自动保存到生活记录，明确标记为 AI 生成、`role=assistant`，不作为用户真实生活事件或身份事实沉淀。Chat/Work 模型、识图模型、生图模型分别保存，不把 DeepSeek 对话模型标成生图权重。参考图上传／拍照后可以直接语音修改，再接着说“再亮一点”。模型与连接中可单独选择改图模型；当前真实验证的是 `workbuddy/cn:hunyuan-image-alpha-edit`。模型来源、输入输出与任务协议见 [能力分类](MODEL-CAPABILITIES.md)。
 
 ## 协议与实际兼容边界
 
-服务端向现有上游 `/responses` 提交一次请求：`model` 为所选精确生图模型，`input` 为文字需求，`tools=[{"type":"image_generation"}]`，强制该工具，非流式获取最终结果。生图任务异步，不因手机页面退出、刷新或断线而重放请求。未迁移现有本机 Harness 文本工具循环。
+主模型工具返回持久任务编号后即可继续对话。服务端向现有上游 `/responses` 提交一次请求：`model` 为所选精确生图模型，`input` 为主模型根据上下文编写的完整提示，`tools=[{"type":"image_generation"}]`，强制图片工具，非流式获取最终结果。生图任务异步，不因手机页面退出、刷新或断线而重放请求。主模型工具调用与上游图片协议是两个分工明确的层次。
 
 标准 Responses 图片输出支持 `image_generation_call.result` 的 base64。现场上游还存在旧兼容形式：图片模型先经过 Chat 适配，最终返回 `output_text` 中的生成资源链接，而非标准图片工具项。首轮[原生形状检查](research/IMAGE-RESPONSES-NATIVE-SHAPE-PROBE.json)因此未通过；这不是“未生图”的证据，未自动重新提交原请求。后续独立测试验证了[资源形式的 Responses 结果](research/IMAGE-RESPONSES-ASSET-VALIDATION.json)。
 
@@ -42,7 +42,8 @@
 - [公网真实任务、两模型 PNG、幂等恢复和手机页面渲染](research/IMAGE-GENERATION-PUBLIC-VALIDATION.json)：两张真实 1024×1024 图，测试任务分别约 12.23 / 18.47 秒，仅为小样本结果。
 - [真实公网生图、上传参考图、连续两次修图与单次结算](research/REFERENCE-EDIT-PUBLIC-VALIDATION.json)。
 - 后端测试覆盖标准图片工具项、旧资源输出、账号隔离、SQLite 重开、幂等、拒绝、超时/未知、非图片文本、不可信资源 origin，以及生成成功后资源连接失败不错误释放预留。
-- `scripts/smoke_image_generation.cjs` 覆盖模型保存、刷新恢复、PNG 下载、“聊这张图”、明确的对话生图请求、明暗手机布局和账号切换；已加入 CI。
+- `scripts/smoke_conversation_media.cjs` 覆盖主对话不按关键词分流、生成期间继续聊、图片内联、草稿及焦点保留、刷新不重放、退出清理和320px布局；已加入 CI。
+- `scripts/smoke_image_generation.cjs` 覆盖模型保存、刷新恢复、PNG 下载、“聊这张图”、独立创作、明暗手机布局和账号切换；已加入 CI。
 - `scripts/smoke_reference_edit.cjs` 覆盖虚拟 ASR → 修图、上一版连续编辑、刷新恢复、旧版本分支、新照片、新模型分类、320px 明暗布局及跨账号隔离，已加入 CI。
 - 原语音流、视觉会话、Work 进度/取消和手机四分区回归继续通过。自动测试使用虚拟麦克风，不替代真机免提听测。
 
