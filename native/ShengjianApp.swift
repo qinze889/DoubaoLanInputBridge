@@ -171,6 +171,12 @@ struct Transfer: Identifiable {
     private var port = 0
     private var key = ""
     private var stateInFlight = false
+    private var serviceIdentity: LocalServiceIdentity?
+    private let localServiceSession = LocalServiceSession()
+    private var shuttingDown = false
+    private var restartAttempts = 0
+    private var launchedAt = Date.distantPast
+    private var localConnectionError = false
     private var historyTask: Task<Void, Never>?
     private var wasReady = false
     private var lastTunnelError = ""
@@ -207,6 +213,8 @@ struct Transfer: Identifiable {
     }
 
     func launchService() {
+        guard !shuttingDown, process?.isRunning != true else { return }
+        nativeInput?.stop()
         do { nativeInput = try NativeInputBroker() }
         catch { report("无法启动本机输入服务，请重新打开声笺。"); return }
         let executable = Bundle.main.resourceURL!.appendingPathComponent("bridge-service/bridge-service")
@@ -217,9 +225,19 @@ struct Transfer: Identifiable {
         child.environment?.merge(nativeInput!.environment) { _, new in new }
         child.standardOutput = output
         child.standardError = FileHandle.nullDevice
-        child.terminationHandler = { [weak self] _ in Task { @MainActor in self?.online = false; self?.lastError = "本机服务已停止，请重新打开应用。" } }
+        child.terminationHandler = { [weak self] ended in Task { @MainActor in
+            guard let self, self.process?.processIdentifier == ended.processIdentifier else { return }
+            self.process = nil; self.serviceIdentity = nil; self.port = 0; self.online = false
+            guard !self.shuttingDown else { return }
+            self.lastError = "本机服务已停止，正在重新连接。"
+            guard self.restartAttempts < 3 else { self.lastError = "本机服务未能恢复，请重新打开声笺。"; return }
+            self.restartAttempts += 1
+            try? await Task.sleep(for: .seconds(2))
+            self.launchService()
+        } }
         do {
-            try child.run(); process = child
+            try child.run(); process = child; launchedAt = Date()
+            let childPID = Int(child.processIdentifier)
             let handle = output.fileHandleForReading
             Task.detached { [weak self] in
                 var buffer = Data()
@@ -232,39 +250,46 @@ struct Transfer: Identifiable {
                     }
                     if let line = String(data:buffer,encoding:.utf8)?.split(separator:"\n").first,
                        let data = String(line).data(using:.utf8),
-                       let info = try JSONSerialization.jsonObject(with:data) as? [String:Any],
-                       let port = info["port"] as? Int {
-                        await self?.didStart(port:port)
+                       let info = try JSONSerialization.jsonObject(with:data) as? [String:Any] {
+                        let identity = try LocalServiceIdentity(info, childPID: childPID)
+                        await self?.didStart(identity: identity)
                     } else { await self?.report("服务启动失败，请重新打开应用。") }
                 } catch { await self?.report("无法连接本机服务。") }
             }
         } catch { report("无法启动服务：\(error.localizedDescription)") }
     }
-    private func didStart(port:Int) async {
-        self.port = port
+    private func didStart(identity: LocalServiceIdentity) async {
+        guard process?.isRunning == true, Int(process!.processIdentifier) == identity.pid else { return }
+        self.serviceIdentity = identity; self.port = identity.port
         do { key = try String(contentsOf:dataDirectory.appendingPathComponent("access_key.txt"),encoding:.utf8).trimmingCharacters(in:.whitespacesAndNewlines) }
         catch { report("无法读取本机配对信息。"); return }
         await refresh()
         await loadHistory()
+        timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval:2,repeats:true) { [weak self] _ in Task { @MainActor in await self?.refresh() } }
 
     }
     func report(_ text:String) { lastError = text }
     func api(_ path:String, body:[String:Any]? = nil) async throws -> [String:Any] {
-        guard port > 0 else { throw URLError(.cannotConnectToHost) }
+        guard let identity = serviceIdentity, process?.isRunning == true else { throw LocalServiceError.unavailable }
+        try await identity.verify(session: localServiceSession.session, key: key)
+        guard serviceIdentity == identity, process?.isRunning == true else { throw LocalServiceError.unavailable }
         var request:URLRequest
         if let body {
-            request = URLRequest(url:URL(string:"http://127.0.0.1:\(port)\(path)")!)
+            request = URLRequest(url:URL(string:"http://127.0.0.1:\(identity.port)\(path)")!)
             request.httpMethod = "POST"
             request.setValue("application/json",forHTTPHeaderField:"Content-Type")
             var payload = body; payload["key"] = key
             request.httpBody = try JSONSerialization.data(withJSONObject:payload)
         } else {
             let separator = path.contains("?") ? "&" : "?"
-            request = URLRequest(url:URL(string:"http://127.0.0.1:\(port)\(path)\(separator)key=\(key)")!)
+            request = URLRequest(url:URL(string:"http://127.0.0.1:\(identity.port)\(path)\(separator)key=\(key)")!)
         }
+        request.setValue(identity.instance, forHTTPHeaderField: "X-Shengjian-Instance")
         request.timeoutInterval = 90
-        let (data,response) = try await URLSession.shared.data(for:request)
+        let (data,response) = try await localServiceSession.session.data(for:request)
+        guard serviceIdentity == identity,
+              (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-Shengjian-Instance") == identity.instance else { throw LocalServiceError.identity }
         let result = (try? JSONSerialization.jsonObject(with:data) as? [String:Any]) ?? [:]
         guard (response as? HTTPURLResponse)?.statusCode == 200, result["ok"] as? Bool == true else {
             throw NSError(domain:"Shengjian",code:1,userInfo:[NSLocalizedDescriptionKey: result["error"] as? String ?? "请求未完成，请重试。"])
@@ -277,6 +302,8 @@ struct Transfer: Identifiable {
         do {
             let state = try await api("/desktop/state")
             online = true; allowed = state["accessibility"] as? Bool ?? false
+            if localConnectionError { lastError = ""; localConnectionError = false }
+            if Date().timeIntervalSince(launchedAt) > 30 { restartAttempts = 0 }
             let host = state["host"] as? String ?? "127.0.0.1"
             lanURL = "http://\(host):\(port)/?key=\(key)"
             localURL = state["local_url"] as? String ?? ""
@@ -294,7 +321,10 @@ struct Transfer: Identifiable {
             if let error = connection["error"] as? String, !error.isEmpty, error != lastTunnelError { lastTunnelError = error; lastError = error }
             if selected == "history" && transfers.count <= 30 { await loadHistory() }
             if selected == "machines" { await loadMachines() }
-        } catch { online = false }
+        } catch {
+            online = false; localConnectionError = true
+            lastError = (error as? LocalServiceError)?.localizedDescription ?? LocalServiceError.unavailable.localizedDescription
+        }
     }
     func setPublic(_ value:Bool) async { await setMode(connectionMode, enabled:value) }
     func setMode(_ mode:String, enabled:Bool = true) async {
@@ -471,7 +501,7 @@ struct Transfer: Identifiable {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         NSWorkspace.shared.open(folder)
     }
-    func shutdown() { timer?.invalidate(); nativeInput?.stop(); if let process, process.isRunning { process.terminate(); process.waitUntilExit() } }
+    func shutdown() { shuttingDown = true; timer?.invalidate(); nativeInput?.stop(); if let process, process.isRunning { process.terminate(); process.waitUntilExit() } }
 }
 
 struct Card<Content:View>:View {

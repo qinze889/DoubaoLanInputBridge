@@ -40,6 +40,10 @@ jobs:
         run: |
           xcrun swiftc -parse-as-library native/ShareImport.swift tests/native/ShareImportChecks.swift -o /tmp/shengjian-share-import-checks
           /tmp/shengjian-share-import-checks
+      - name: Verify native local-service identity
+        run: |
+          xcrun swiftc -parse-as-library native/LocalService.swift tests/native/LocalServiceChecks.swift -o /tmp/shengjian-local-service-checks
+          /tmp/shengjian-local-service-checks
       - name: Fetch verified Cloudflare binary
         shell: bash
         run: |

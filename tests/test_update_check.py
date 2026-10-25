@@ -715,6 +715,8 @@ def test_gui_start_server_auto_increments_busy_port(monkeypatch):
             if address[1] == 8765:
                 raise OSError("busy")
             self.address = address
+            self.server_port = address[1]
+            self.instance_id = 'fixture-instance'
 
         def serve_forever(self):
             return None
@@ -740,6 +742,8 @@ def test_gui_start_server_auto_increments_busy_port(monkeypatch):
 
     monkeypatch.setattr(app, "BridgeServer", FakeServer)
     monkeypatch.setattr(app.threading, "Thread", FakeThread)
+    monkeypatch.setattr(app, "is_tcp_port_in_use", lambda port: False)
+    monkeypatch.setattr(app, "wait_for_bridge_server_identity", lambda *args, **kwargs: (True, ''))
     monkeypatch.setattr(app, "read_or_create_access_key", lambda: "new-key")
     monkeypatch.setattr(app.messagebox, "showerror", lambda *args, **kwargs: None)
 
@@ -923,7 +927,7 @@ def test_qt_app_replaces_tk_main_ui_with_modern_preview_cards():
     assert "self.parent_window.regenerate_access_key()" in source
     assert "旧二维码和旧链接会立即失效" in source
     assert "QApplication.clipboard().setText" in source
-    assert "bridge.BridgeServer" in source
+    assert "bridge.create_verified_bridge_service" in source
     assert "def regenerate_access_key" in source
     assert "bridge.write_new_access_key()" in source
     assert "self.server.access_key = self.access_key" in source

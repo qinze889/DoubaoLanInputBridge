@@ -985,39 +985,14 @@ class BridgeQtWindow(QMainWindow):
             return
         self.update_service_controls("starting")
         self.apply_status("stopped", "启动中", "正在启动服务", "正在准备局域网扫码入口。")
-        selected = self.port
-        last_error = ""
-        for candidate in range(selected, selected + bridge.PORT_AUTO_INCREMENT_LIMIT + 1):
-            if bridge.is_tcp_port_in_use(candidate):
-                last_error = f"端口 {candidate} 已被其他服务占用"
-                self.log(f"port {candidate} already in use; trying next port")
-                continue
-            candidate_server = None
-            try:
-                candidate_server = bridge.BridgeServer(
-                    ("0.0.0.0", candidate),
-                    bridge.BridgeRequestHandler,
-                    self.access_key,
-                    self.log_queue,
-                )
-            except OSError as exc:
-                last_error = str(exc)
-                continue
-            threading.Thread(target=candidate_server.serve_forever, daemon=True).start()
-            verified, detail = bridge.wait_for_bridge_server_identity(candidate, os.getpid())
-            if not verified:
-                last_error = f"端口 {candidate} 启动自检失败：{detail}"
-                self.log(last_error)
-                candidate_server.shutdown()
-                candidate_server.server_close()
-                continue
-            self.server = candidate_server
-            self.port = candidate
-            break
-        if not self.server:
+        try:
+            preferred = range(self.port, min(65536, self.port + bridge.PORT_AUTO_INCREMENT_LIMIT)) if self.port else None
+            self.server = bridge.create_verified_bridge_service(self.access_key, preferred, self.log_queue)
+            self.port = self.server.server_port
+        except RuntimeError as exc:
             self.update_service_controls("error")
-            self.apply_status("error", "失败", "服务启动失败", last_error)
-            QMessageBox.critical(self, APP_NAME, last_error)
+            self.apply_status("error", "失败", "服务启动失败", str(exc))
+            QMessageBox.critical(self, APP_NAME, str(exc))
             return
         bridge.refresh_lan_update_manifest_url(self.port)
         self.update_service_controls("running")

@@ -1,7 +1,6 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
   fs,
-  net::TcpListener,
   path::{Path, PathBuf},
   process::Command,
   sync::Mutex,
@@ -13,15 +12,29 @@ use tauri::{
   tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
   Manager, WebviewUrl, WebviewWindowBuilder,
 };
-use tauri_plugin_shell::{process::CommandChild, ShellExt};
-
-const DEFAULT_PORT: u16 = 8765;
-const MAX_PORT: u16 = 8865;
+use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
 
 #[derive(Default)]
 struct BridgeRuntime {
   child: Mutex<Option<CommandChild>>,
   port: Mutex<Option<u16>>,
+  identity: Mutex<Option<ServiceIdentity>>,
+  error: Mutex<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct ServiceIdentity {
+  service: String,
+  protocol: u32,
+  port: u16,
+  pid: u32,
+  #[serde(default)]
+  parent_pid: u32,
+  instance_id: String,
+}
+
+fn owns_service(identity: &ServiceIdentity, pid: u32, onefile: bool) -> bool {
+  identity.pid == pid || (onefile && identity.parent_pid == pid)
 }
 
 #[derive(Serialize)]
@@ -29,6 +42,8 @@ struct BridgeRuntimeInfo {
   running: bool,
   port: Option<u16>,
   key: String,
+  identity: Option<ServiceIdentity>,
+  error: String,
 }
 
 fn access_key_path() -> PathBuf {
@@ -45,37 +60,81 @@ fn read_access_key() -> String {
     .to_string()
 }
 
-fn find_available_port() -> Result<u16, String> {
-  for port in DEFAULT_PORT..=MAX_PORT {
-    if TcpListener::bind(("0.0.0.0", port)).is_ok() {
-      return Ok(port);
-    }
+fn fail_service(app: &tauri::AppHandle, pid: u32, message: &str) {
+  let runtime = app.state::<BridgeRuntime>();
+  let child = if let Ok(mut slot) = runtime.child.lock() {
+    if slot.as_ref().map(|child| child.pid()) == Some(pid) { slot.take() } else { None }
+  } else { None };
+  if let Some(child) = child {
+    if let Ok(mut port) = runtime.port.lock() { *port = None; }
+    if let Ok(mut identity) = runtime.identity.lock() { *identity = None; }
+    if let Ok(mut error) = runtime.error.lock() { *error = message.to_string(); }
+    let _ = terminate_child(child);
   }
-  Err(format!("端口 {DEFAULT_PORT}-{MAX_PORT} 均被占用"))
 }
 
-fn spawn_bridge(app: &tauri::AppHandle, runtime: &BridgeRuntime) -> Result<u16, String> {
+fn spawn_bridge(app: &tauri::AppHandle, runtime: &BridgeRuntime) -> Result<(), String> {
   let mut child_slot = runtime.child.lock().map_err(|_| "服务状态锁异常")?;
-  if child_slot.is_some() {
-    return runtime
-      .port
-      .lock()
-      .map_err(|_| "端口状态锁异常")?
-      .ok_or_else(|| "服务端口未知".to_string());
-  }
-
-  let port = find_available_port()?;
-  let (_events, child) = app
-    .shell()
-    .sidecar("bridge-service")
+  if child_slot.is_some() { return Ok(()); }
+  let (mut events, child) = app.shell().sidecar("bridge-service")
     .map_err(|error| format!("找不到桥接服务：{error}"))?
-    .args(["--server-only", "--port", &port.to_string()])
-    .spawn()
+    .args(["--server-only", "--port", "0"]).spawn()
     .map_err(|error| format!("启动桥接服务失败：{error}"))?;
-
+  let pid = child.pid();
+  *runtime.error.lock().map_err(|_| "服务状态锁异常")? = String::new();
   *child_slot = Some(child);
-  *runtime.port.lock().map_err(|_| "端口状态锁异常")? = Some(port);
-  Ok(port)
+  drop(child_slot);
+  let handle = app.clone();
+  tauri::async_runtime::spawn(async move {
+    let mut ready = false;
+    let mut pending = Vec::new();
+    while let Some(event) = events.recv().await {
+      match event {
+        CommandEvent::Stdout(bytes) if !ready => {
+          pending.extend(bytes);
+          if pending.len() > 4096 { fail_service(&handle, pid, "本机服务启动响应异常"); break; }
+          // The one-file bootloader may take time to unpack. Keep the UI
+          // responsive and publish only a verified, owned child's descriptor.
+          if let Ok(identity) = serde_json::from_slice::<ServiceIdentity>(&pending) {
+            let valid = identity.service == "shengjian.bridge" && identity.protocol == 1
+              && identity.port > 0 && identity.pid > 0 && owns_service(&identity, pid, cfg!(windows))
+              && identity.instance_id.len() == 32
+              && identity.instance_id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+            if !valid { fail_service(&handle, pid, "本机服务身份不匹配"); break; }
+            let state = handle.state::<BridgeRuntime>();
+            if let Ok(slot) = state.child.lock() {
+              if slot.as_ref().map(|child| child.pid()) == Some(pid) {
+                if let Ok(mut port) = state.port.lock() { *port = Some(identity.port); }
+                if let Ok(mut stored) = state.identity.lock() { *stored = Some(identity); }
+              }
+            };
+            ready = true;
+          }
+        }
+        CommandEvent::Terminated(_) => {
+          let state = handle.state::<BridgeRuntime>();
+          if let Ok(mut slot) = state.child.lock() {
+            if slot.as_ref().map(|child| child.pid()) == Some(pid) {
+              *slot = None;
+              if let Ok(mut port) = state.port.lock() { *port = None; }
+              if let Ok(mut identity) = state.identity.lock() { *identity = None; }
+              if let Ok(mut error) = state.error.lock() { *error = "本机服务已停止，请重新启动服务。".into(); }
+            }
+          };
+          break;
+        }
+        _ => {}
+      }
+    }
+  });
+  let watchdog = app.clone();
+  std::thread::spawn(move || {
+    std::thread::sleep(std::time::Duration::from_secs(90));
+    let state = watchdog.state::<BridgeRuntime>();
+    let pending = state.identity.lock().map(|identity| identity.is_none()).unwrap_or(false);
+    if pending { fail_service(&watchdog, pid, "本机服务启动超时，请重新启动服务。"); }
+  });
+  Ok(())
 }
 
 fn terminate_child(child: CommandChild) -> Result<(), String> {
@@ -102,15 +161,19 @@ fn bridge_runtime(runtime: tauri::State<BridgeRuntime>) -> Result<BridgeRuntimeI
     .map_err(|_| "服务状态锁异常")?
     .is_some();
   let port = *runtime.port.lock().map_err(|_| "端口状态锁异常")?;
+  let identity = runtime.identity.lock().map_err(|_| "服务身份锁异常")?.clone();
+  let error = runtime.error.lock().map_err(|_| "服务状态锁异常")?.clone();
   Ok(BridgeRuntimeInfo {
     running,
     port,
     key: read_access_key(),
+    identity,
+    error,
   })
 }
 
 #[tauri::command]
-fn start_bridge(app: tauri::AppHandle, runtime: tauri::State<BridgeRuntime>) -> Result<u16, String> {
+fn start_bridge(app: tauri::AppHandle, runtime: tauri::State<BridgeRuntime>) -> Result<(), String> {
   spawn_bridge(&app, &runtime)
 }
 
@@ -129,6 +192,8 @@ fn stop_runtime(runtime: &BridgeRuntime) -> Result<(), String> {
     terminate_child(child)?;
   }
   *runtime.port.lock().map_err(|_| "端口状态锁异常")? = None;
+  *runtime.identity.lock().map_err(|_| "服务身份锁异常")? = None;
+  *runtime.error.lock().map_err(|_| "服务状态锁异常")? = String::new();
   Ok(())
 }
 
@@ -336,4 +401,25 @@ pub fn run() {
       let _ = stop_runtime(&runtime);
     }
   });
+}
+
+#[cfg(test)]
+mod local_service_tests {
+  use super::*;
+
+  #[test]
+  fn distinguish_direct_process_onefile_worker_and_unrelated_listener() {
+    let mut identity = ServiceIdentity {
+      service: "shengjian.bridge".into(), protocol: 1, port: 54321,
+      pid: 100, parent_pid: 50, instance_id: "0123456789abcdef0123456789abcdef".into(),
+    };
+    assert!(owns_service(&identity, 100, false));
+    // Windows PyInstaller --onefile exposes the bootloader's PID to Tauri;
+    // the Python server is its direct child, not an unrelated same-port app.
+    identity.pid = 101; identity.parent_pid = 100;
+    assert!(owns_service(&identity, 100, true));
+    assert!(!owns_service(&identity, 100, false));
+    identity.parent_pid = 999;
+    assert!(!owns_service(&identity, 100, true));
+  }
 }

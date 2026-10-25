@@ -23,7 +23,7 @@ const path = require('node:path');
    transformCallback:fn=>{callbacks.set(++next,fn);return next;},
    unregisterCallback:id=>callbacks.delete(id),
    invoke:async (cmd,args)=>{
-    if(cmd==='bridge_runtime')return {running:true,port:18700,key:'ui-fixture-only'};
+    if(cmd==='bridge_runtime')return {running:true,port:18700,key:'ui-fixture-only',identity:{service:'shengjian.bridge',protocol:1,port:18700,pid:12345,instance_id:'0123456789abcdef0123456789abcdef'}};
     if(cmd==='plugin:dialog|open')return ['C:\\UI-Fixtures\\项目资料.pdf'];
     if(cmd==='plugin:event|listen')return ++next;
     if(cmd==='plugin:event|unlisten')return;
@@ -45,7 +45,11 @@ const path = require('node:path');
   const req=route.request(),u=new URL(req.url()); const data=req.postDataJSON()||{};
   calls.push({path:u.pathname,method:req.method(),query:Object.fromEntries(u.searchParams),data});
   let result={ok:true}; let status=200;
-  if(u.pathname==='/desktop/state')result={ok:true,version:'1.4.0',port:18700,key:'ui-fixture-only',mobile_url:'https://example.invalid',local_url:'http://192.168.1.8:18700/',host:'Windows',data_dir:'C:\\UI-Fixtures'};
+  if(u.pathname==='/health'){
+   const challenge=req.headers()['x-shengjian-challenge'];
+   result={ok:true,service:'shengjian.bridge',protocol:1,port:18700,pid:12345,instance_id:'0123456789abcdef0123456789abcdef',proof:require('node:crypto').createHmac('sha256','ui-fixture-only').update(`shengjian-local-v1\n${challenge}\n0123456789abcdef0123456789abcdef\n12345\n18700`).digest('hex')};
+  }
+  else if(u.pathname==='/desktop/state')result={ok:true,version:'1.4.0',port:18700,key:'ui-fixture-only',mobile_url:'https://example.invalid',local_url:'http://192.168.1.8:18700/',host:'Windows',data_dir:'C:\\UI-Fixtures'};
   else if(u.pathname==='/desktop/account')result={ok:true,authenticated:false};
   else if(u.pathname==='/desktop/account/login')result={ok:true,authenticated:true};
   else if(u.pathname==='/desktop/account/qr')result={ok:true,authenticated:true,url:'https://example.invalid/console#login=fixture-only',expires_at:Date.now()/1000+120};
@@ -68,7 +72,7 @@ const path = require('node:path');
   else if(u.pathname==='/desktop/peers/invite')result={ok:true,invitation:'shengjian://pair?fixture=only',expires_in:300};
   else if(u.pathname==='/desktop/config')result={ok:true,minimax_configured:false,minimax_model:'',update_url:'',update_source:'github'};
   else if(u.pathname==='/desktop/publish'&&failPublish){result={ok:false,error:'测试：连接已中断，请重试'};status=503;}
-  await route.fulfill({status,contentType:'application/json',headers:{'access-control-allow-origin':'*'},body:JSON.stringify(result)});
+  await route.fulfill({status,contentType:'application/json',headers:{'access-control-allow-origin':'*','access-control-allow-headers':'Content-Type,X-Shengjian-Challenge,X-Shengjian-Instance','access-control-allow-methods':'GET,POST,OPTIONS','access-control-expose-headers':'X-Shengjian-Instance','x-shengjian-instance':'0123456789abcdef0123456789abcdef'},body:JSON.stringify(result)});
  });
  const nav=label=>page.getByRole('navigation').getByRole('button',{name:label,exact:true});
  const checkHeading=async text=>assert.equal(await page.locator('h1').innerText(),text);
@@ -125,8 +129,11 @@ const path = require('node:path');
   await page.keyboard.press('Escape'); failPublish=false;
   await nav('传输记录').click(); await checkHeading('传输记录');
   await page.getByText('项目资料.pdf',{exact:true}).waitFor(); await assertNoOverflow(); await page.locator('.toast').waitFor({state:'hidden'}); await page.screenshot({path:path.join(output, 'history.png')});
+  const openFolder=page.waitForRequest(request=>new URL(request.url()).pathname==='/desktop/open'&&request.method()==='POST');
   await page.getByRole('button',{name:'打开所在目录',exact:true}).click();
-  assert(calls.some(c=>c.path==='/desktop/open'&&c.data.id==='file1'&&c.data.mode==='folder'));
+  const folderRequest=await openFolder;
+  assert.equal(folderRequest.postDataJSON().id,'file1');
+  assert.equal(folderRequest.postDataJSON().mode,'folder');
   await page.getByPlaceholder('搜索文字、文件名、路径或类型').fill('不存在的记录');
   await page.getByText('没有找到相关记录',{exact:true}).waitFor();
   await nav('机器共享').click(); await checkHeading('机器共享');

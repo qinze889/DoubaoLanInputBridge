@@ -2,6 +2,7 @@ import argparse
 import base64
 import ctypes
 import hashlib
+import hmac
 import html
 import ipaddress
 import json
@@ -1967,6 +1968,8 @@ def wait_for_bridge_server_identity(
     expected_pid: int,
     hosts: list[str] | None = None,
     timeout: float = 2.0,
+    expected_instance: str | None = None,
+    access_key: str | None = None,
 ) -> tuple[bool, str]:
     targets = hosts or bridge_probe_hosts()
     deadline = time.monotonic() + timeout
@@ -1976,15 +1979,24 @@ def wait_for_bridge_server_identity(
         for host in targets:
             connection = HTTPConnection(host, int(port), timeout=0.4)
             try:
-                connection.request("GET", "/health")
+                challenge = secrets.token_hex(16)
+                connection.request("GET", "/health", headers={"X-Shengjian-Challenge": challenge})
                 response = connection.getresponse()
-                payload = json.loads(response.read().decode("utf-8"))
+                raw = response.read(16385)
+                if len(raw) > 16384:
+                    raise ValueError("本机服务身份响应过大")
+                payload = json.loads(raw.decode("utf-8"))
                 if response.status != HTTPStatus.OK:
                     raise ValueError(f"{host}:{port} 返回 HTTP {response.status}")
                 if int(payload.get("pid", 0)) != int(expected_pid):
                     raise ValueError(f"{host}:{port} 属于其他进程 PID {payload.get('pid')}")
                 if str(payload.get("version", "")) != APP_VERSION:
                     raise ValueError(f"{host}:{port} 返回其他版本 {payload.get('version')}")
+                if expected_instance is not None:
+                    expected = local_service_proof(access_key or '', challenge, expected_instance, expected_pid, port)
+                    if (payload.get('service') != 'shengjian.bridge' or payload.get('instance_id') != expected_instance
+                            or payload.get('port') != port or not hmac.compare_digest(str(payload.get('proof', '')), expected)):
+                        raise ValueError("本机服务实例不匹配")
             except Exception as exc:
                 all_valid = False
                 last_error = str(exc)
@@ -1995,6 +2007,42 @@ def wait_for_bridge_server_identity(
             return True, ""
         time.sleep(0.08)
     return False, last_error
+
+
+def local_service_proof(key, challenge, instance, pid, port):
+    message = f'shengjian-local-v1\n{challenge}\n{instance}\n{pid}\n{port}'
+    return hmac.new(key.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+
+def create_verified_bridge_service(key, ports=None, log_queue=None):
+    """Bind first, then verify the listener we actually own. Never reuse a peer.
+
+    Port zero lets the kernel allocate atomically; explicit legacy preferences
+    are tried first, with a dynamic fallback when unavailable or racing.
+    """
+    candidates = list(ports) if ports is not None else []
+    candidates += [0] * 4
+    for port in candidates:
+        if not 0 <= port <= 65535 or (port and is_tcp_port_in_use(port)):
+            continue
+        try:
+            candidate = BridgeServer(('0.0.0.0', port), BridgeRequestHandler, key, log_queue)
+        except OSError:
+            continue
+        candidate.service_thread = threading.Thread(target=candidate.serve_forever, daemon=True)
+        candidate.service_thread.start()
+        valid, _ = wait_for_bridge_server_identity(candidate.server_port, os.getpid(), hosts=['127.0.0.1'],
+            expected_instance=candidate.instance_id, access_key=key)
+        if valid:
+            return candidate
+        candidate.shutdown()
+        candidate.server_close()
+    raise RuntimeError('无法建立本机连接，请检查本机网络或防火墙。')
+
+
+def bridge_service_info(server):
+    return {'service': 'shengjian.bridge', 'protocol': 1, 'port': server.server_port,
+            'pid': os.getpid(), 'parent_pid': os.getppid(), 'version': APP_VERSION, 'instance_id': server.instance_id}
 
 
 def write_lan_update_manifest_url(port: int) -> str:
@@ -4034,9 +4082,41 @@ def invalid_access_key_page() -> str:
 </html>'''
 
 
+class _LocalBridgeListener(ThreadingHTTPServer):
+    # Darwin allows a specific listener to shadow a wildcard even when the
+    # wildcard disables reuse. Reserve the exact desktop address ourselves.
+    allow_reuse_address = True
+    allow_reuse_port = False
+
+    def __init__(self, owner):
+        self.owner = owner
+        super().__init__(('127.0.0.1', owner.server_port), owner.RequestHandlerClass)
+
+    def finish_request(self, request, client_address):
+        self.RequestHandlerClass(request, client_address, self.owner)
+
+
 class BridgeServer(ThreadingHTTPServer):
+    # SO_REUSEADDR on macOS permits a later specific-address listener to shadow
+    # our wildcard listener. Windows needs its own exclusive-bind option too.
+    allow_reuse_address = False
+    allow_reuse_port = False
+
+    def server_bind(self):
+        if sys.platform == 'win32' and hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
     def __init__(self, server_address, handler_class, access_key: str, log_queue=None):
+        self.instance_id = secrets.token_hex(16)
+        self.local_listener = None
         super().__init__(server_address, handler_class)
+        if sys.platform == 'darwin' and server_address[0] in ('', '0.0.0.0'):
+            try:
+                self.local_listener = _LocalBridgeListener(self)
+            except OSError:
+                super().server_close()
+                raise
         self.access_key = access_key
         self.log_queue = log_queue
         self.state = {"last_paste_ms": None, "last_error": None, "paste_count": 0}
@@ -4070,7 +4150,18 @@ class BridgeServer(ThreadingHTTPServer):
             try: self.connections.select(self.connections.config['mode'], self.connections.config['enabled'])
             except (OSError, ValueError): self.add_log('连接模式未能恢复，请重新选择连接方式')
 
+    def serve_forever(self, poll_interval=0.5):
+        if self.local_listener:
+            threading.Thread(target=self.local_listener.serve_forever, daemon=True).start()
+        try:
+            super().serve_forever(poll_interval)
+        finally:
+            if self.local_listener:
+                self.local_listener.shutdown()
+
     def server_close(self):
+        if self.local_listener:
+            self.local_listener.server_close()
         if getattr(self, 'agent', None):
             self.agent.stop(persist=False)
         if getattr(self, 'relay', None):
@@ -4099,7 +4190,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         ):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("X-Shengjian-Instance", self.server.instance_id)
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Shengjian-Challenge, X-Shengjian-Instance")
+        self.send_header("Access-Control-Expose-Headers", "X-Shengjian-Instance")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         super().end_headers()
 
@@ -4133,6 +4226,10 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def require_desktop_client(self) -> bool:
         if self.is_loopback_client():
+            instance = self.headers.get('X-Shengjian-Instance')
+            if instance is not None and instance != self.server.instance_id:
+                json_response(self, HTTPStatus.CONFLICT, {'ok': False, 'error': '本机服务实例已变化，请重新连接。'})
+                return False
             return True
         json_response(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": "desktop API is local only"})
         return False
@@ -4184,10 +4281,16 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             with self.server.state_lock:
                 state = dict(self.server.state)
+            identity = bridge_service_info(self.server)
+            challenge = self.headers.get('X-Shengjian-Challenge', '')
+            if self.is_loopback_client() and re.fullmatch('[a-f0-9]{32}', challenge):
+                identity['proof'] = local_service_proof(self.active_access_key(), challenge,
+                    self.server.instance_id, os.getpid(), self.server.server_port)
             json_response(
                 self,
                 HTTPStatus.OK,
                 {
+                    **identity,
                     "ok": True,
                     "name": APP_NAME,
                     "version": APP_VERSION,
@@ -5698,28 +5801,19 @@ class BridgeGui:
         self.sync_service_buttons()
         self.access_key = read_or_create_access_key()
         self.key_var.set(self.access_key)
-        last_error = None
-        selected_port = None
-        for candidate_port in range(port, port + PORT_AUTO_INCREMENT_LIMIT):
-            try:
-                self.server = BridgeServer(("0.0.0.0", candidate_port), BridgeRequestHandler, self.access_key, self.log_queue)
-            except OSError as exc:
-                last_error = exc
-                self.log(f"port {candidate_port} unavailable: {exc}")
-                continue
-            selected_port = candidate_port
-            break
-        if self.server is None or selected_port is None:
-            detail = f"从 {port} 开始连续尝试 {PORT_AUTO_INCREMENT_LIMIT} 个端口仍无法启动：{last_error}"
-            self.set_status("error", "启动失败", detail, "失败")
+        try:
+            preferred = range(port, min(65536, port + PORT_AUTO_INCREMENT_LIMIT)) if port else None
+            self.server = create_verified_bridge_service(self.access_key, preferred, self.log_queue)
+        except RuntimeError as exc:
+            self.set_status("error", "启动失败", str(exc), "失败")
             self.sync_service_buttons()
-            messagebox.showerror(APP_NAME, detail)
+            messagebox.showerror(APP_NAME, str(exc))
             return
+        selected_port = self.server.server_port
+        self.port_var.set(str(selected_port))
         if selected_port != port:
-            self.port_var.set(str(selected_port))
-            self.log(f"port {port} busy; auto switched to {selected_port}")
-        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.server_thread.start()
+            self.log(f"port {port} busy or automatic; auto switched to {selected_port}")
+        self.server_thread = self.server.service_thread
         self.set_status(
             "running",
             "服务运行中",
@@ -6118,23 +6212,24 @@ class BridgeGui:
 
 def run_server_only(port: int) -> None:
     access_key = read_or_create_access_key()
-    refresh_lan_update_manifest_url(port)
-    server = BridgeServer(("0.0.0.0", port), BridgeRequestHandler, access_key)
+    server = create_verified_bridge_service(access_key, [port] if port else None)
+    refresh_lan_update_manifest_url(server.server_port)
     server.agent = agent_runtime.manager(DATA_DIR)
     server.agent.resume()
-    print(f"{APP_ID} listening on {port}", flush=True)
-    print("Pairing links are available in the desktop app; credentials are not logged.")
+    print(json.dumps(bridge_service_info(server)), flush=True)
     try:
-        server.serve_forever()
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
+        server.shutdown()
         server.server_close()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=APP_NAME)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--server-only", action="store_true")
     args = parser.parse_args()
     if args.server_only:

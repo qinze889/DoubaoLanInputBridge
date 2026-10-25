@@ -14,20 +14,7 @@ import agent_runtime
 
 
 def create_service(key, ports=None):
-    for port in ports if ports is not None else range(bridge.DEFAULT_PORT, bridge.DEFAULT_PORT + bridge.PORT_AUTO_INCREMENT_LIMIT):
-        if bridge.is_tcp_port_in_use(port):
-            continue
-        try:
-            candidate = bridge.BridgeServer(('0.0.0.0', port), bridge.BridgeRequestHandler, key)
-        except OSError:
-            continue
-        threading.Thread(target=candidate.serve_forever, daemon=True).start()
-        valid, _ = bridge.wait_for_bridge_server_identity(candidate.server_port, os.getpid(), hosts=['127.0.0.1'])
-        if valid:
-            return candidate
-        candidate.shutdown()
-        candidate.server_close()
-    raise RuntimeError('没有可用端口')
+    return bridge.create_verified_bridge_service(key, ports)
 
 
 def main():
@@ -41,7 +28,7 @@ def main():
     stopping = threading.Event()
     signal.signal(signal.SIGTERM, lambda *args: stopping.set())
     signal.signal(signal.SIGINT, lambda *args: stopping.set())
-    print(json.dumps({'port': server.server_port, 'pid': os.getpid()}), flush=True)
+    print(json.dumps(bridge.bridge_service_info(server)), flush=True)
     parent = os.getppid()
     try:
         while not stopping.wait(1):

@@ -2,7 +2,7 @@ name: Windows client
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feat/shengjian-core-v2]
   workflow_dispatch:
 permissions:
   contents: read
@@ -30,6 +30,8 @@ jobs:
         working-directory: desktop
       - run: npm run test:ui
         working-directory: desktop
+      - name: Reject foreign and stale local service identities
+        run: node scripts/test_local_service_ui.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -70,6 +72,8 @@ jobs:
       - name: Build Windows apps with bundled tunnel
         shell: pwsh
         run: ./scripts/build_tauri.ps1 -PythonExe (Get-Command python).Source
+      - name: Verify sidecar process ownership including one-file bootloader
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
       - name: Verify installed upgrade and two-way transfer
         shell: pwsh
         run: |

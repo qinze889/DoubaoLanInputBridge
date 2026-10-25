@@ -33,8 +33,8 @@ import {
 import './App.css'
 import MachinesDialog from './MachinesDialog'
 import ConnectionPanel, { type ConnectionState } from './ConnectionPanel'
+import { requestLocal, type RuntimeInfo } from './localService'
 
-type RuntimeInfo = { running: boolean; port: number | null; key: string }
 type BridgeState = {
   version: string
   port: number
@@ -167,30 +167,16 @@ function App() {
 
   const apiGet = useCallback(
     async <T,>(path: string, params: Record<string, string | number> = {}) => {
-      if (!baseUrl || !runtime.key) throw new Error('服务尚未就绪')
-      const search = new URLSearchParams({ key: runtime.key })
-      Object.entries(params).forEach(([name, value]) => search.set(name, String(value)))
-      const response = await fetch(`${baseUrl}${path}?${search}`)
-      const payload = await response.json()
-      if (!response.ok || payload.ok === false) throw new Error(payload.error || `HTTP ${response.status}`)
-      return payload as T & { ok: boolean }
+      return requestLocal<T>(runtime, path, undefined, params)
     },
-    [baseUrl, runtime.key],
+    [runtime],
   )
 
   const apiPost = useCallback(
     async <T,>(path: string, data: Record<string, unknown> = {}) => {
-      if (!baseUrl || !runtime.key) throw new Error('服务尚未就绪')
-      const response = await fetch(`${baseUrl}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...data, key: runtime.key }),
-      })
-      const payload = await response.json()
-      if (!response.ok || payload.ok === false) throw new Error(payload.error || `HTTP ${response.status}`)
-      return payload as T & { ok: boolean }
+      return requestLocal<T>(runtime, path, data)
     },
-    [baseUrl, runtime.key],
+    [runtime],
   )
 
   const notify = useCallback((message: string) => {
@@ -205,13 +191,12 @@ function App() {
   }, [])
 
   const loadBridgeState = useCallback(async () => {
-    for (let attempt = 0; attempt < 240; attempt += 1) {
+    for (let attempt = 0; attempt < 480; attempt += 1) {
       const info = await syncRuntime()
+      if (info.error) throw new Error(info.error)
       if (info.running && info.port && info.key) {
         try {
-          const state = await fetch(
-            `http://127.0.0.1:${info.port}/desktop/state?key=${encodeURIComponent(info.key)}`,
-          ).then((response) => response.json())
+          const state = await requestLocal<BridgeState>(info, '/desktop/state')
           if (state.ok) {
             setBridge(state)
             return state as BridgeState
