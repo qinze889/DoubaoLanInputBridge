@@ -9,7 +9,7 @@ if [[ "${SHENGJIAN_BUILD_MODE:-development}" == development ]]; then TASK_NAME="
 if [[ ! -x .venv/bin/python ]]; then
   if command -v uv >/dev/null; then uv venv --python 3.12 .venv; else python3.12 -m venv .venv; fi
 fi
-if command -v uv >/dev/null; then uv pip install --python .venv/bin/python -r requirements-macos.txt; else .venv/bin/python -m pip install -r requirements-macos.txt; fi
+if command -v uv >/dev/null; then uv pip install --python .venv/bin/python -r requirements-macos.txt -r server/requirements-v2.txt aiohttp==3.14.5; else .venv/bin/python -m pip install -r requirements-macos.txt -r server/requirements-v2.txt aiohttp==3.14.5; fi
 .venv/bin/python -m pytest -q tests
 .venv/bin/python scripts/prepare_harness.py
 mkdir -p build/Shengjian.iconset

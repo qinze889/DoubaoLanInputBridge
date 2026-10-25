@@ -58,7 +58,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
-      - run: python scripts/ci_check.py python -m pip install -r requirements-windows.txt
+      - run: python scripts/ci_check.py python -m pip install -r requirements-windows.txt -r server/requirements-v2.txt aiohttp==3.14.5
       - name: Windows regression and protocol tests
         run: python scripts/ci_check.py python -m pytest -q tests
       - name: Fetch verified Cloudflare binary
