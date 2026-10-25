@@ -1,10 +1,13 @@
 """Run two packaged Windows services with synthetic data, no user data."""
 import argparse
 import hashlib
+import hmac
 import http.client
 import json
 import os
-import socket
+import queue
+import secrets
+import threading
 import subprocess
 import tempfile
 import time
@@ -15,33 +18,43 @@ from urllib.parse import urlencode
 class Service:
     def __init__(self, executable, folder):
         self.folder = folder
-        with socket.socket() as listener:
-            listener.bind(('127.0.0.1', 0)); self.port = listener.getsockname()[1]
-        self.process = subprocess.Popen([str(executable), '--server-only', '--port', str(self.port)],
-            env={**os.environ, 'DOUBAO_BRIDGE_DATA_DIR': str(folder),
-                 'DOUBAO_BRIDGE_PUBLIC_URL': f'http://127.0.0.1:{self.port}'},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        env = {**os.environ, 'DOUBAO_BRIDGE_DATA_DIR': str(folder)}
+        env.pop('DOUBAO_BRIDGE_PUBLIC_URL', None)
+        self.process = subprocess.Popen([str(executable), '--server-only', '--port', '0'],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         try:
-            for _ in range(120):
-                if self.process.poll() is not None: raise RuntimeError('packaged service exited')
-                key = folder / 'access_key.txt'
-                if key.exists():
-                    self.key = key.read_text().strip()
-                    try:
-                        if self.call('/desktop/state')['version'] == '1.4.0': return
-                    except (OSError, ValueError, RuntimeError): pass
-                time.sleep(.25)
-            raise RuntimeError('packaged service readiness timeout')
+            lines = queue.Queue()
+            threading.Thread(target=lambda: lines.put(self.process.stdout.readline()), daemon=True).start()
+            info = json.loads(lines.get(timeout=120))
+            assert info.get('service') == 'shengjian.bridge' and info.get('protocol') == 1
+            assert info['pid'] == self.process.pid or (os.name == 'nt' and info.get('parent_pid') == self.process.pid)
+            self.port = info['port']; self.instance_id = info['instance_id']
+            self.key = (folder/'access_key.txt').read_text().strip()
+            # The endpoint closure reads this supported config on demand. No
+            # pre-bind/release race or guessed port is needed for a test peer.
+            (folder/'public_url.txt').write_text(f'http://127.0.0.1:{self.port}', encoding='utf-8')
+            nonce = secrets.token_hex(16)
+            connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+            try:
+                connection.request('GET', '/health', headers={'X-Shengjian-Challenge': nonce})
+                response = connection.getresponse(); health = json.loads(response.read())
+                message = f'shengjian-local-v1\n{nonce}\n{self.instance_id}\n{info["pid"]}\n{self.port}'
+                proof = hmac.new(self.key.encode(), message.encode(), hashlib.sha256).hexdigest()
+                assert response.status == 200 and hmac.compare_digest(health.get('proof', ''), proof)
+            finally:
+                connection.close()
+            assert self.call('/desktop/state')['version'] == '1.4.0'
         except Exception:
             self.close(); raise
 
     def call(self, path, data=None):
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
         try:
+            headers = {"X-Shengjian-Instance": self.instance_id} if hasattr(self, "instance_id") else {}
             if data is None:
-                connection.request('GET', path + '?' + urlencode({'key': self.key}))
+                connection.request('GET', path + '?' + urlencode({'key': self.key}), headers=headers)
             else:
-                connection.request('POST', path, json.dumps({**data, 'key': self.key}).encode(), {'Content-Type': 'application/json'})
+                connection.request('POST', path, json.dumps({**data, 'key': self.key}).encode(), {**headers, 'Content-Type': 'application/json'})
             response = connection.getresponse(); result = json.loads(response.read())
             if response.status != 200 or not result.get('ok'): raise RuntimeError('packaged API rejected request')
             return result
