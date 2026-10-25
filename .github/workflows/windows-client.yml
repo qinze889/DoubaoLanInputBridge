@@ -74,6 +74,8 @@ jobs:
         run: python scripts/ci_check.py pwsh -NoProfile -File scripts/build_tauri.ps1 -PythonExe (Get-Command python).Source
       - name: Verify sidecar process ownership including one-file bootloader
         run: python scripts/ci_check.py cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
+      - name: Verify frozen timezone resources
+        run: python scripts/ci_check.py python scripts/verify_windows_timezones.py desktop/sidecar-dist/bridge-service.exe
       - name: Verify installed upgrade and two-way transfer
         shell: pwsh
         run: |
