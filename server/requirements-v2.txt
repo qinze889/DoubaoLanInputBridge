@@ -4,3 +4,4 @@ httpx==0.28.1
 argon2-cffi==25.1.0
 websockets==17.3
 Pillow==12.3.0
+tzdata==2026.5; sys_platform == "win32"

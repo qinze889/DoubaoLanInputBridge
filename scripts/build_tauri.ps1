@@ -36,6 +36,7 @@ $AgentNode = (Get-Command node -ErrorAction Stop).Source
     --exclude-module qt_app `
     --exclude-module qt_peers `
     --exclude-module PySide6 `
+    --collect-all tzdata `
     --name $SidecarName `
     --distpath $SidecarDist `
     --workpath $SidecarBuild `
@@ -60,6 +61,7 @@ Copy-Item -LiteralPath (Join-Path $SidecarDist "$SidecarName.exe") -Destination 
 
 # Also provide a Qt portable executable with the same sharing protocol.
 & $PythonExe -m PyInstaller --noconfirm --clean --onefile --noconsole `
+    --collect-all tzdata `
     --name "Shengjian-windows-x64" --distpath (Join-Path $ProjectRoot "dist") `
     --workpath (Join-Path $ProjectRoot "build\windows-qt") `
     --specpath (Join-Path $ProjectRoot "build\windows-qt") `

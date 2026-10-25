@@ -1,4 +1,5 @@
 import json
+import os
 import pytest
 from server.desktop_agent.permissions import install_policy
 
@@ -9,7 +10,9 @@ def test_explicit_permission_mode_persists_without_overwriting_other_profile_row
     install_policy(tmp_path,'danger-full-access')
     rows=json.loads(patch.read_text());assert rows[0]==other
     assert rows[1]['insert'][0]['config']['mode']=='danger-full-access'
-    assert patch.stat().st_mode&0o077==0
+    # Windows permissions are ACLs; st_mode synthesizes 0666 for writable files.
+    if os.name != 'nt':
+        assert patch.stat().st_mode&0o077==0
     assert (home/'shengjian-permissions.mjs').is_file()
     install_policy(tmp_path,'workspace-write')
     rows=json.loads(patch.read_text());assert len(rows)==2 and rows[1]['insert'][0]['config']['mode']=='workspace-write'

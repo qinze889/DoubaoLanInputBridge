@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -30,7 +31,9 @@ def test_enrollment_is_scoped_private_and_reusable(tmp_path, monkeypatch):
     package.write_text(json.dumps({'version': agent_runtime.VERSION}))
     config = runtime.prepare(True)
     assert config['text_model'] == 'actual-model'
-    assert runtime.config_path.stat().st_mode & 0o077 == 0
+    # POSIX bits do not describe Windows ACLs.
+    if os.name != 'nt':
+        assert runtime.config_path.stat().st_mode & 0o077 == 0
     assert 'private-device-token' not in str(runtime.status())
     assert any(body == {'grants': ['tasks', 'metrics']} and method == 'PATCH' for _, body, method in calls)
     assert runtime.prepare(True) == config
