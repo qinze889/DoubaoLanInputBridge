@@ -4479,6 +4479,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/files/share",
             "/files/paste",
             "/desktop/key/regenerate",
+            "/desktop/account/status",
             "/desktop/account/login",
             "/desktop/account/register",
             "/desktop/account/logout",

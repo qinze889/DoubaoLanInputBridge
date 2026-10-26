@@ -115,6 +115,31 @@ def test_stop_only_terminates_owned_child(tmp_path):
     assert manager.status()['phase']=='off'
 
 
+def test_quick_tunnel_uses_valid_isolated_config_and_protocol_fallback(monkeypatch, tmp_path):
+    commands = []
+    class Process:
+        pid = 123
+        def poll(self): return None
+        def terminate(self): pass
+        def wait(self, timeout): pass
+    monkeypatch.setattr(mac_tunnel, 'find_binary', lambda configured='': '/test/cloudflared')
+    monkeypatch.setattr(mac_tunnel.subprocess, 'Popen', lambda command, **kwargs: commands.append(command) or Process())
+    manager = mac_tunnel.TunnelManager(tmp_path)
+    monkeypatch.setattr(manager, '_monitor', lambda *args: None)
+    monkeypatch.setattr(manager, '_deadline', lambda *args: None)
+    try:
+        assert manager.start(12345)['phase'] == 'starting'
+        command = commands[0]
+        config = Path(command[command.index('--config') + 1])
+        assert config.parent == tmp_path
+        assert json.loads(config.read_text()) == {}
+        assert command[command.index('--protocol') + 1] == 'auto'
+        assert command[command.index('--url') + 1] == f'http://127.0.0.1:{manager.gateway.server_port}'
+        assert not manager.status()['ready']
+    finally:
+        manager.stop()
+
+
 def test_default_qr_uses_current_cloudflare_address(monkeypatch,tmp_path):
     manager=mac_tunnel.TunnelManager(tmp_path)
     manager.phase='ready';manager.url='https://example-preview.trycloudflare.com'

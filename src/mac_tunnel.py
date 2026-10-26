@@ -137,11 +137,12 @@ class TunnelManager:
             threading.Thread(target=self.gateway.serve_forever, daemon=True).start()
             self.data_dir.mkdir(parents=True, exist_ok=True)
             empty = self.data_dir/'quick-tunnel-config.yml'
-            empty.write_text('# App-owned Quick Tunnel; no account credentials.\n')
+            # A comment-only YAML file is reported as empty by cloudflared.
+            empty.write_text('{}\n', encoding='utf-8')
             # Let cloudflared allocate metrics port; never attach to an unrelated connector.
             command = [binary, 'tunnel', '--config', str(empty), '--no-autoupdate',
                        '--url', f'http://127.0.0.1:{self.gateway.server_port}',
-                       '--metrics', '127.0.0.1:0', '--protocol', 'http2', '--loglevel', 'info']
+                       '--metrics', '127.0.0.1:0', '--protocol', 'auto', '--loglevel', 'info']
             try:
                 self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, encoding='utf-8', errors='replace', bufsize=1, close_fds=True,

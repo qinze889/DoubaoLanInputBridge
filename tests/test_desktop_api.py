@@ -72,18 +72,21 @@ def test_cloud_account_requires_local_authenticated_client(monkeypatch):
     monkeypatch.setattr(gui_app.cloud_account, 'CloudAccount', Account)
     with running_server(monkeypatch) as port:
         assert request(port, 'GET', '/desktop/account')[0] == 401
+        assert request(port, 'POST', '/desktop/account/status', {})[0] == 401
         assert request(port, 'GET', '/desktop/agent')[0] == 401
         assert request(port, 'POST', '/desktop/agent/start', {})[0] == 401
         assert request(port, 'POST', '/desktop/agent/task', {'prompt': 'untrusted'})[0] == 401
         assert request(port, 'POST', '/desktop/account/login', {'username': 'test', 'password': 'secret'})[0] == 401
         assert calls == []
         assert request(port, 'GET', '/desktop/account?key=test-key', headers={'X-Bridge-Public': '1'})[0] == 403
+        assert request(port, 'POST', '/desktop/account/status', {'key': 'test-key'}, headers={'X-Bridge-Public': '1'})[0] == 403
         assert request(port, 'POST', '/desktop/account/qr', {'key': 'test-key'}, headers={'CF-Ray': 'public-request'})[0] == 403
         assert request(port, 'POST', '/desktop/agent/task', {'key': 'test-key', 'prompt': 'untrusted'}, headers={'X-Bridge-Public': '1'})[0] == 403
         assert calls == []
         assert request(port, 'GET', '/desktop/account?key=test-key')[1]['authenticated']
+        assert request(port, 'POST', '/desktop/account/status', {'key': 'test-key'})[1]['authenticated']
         assert request(port, 'POST', '/desktop/account/qr', {'key': 'test-key'})[1]['authenticated']
-        assert calls == ['status', 'qr']
+        assert calls == ['status', 'status', 'qr']
 
 
 def test_desktop_history_supports_global_filter_and_pagination(monkeypatch):
