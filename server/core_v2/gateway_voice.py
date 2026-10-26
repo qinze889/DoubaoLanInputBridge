@@ -18,11 +18,12 @@ from fastapi.responses import Response
 from .store import Fault, digest
 
 REFUNDABLE = {'audio_rejected', 'audio_connection_failed', 'audio_busy', 'tts_login_required'}
+ASR_MAX_RECEIVE_SECONDS = 45
 
 
 async def call(provider, path, **kwargs):
     try:
-        async with provider.client() as client:
+        async with provider.audio_client() as client:
             async with client.stream('POST', provider.config.audio_base + path, timeout=httpx.Timeout(100, connect=10),
                                      headers={'Authorization': 'Bearer ' + provider.config.audio_key}, **kwargs) as response:
                 if response.status_code != 200:
@@ -46,7 +47,7 @@ async def call(provider, path, **kwargs):
                     if len(body) > 16 * 1024 * 1024:
                         raise Fault('audio_response_too_large', 502)
                 return bytes(body)
-    except httpx.ConnectError:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
         raise Fault('audio_connection_failed', 503) from None
     except httpx.HTTPError:
         raise Fault('audio_result_unknown', 502) from None
@@ -98,13 +99,20 @@ def mount_gateway_asr(app, store, provider):
             pcm = bytearray()
             started = time.monotonic()
             while True:
-                message = await asyncio.wait_for(ws.receive(), 35)
+                remaining = ASR_MAX_RECEIVE_SECONDS - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise Fault('voice_receive_timeout', 408)
+                try:
+                    message = await asyncio.wait_for(ws.receive(), min(35, remaining))
+                except asyncio.TimeoutError:
+                    raise Fault('voice_receive_timeout', 408) from None
                 store.authenticate(token)
                 if message['type'] == 'websocket.disconnect':
                     return
                 text = message.get('text')
                 if text is not None:
-                    if len(text) > 256 or json.loads(text).get('type') != 'finish':
+                    control = json.loads(text) if len(text) <= 256 else None
+                    if not isinstance(control, dict) or control.get('type') != 'finish':
                         raise Fault('unsupported_voice_control')
                     break
                 data = message.get('bytes') or b''

@@ -1,6 +1,7 @@
 """Server-only model/voice credentials; bounded streaming and explicit usage states."""
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import json
 import logging
@@ -90,6 +91,7 @@ class Providers:
         self.discovered_ids = set()
         self.models_at = 0
         self.discovery_lock = asyncio.Lock()
+        self._voice_client = None
 
     def readiness(self):
         return {'models': bool(self.config.model_base and self.config.model_key and self.config.text_model),
@@ -102,6 +104,28 @@ class Providers:
     def client(self):
         return httpx.AsyncClient(transport=self.transport, timeout=httpx.Timeout(60,connect=10), trust_env=False,
                                  follow_redirects=False, limits=httpx.Limits(max_connections=16,max_keepalive_connections=8))
+
+    @asynccontextmanager
+    async def voice_lifespan(self):
+        # Keep voice connections separate from long-running model/image requests.
+        if not self.config.audio_base:
+            yield
+            return
+        async with self.client() as client:
+            self._voice_client = client
+            try:
+                yield
+            finally:
+                self._voice_client = None
+
+    @asynccontextmanager
+    async def audio_client(self):
+        if self._voice_client is not None:
+            yield self._voice_client
+        else:
+            # Standalone callers outside the ASGI lifespan still own their client.
+            async with self.client() as client:
+                yield client
 
     async def models(self):
         if not self.readiness()['models']:

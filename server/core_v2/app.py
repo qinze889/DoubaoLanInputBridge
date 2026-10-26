@@ -2,7 +2,7 @@
 import asyncio
 import anyio
 from collections import OrderedDict, deque
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 import json
 import os
 from pathlib import Path
@@ -127,18 +127,23 @@ def create_app(directory, admin_token=None, providers=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        nightly = asyncio.create_task(life.nightly())
-        yield
-        nightly.cancel()
-        await asyncio.gather(nightly, return_exceptions=True)
-        await images.close()
-        await life.close()
-        for ws in list(peers.values()):
+        async with AsyncExitStack() as resources:
+            if providers:
+                await resources.enter_async_context(providers.voice_lifespan())
+            nightly = asyncio.create_task(life.nightly())
             try:
-                await ws.close(code=1012)
-            except (RuntimeError, WebSocketDisconnect):
-                pass
-        store.close()
+                yield
+            finally:
+                nightly.cancel()
+                await asyncio.gather(nightly, return_exceptions=True)
+                await images.close()
+                await life.close()
+                for ws in list(peers.values()):
+                    try:
+                        await ws.close(code=1012)
+                    except (RuntimeError, WebSocketDisconnect):
+                        pass
+                store.close()
 
     app = FastAPI(title='Shengjian Core v2', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store = store

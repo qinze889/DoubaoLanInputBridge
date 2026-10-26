@@ -54,18 +54,18 @@ class VoiceSentences {
     this.pending += text;
     while (this.pending) {
       const minimum = this.first ? 4 : 18;
-      const punctuation = /[。！？!?；;\n，,]/g;
-      let match,
-        cut = 0;
-      while ((match = punctuation.exec(this.pending))) {
-        if (match.index + 1 >= minimum) {
-          cut = match.index + 1;
+      const maximum = this.first ? 12 : 64;
+      let count = 0, units = 0, cut = 0;
+      // A complete answer may arrive in one delta. Bound punctuation scanning
+      // as well as unpunctuated text, without cutting a Unicode surrogate pair.
+      for (const character of this.pending) {
+        count++;
+        units += character.length;
+        if ((count >= minimum && /[。！？!?；;\n，,]/.test(character)) || count === maximum) {
+          cut = units;
           break;
         }
       }
-      const maximum = this.first ? 12 : 64;
-      if (!cut && Array.from(this.pending).length >= maximum)
-        cut = Array.from(this.pending).slice(0, maximum).join("").length;
       if (!cut) {
         if (this.first && this.pending.length >= 4 && !this.timer)
           this.timer = setTimeout(() => {
@@ -97,11 +97,17 @@ class VoiceSentences {
 }
 // Keep the reconstruction filter's history across network packets. Letting each
 // AudioBufferSource resample an isolated 24 kHz packet creates edge transients.
+const pcmFilterCache = new Map();
 class PCMRateConverter {
   constructor(rate) {
     this.rate = rate;
     this.step = 24000 / rate;
     this.reset();
+    const cached = pcmFilterCache.get(rate);
+    if (cached) {
+      this.filters = cached;
+      return;
+    }
     const cutoff = Math.min(1, rate / 24000) * 0.94;
     this.filters = Array.from({ length: 1024 }, (_, phase) => {
       const weights = new Float64Array(32);
@@ -114,6 +120,9 @@ class PCMRateConverter {
       }
       return weights.map((value) => value / sum);
     });
+    // Filters depend only on the output rate; capture history stays per player.
+    if (pcmFilterCache.size >= 4) pcmFilterCache.delete(pcmFilterCache.keys().next().value);
+    pcmFilterCache.set(rate, this.filters);
   }
   reset() {
     this.input = new Float32Array(0);

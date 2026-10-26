@@ -39,6 +39,15 @@ const {
   assert.equal(sentences[0], "这是第一句实时回答。");
   segmenter.flush();
   assert.equal(sentences[1], "后续内容");
+  for (const text of ['长'.repeat(2500)+'。', '😀'.repeat(140)+'，后续回答。']) {
+    const chunks=[];
+    const bounded=new VoiceSentences(part=>chunks.push(part));
+    bounded.push(text);bounded.flush();
+    assert.equal(chunks.join(''),text,'long complete answers keep every character');
+    assert(Array.from(chunks[0]).length<=12,'first punctuation cannot bypass first-audio segment limit');
+    assert(chunks.every(part=>Array.from(part).length<=64),'long sentences stay within TTS segment limit');
+    assert(chunks.every(part=>part.isWellFormed()),'never split Unicode surrogate pairs');
+  }
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "shengjian-stream-ui-"),
   );

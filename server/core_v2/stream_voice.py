@@ -1,6 +1,7 @@
 """Authenticated streaming rev audio bridge with explicit completion accounting."""
 import asyncio
 import base64
+from contextlib import AsyncExitStack
 import json
 import math
 import logging
@@ -15,7 +16,21 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import WebSocketException
 
 from .store import Fault, digest
-from .gateway_voice import REFUNDABLE
+from .gateway_voice import ASR_MAX_RECEIVE_SECONDS, REFUNDABLE
+
+
+class SpeechResponse(StreamingResponse):
+    def __init__(self, *args, resources, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.resources = resources
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Also covers disconnects before the body iterator starts.
+            with anyio.CancelScope(shield=True):
+                await self.resources.aclose()
 
 
 def encoded(item):
@@ -59,9 +74,13 @@ def mount_stream_asr(app, store, provider):
                     async for raw in upstream:
                         store.authenticate(token)
                         event = json.loads(raw)
+                        if not isinstance(event, dict):
+                            raise Fault('invalid_audio_event', 502)
                         kind = event.get('type')
                         if kind == 'error':
                             code = event.get('error')
+                            if not isinstance(code, str):
+                                code = 'audio_result_unknown'
                             if code in REFUNDABLE and not received:
                                 sent = 0
                             raise Fault(code if code in REFUNDABLE else 'audio_result_unknown', 502)
@@ -86,13 +105,20 @@ def mount_stream_asr(app, store, provider):
                     await asyncio.wait_for(ready.wait(), 20)
                     clock = time.monotonic()
                     while True:
-                        message = await asyncio.wait_for(ws.receive(), 35)
+                        remaining = ASR_MAX_RECEIVE_SECONDS - (time.monotonic() - clock)
+                        if remaining <= 0:
+                            raise Fault('voice_receive_timeout', 408)
+                        try:
+                            message = await asyncio.wait_for(ws.receive(), min(35, remaining))
+                        except asyncio.TimeoutError:
+                            raise Fault('voice_receive_timeout', 408) from None
                         store.authenticate(token)
                         if message['type'] == 'websocket.disconnect':
                             raise WebSocketDisconnect()
                         if message.get('text') is not None:
                             text = message['text']
-                            if len(text) > 256 or json.loads(text).get('type') != 'finish':
+                            control = json.loads(text) if len(text) <= 256 else None
+                            if not isinstance(control, dict) or control.get('type') != 'finish':
                                 raise Fault('unsupported_voice_control')
                             await upstream.send(text)
                             return
@@ -139,38 +165,39 @@ async def streaming_speech(provider, store, uid, body):
         raise Fault('streaming_voice_not_configured', 503)
     units = math.ceil(len(body.input) / 100)
     store.reserve(uid, body.request_id, units, digest(body.input))
-    client = provider.client()
+    resources = AsyncExitStack()
     try:
+        client = await resources.enter_async_context(provider.audio_client())
         upstream = await client.send(client.build_request('POST', provider.config.audio_base + '/audio/speech/stream',
             headers={'Authorization': 'Bearer ' + provider.config.audio_key},
             json={'model': 'doubao-voice/tts', 'input': body.input, 'voice': 'alloy'}), stream=True)
-    except httpx.ConnectError:
-        await client.aclose()
-        store.settle(uid, body.request_id, 0)
-        raise Fault('audio_connection_failed', 503) from None
-    except httpx.HTTPError:
-        await client.aclose()
-        raise Fault('audio_result_unknown', 502) from None
-    if upstream.status_code != 200:
-        code = 'audio_rejected' if 400 <= upstream.status_code < 500 else 'audio_result_unknown'
-        raw = bytearray()
-        try:
-            async for chunk in upstream.aiter_bytes():
-                raw.extend(chunk)
-                if len(raw) > 8192:
-                    break
-            value = json.loads(raw)
-            known = value.get('error', {}).get('code')
-            if known in REFUNDABLE:
-                code = known
-        except (ValueError, AttributeError, TypeError, httpx.HTTPError):
-            pass
-        finally:
-            await upstream.aclose()
-            await client.aclose()
-        if code in REFUNDABLE:
+        resources.push_async_callback(upstream.aclose)
+        if upstream.status_code != 200:
+            code = 'audio_rejected' if 400 <= upstream.status_code < 500 else 'audio_result_unknown'
+            raw = bytearray()
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    raw.extend(chunk)
+                    if len(raw) > 8192:
+                        break
+                value = json.loads(raw)
+                known = value.get('error', {}).get('code')
+                if known in REFUNDABLE:
+                    code = known
+            except (ValueError, AttributeError, TypeError, httpx.HTTPError):
+                pass
+            if code in REFUNDABLE:
+                store.settle(uid, body.request_id, 0)
+            raise Fault(code, 503 if code in {'audio_busy', 'tts_login_required'} else 502)
+    except BaseException as exc:
+        with anyio.CancelScope(shield=True):
+            await resources.aclose()
+        if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
             store.settle(uid, body.request_id, 0)
-        raise Fault(code, 503 if code in {'audio_busy', 'tts_login_required'} else 502)
+            raise Fault('audio_connection_failed', 503) from None
+        if isinstance(exc, httpx.HTTPError):
+            raise Fault('audio_result_unknown', 502) from None
+        raise
     async def generate():
         total = 0
         complete = False
@@ -179,7 +206,8 @@ async def streaming_speech(provider, store, uid, body):
         pending = ''
         upstream_reason = ''
         try:
-            async for chunk in upstream.aiter_bytes():
+            chunks = upstream.aiter_bytes()
+            async for chunk in chunks:
                 pending += decoder.decode(chunk)
                 while '\n' in pending:
                     raw, pending = pending.split('\n', 1)
@@ -188,9 +216,13 @@ async def streaming_speech(provider, store, uid, body):
                     if not raw:
                         continue
                     item = json.loads(raw)
+                    if not isinstance(item, dict):
+                        raise Fault('invalid_audio_event', 502)
                     kind = item.get('type')
                     if kind == 'error':
                         code = item.get('error')
+                        if not isinstance(code, str):
+                            code = 'audio_result_unknown'
                         if code in REFUNDABLE | {'tts_incomplete','tts_session_rejected','audio_result_unknown','audio_result_too_large'}:
                             upstream_reason=code
                         if code in REFUNDABLE and not total:
@@ -212,6 +244,17 @@ async def streaming_speech(provider, store, uid, body):
                         store.settle(uid, body.request_id, units)
                         complete = True
                         yield encoded({'type': kind})
+                        # Consume HTTP EOF so the next sentence can reuse the
+                        # connection. A malformed open-ended tail must not stall it.
+                        try:
+                            async with asyncio.timeout(.25):
+                                trailing = 0
+                                async for tail in chunks:
+                                    trailing += len(tail)
+                                    if trailing > 8192:
+                                        break
+                        except (asyncio.TimeoutError, httpx.HTTPError):
+                            pass
                         return
                 if len(pending)>128*1024:
                     raise Fault('audio_response_too_large',502)
@@ -221,8 +264,4 @@ async def streaming_speech(provider, store, uid, body):
             logging.getLogger(__name__).warning('voice_tts_end code=%s cause=%s pcm_bytes=%s',
                 exc.code if isinstance(exc,Fault) else type(exc).__name__,upstream_reason or 'transport_or_parse',total)
             yield encoded({'type': 'error', 'error': exc.code if isinstance(exc, Fault) else 'audio_result_unknown'})
-        finally:
-            with anyio.CancelScope(shield=True):
-                await upstream.aclose()
-                await client.aclose()
-    return StreamingResponse(generate(), media_type='application/x-ndjson', headers={'X-Usage-ID': body.request_id, 'X-Accel-Buffering': 'no'})
+    return SpeechResponse(generate(), resources=resources, media_type='application/x-ndjson', headers={'X-Usage-ID': body.request_id, 'X-Accel-Buffering': 'no'})

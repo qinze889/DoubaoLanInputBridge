@@ -81,6 +81,8 @@ const errors = {
   usage_already_submitted: "这项请求已提交，请查看原结果。",
   utterance_too_long: "这段录音已达到 30 秒，请分句录制。",
   voice_connection_ended: "语音连接中断，请重新录音。",
+  voice_receive_timeout: "这次语音接收等待过久，请重新录音。",
+  invalid_audio_event: "语音服务返回异常，请稍后重试。",
   voice_connection_slow:"语音连接等待过久或网络阻塞，请重试；尚未发送文字任务。",
   qr_expired: "二维码已使用或已过期，请在电脑上刷新后重新扫描。",
 };

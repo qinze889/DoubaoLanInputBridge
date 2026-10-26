@@ -1,6 +1,11 @@
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 import json
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 import pytest
 pytest.importorskip('fastapi')
 import httpx
@@ -141,3 +146,154 @@ def test_coalesced_network_chunk_keeps_each_audio_record_and_total_accounting(tm
         assert sum(item['type']=='audio.chunk' for item in result)==120
         assert result[-1]['type']=='audio.finished'
         assert app.state.store.wallet(user['user_id'])=={'balance':99,'reserved':0}
+
+
+@pytest.mark.parametrize('pooled', [False, True])
+def test_voice_requests_reuse_tcp_connection_and_close_on_shutdown(tmp_path, pooled):
+    ports = []
+    disconnected = threading.Event()
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+        def log_message(self, *args): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            ports.append(self.client_address[1])
+            if self.path.endswith('/stream'):
+                data = b'{"type":"audio.chunk","data":"AAA="}\n{"type":"audio.finished"}\n'
+            else:
+                data = b'ID3fixture'
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        def finish(self):
+            super().finish()
+            disconnected.set()
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    provider = Providers(ProviderConfig(audio_base=f'http://127.0.0.1:{server.server_port}/v1', audio_key='fixture', audio_stream=True))
+    if not pooled:
+        @asynccontextmanager
+        async def no_pool(): yield
+        provider.voice_lifespan = no_pool
+    app = create_app(tmp_path, admin_token='admin-'+'x'*40, providers=provider)
+    user = app.state.store.register('pool-user', 'pool-password-123', app.state.store.invite(100))
+    try:
+        with TestClient(app) as client:
+            for index in range(6):
+                path = '/voice/speech' + ('/stream' if index % 2 else '')
+                result = client.post(PREFIX+path, headers={'Authorization':'Bearer '+user['token']},
+                                     json={'input':'复用连接', 'request_id':f'voice-pool-request-{index}'})
+                assert result.status_code == 200
+                if index % 2:
+                    assert json.loads(result.text.splitlines()[-1])['type'] == 'audio.finished'
+            assert len(ports) == 6 and len(set(ports)) == (1 if pooled else 6)
+            if pooled:
+                assert not disconnected.is_set()
+            assert app.state.store.wallet(user['user_id']) == {'balance':94, 'reserved':0}
+        assert disconnected.wait(2), 'app shutdown must close the pooled connection'
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_cancel_before_stream_body_closes_response_but_preserves_pool(tmp_path):
+    from server.core_v2.stream_voice import streaming_speech
+    closed = []
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            pytest.fail('body must not start after response headers are cancelled')
+            yield b''
+        async def aclose(self): closed.append(True)
+    provider = Providers(ProviderConfig(audio_base='http://127.0.0.1:1/v1', audio_key='fixture', audio_stream=True),
+                         httpx.MockTransport(lambda request: httpx.Response(200, stream=Stream())))
+    app = create_app(tmp_path, admin_token='admin-'+'x'*40, providers=provider)
+    user = app.state.store.register('cancel-user', 'cancel-password-123', app.state.store.invite(100))
+    async def run():
+        async with provider.voice_lifespan():
+            client = provider._voice_client
+            response = await streaming_speech(provider, app.state.store, user['user_id'],
+                SimpleNamespace(input='不要重播', request_id='cancel-before-body-request'))
+            async def send(message): raise asyncio.CancelledError()
+            async def receive(): await asyncio.Future()
+            with pytest.raises(asyncio.CancelledError):
+                await response({'type':'http','asgi':{'spec_version':'2.4'}}, receive, send)
+            assert closed == [True] and not client.is_closed
+        assert client.is_closed
+    try:
+        asyncio.run(run())
+        # The synthesis was dispatched: uncertain completion must not be retried or refunded.
+        assert app.state.store.wallet(user['user_id']) == {'balance':99,'reserved':1}
+    finally:
+        app.state.store.close()
+
+
+@pytest.mark.parametrize('trickle', [False, True])
+def test_asr_receive_deadline_survives_trickle_and_refunds_only_unsent_audio(tmp_path, monkeypatch, trickle):
+    import server.core_v2.stream_voice as module
+    monkeypatch.setattr(module, 'ASR_MAX_RECEIVE_SECONDS', .15)
+    closed = []
+    class Link:
+        def __init__(self): self.first = True
+        def __aiter__(self): return self
+        async def __anext__(self):
+            if self.first:
+                self.first = False
+                return '{"type":"asr.ready"}'
+            await asyncio.Future()
+        async def send(self, value): pass
+    class Connection:
+        async def __aenter__(self): return Link()
+        async def __aexit__(self, *args): closed.append(True)
+    monkeypatch.setattr(module, 'connect', lambda *args, **kwargs: Connection())
+    app, user = setup(tmp_path, lambda request: pytest.fail('unexpected HTTP'))
+    with TestClient(app) as client:
+        started = time.monotonic()
+        with client.websocket_connect(PREFIX+'/voice/asr/stream') as ws:
+            ws.send_json({'token':user['token'], 'request_id':'bounded-asr-receive-deadline'})
+            assert ws.receive_json()['type'] == 'asr.ready'
+            if trickle:
+                for _ in range(3):
+                    ws.send_bytes(b'\0'*320)
+                    time.sleep(.02)
+            assert ws.receive_json()['error'] == 'voice_receive_timeout'
+        assert time.monotonic()-started < 2 and closed == [True]
+        assert app.state.store.wallet(user['user_id']) == ({'balance':70,'reserved':30} if trickle else {'balance':100,'reserved':0})
+
+
+@pytest.mark.parametrize('event', [[], {'type':'error','error':{}}, {'type':'error','error':[]}])
+def test_malformed_audio_event_fails_cleanly_without_false_settlement(tmp_path, event):
+    app, user = setup(tmp_path, lambda request: httpx.Response(200, content=json.dumps(event)+'\n'))
+    with TestClient(app) as client:
+        result = client.post(PREFIX+'/voice/speech/stream', headers={'Authorization':'Bearer '+user['token']},
+                             json={'input':'验证异常', 'request_id':'invalid-audio-event-id'})
+        assert result.status_code == 200 and result.json()['type'] == 'error'
+        assert app.state.store.wallet(user['user_id']) == {'balance':99,'reserved':1}
+
+
+def test_completed_audio_does_not_wait_indefinitely_for_http_eof(tmp_path):
+    closed = []
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"type":"audio.chunk","data":"AAA="}\n{"type":"audio.finished"}\n'
+            await asyncio.Future()
+        async def aclose(self): closed.append(True)
+    app, user = setup(tmp_path, lambda request: httpx.Response(200, stream=Stream()))
+    with TestClient(app) as client:
+        started = time.monotonic()
+        result = client.post(PREFIX+'/voice/speech/stream', headers={'Authorization':'Bearer '+user['token']},
+                             json={'input':'收尾验证', 'request_id':'bounded-audio-http-eof'})
+        assert json.loads(result.text.splitlines()[-1])['type'] == 'audio.finished'
+        assert time.monotonic()-started < 2 and closed == [True]
+        assert app.state.store.wallet(user['user_id']) == {'balance':99,'reserved':0}
+
+
+@pytest.mark.parametrize('failure', [httpx.ConnectTimeout, httpx.PoolTimeout])
+def test_pre_dispatch_timeout_releases_reservation(tmp_path, failure):
+    def upstream(request): raise failure('fixture connection never dispatched')
+    app, user = setup(tmp_path, upstream)
+    with TestClient(app) as client:
+        result = client.post(PREFIX+'/voice/speech/stream', headers={'Authorization':'Bearer '+user['token']},
+                             json={'input':'未发送', 'request_id':'timeout-before-dispatch'})
+        assert result.status_code == 503 and result.json()['error'] == 'audio_connection_failed'
+        assert app.state.store.wallet(user['user_id']) == {'balance':100,'reserved':0}

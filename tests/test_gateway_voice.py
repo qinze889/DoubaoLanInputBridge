@@ -95,3 +95,16 @@ def test_documented_pre_execution_gateway_failure_releases_reservation(tmp_path,
         assert r.status_code==503 and r.json()['error']==code
         assert 'private gateway detail' not in r.text
         assert app.state.store.wallet(user['user_id'])=={'balance':100,'reserved':0}
+
+
+def test_legacy_asr_receive_deadline_releases_undispatched_audio(tmp_path, monkeypatch):
+    import server.core_v2.gateway_voice as module
+    monkeypatch.setattr(module, 'ASR_MAX_RECEIVE_SECONDS', .1)
+    app, user = setup(tmp_path, lambda request: pytest.fail('uncompleted audio must not be sent'))
+    with TestClient(app) as client:
+        with client.websocket_connect(PREFIX+'/voice/asr') as ws:
+            ws.send_json({'token':user['token'], 'request_id':'bounded-legacy-asr-id'})
+            assert ws.receive_json()['type'] == 'asr.ready'
+            ws.send_bytes(b'\0'*320)
+            assert ws.receive_json()['error'] == 'voice_receive_timeout'
+        assert app.state.store.wallet(user['user_id']) == {'balance':100,'reserved':0}

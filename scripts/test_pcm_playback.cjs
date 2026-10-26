@@ -10,6 +10,11 @@ function convert(rate,size) {
   return Float32Array.from(parts.flatMap(part=>Array.from(part)));
 }
 (async()=>{
+  const first=new PCMRateConverter(48000),second=new PCMRateConverter(48000);
+  assert.strictEqual(first.filters,second.filters,'reuse unchanged filter coefficients between replies');
+  first.push(source.slice(0,100));
+  assert.equal(second.received,0,'resampling history must never leak across replies');
+  assert.notStrictEqual(new PCMRateConverter(44100).filters,first.filters,'different output rates use different filters');
   for(const rate of [16000,24000,44100,48000]) {
     const whole=convert(rate,source.length);
     assert.equal(whole.length,rate,'no dropped or duplicated tail samples');
