@@ -39,5 +39,4 @@ button,.shared-file-link,.shared-text-item { background:#2c2c2e!important; }
 
 def apply(page):
     page = page.replace('</head>', STYLE+'</head>', 1)
-    page = page.replace('<main class="app-shell">', '<main class="app-shell"><header class="ios-brand"><span class="ios-online">● 已连接到 Mac</span><h1>声笺</h1><p>随手说，随处写。</p></header>', 1)
     return page
