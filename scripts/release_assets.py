@@ -57,6 +57,50 @@ def stage_public_installers(windows_root, macos_root, output, version):
     assert {p.name for p in output.iterdir()} == {name for _, name in public_assets}, 'Release must contain exactly two installers'
     return [name for _, name in public_assets]
 
+def release_body(commit):
+    return (f'Windows / macOS verified CI release. Source SHA: {commit}. '
+            'Windows update: open 声笺 → 设置 → 检查更新.')
+
+
+def recoverable_draft_id(releases, tag, commit):
+    """Permit recovery only of this workflow's unpublished draft on an ancestor."""
+    assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag), 'Invalid release tag'
+    assert re.fullmatch(r'[0-9a-f]{40}', commit), 'Invalid requested commit'
+    matches = [release for release in releases if release.get('tag_name') == tag]
+    assert len(matches) <= 1, 'Multiple releases use the requested tag'
+    if not matches:
+        return None
+    release = matches[0]
+    assert release.get('draft') is True and release.get('published_at') is None, 'Never replace a published release'
+    assert release.get('prerelease') is False and not release.get('immutable'), 'Unexpected release state'
+    assert release.get('author', {}).get('login') == 'github-actions[bot]', 'Draft was not created by this workflow'
+    previous = release.get('target_commitish', '')
+    assert re.fullmatch(r'[0-9a-f]{40}', previous), 'Draft target must be an exact commit'
+    assert release.get('name') == f'声笺 {tag[1:]}', 'Unexpected draft title'
+    assert release.get('body') == release_body(previous), 'Draft provenance differs'
+    expected = {f'Shengjian-{tag[1:]}-windows-x64-setup.exe', f'Shengjian-{tag[1:]}-mac-arm64.dmg'}
+    names = [asset['name'] for asset in release.get('assets', [])]
+    assert len(names) == len(set(names)) and set(names) <= expected, 'Unexpected draft assets'
+    assert type(release.get('id')) is int and release['id'] > 0, 'Invalid draft ID'
+    subprocess.run(['git', 'merge-base', '--is-ancestor', previous, commit], check=True)
+    return release['id']
+
+
+def verify_uploaded_installers(release, tag, commit, staged):
+    """Before publication, bind both uploaded bytes to the validated local files."""
+    assert release['tag_name'] == tag and release['target_commitish'] == commit, 'Draft source differs'
+    assert release['draft'] is True and release['prerelease'] is False, 'Release is not a stable draft'
+    assert release.get('published_at') is None, 'Release was already published'
+    expected = {f'Shengjian-{tag[1:]}-windows-x64-setup.exe', f'Shengjian-{tag[1:]}-mac-arm64.dmg'}
+    assets = release['assets']
+    assert len(assets) == 2 and {asset['name'] for asset in assets} == expected, 'Release must contain exactly two installers'
+    for asset in assets:
+        path = staged / asset['name']
+        assert path.is_file() and not path.is_symlink(), 'Missing staged installer'
+        assert asset['state'] == 'uploaded' and asset['size'] == path.stat().st_size, 'Upload is incomplete'
+        assert asset.get('digest') == 'sha256:' + sha256(path), 'Uploaded installer checksum differs'
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--tag', required=True)

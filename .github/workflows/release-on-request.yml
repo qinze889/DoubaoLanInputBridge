@@ -64,15 +64,26 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write(f'tag={tag}\nversion={version}\ncommit={sha}\n')
           PY
-      - name: Verify main HEAD and release uniqueness
+      - name: Verify main HEAD, tag absence and recoverable draft
+        id: existing
         env:
           TAG: ${{ steps.request.outputs.tag }}
           SHA: ${{ steps.request.outputs.commit }}
         shell: bash
         run: |
+          set -euo pipefail
           test "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" = "$SHA" || { echo 'main moved after release request'; exit 1; }
-          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then echo 'Release already exists'; exit 1; fi
-          if gh api "repos/$GH_REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then echo 'Git tag already exists'; exit 1; fi
+          gh api "repos/$GH_REPO/git/matching-refs/tags/$TAG" > /tmp/tag-refs.json
+          jq -e --arg ref "refs/tags/$TAG" 'all(.[]; .ref != $ref)' /tmp/tag-refs.json >/dev/null
+          gh api --paginate "repos/$GH_REPO/releases?per_page=100" | jq --slurp 'add' > /tmp/releases.json
+          python - <<'PY'
+          import json, os, pathlib
+          from scripts.release_assets import recoverable_draft_id
+          releases = json.loads(pathlib.Path('/tmp/releases.json').read_text())
+          draft_id = recoverable_draft_id(releases, os.environ['TAG'], os.environ['SHA'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'draft_id={draft_id or ""}\n')
+          PY
           CURRENT_TAG="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
           python - "$CURRENT_TAG" "$TAG" <<'PY'
           import re,sys
@@ -129,17 +140,55 @@ jobs:
           TAG: ${{ steps.request.outputs.tag }}
           SHA: ${{ steps.request.outputs.commit }}
           VERSION: ${{ steps.request.outputs.version }}
+          EXISTING_DRAFT_ID: ${{ steps.existing.outputs.draft_id }}
         shell: bash
         run: |
-          gh release create "$TAG" --repo "$GH_REPO" --target "$SHA" --draft \
-            --title "声笺 $VERSION" \
-            --notes "Windows / macOS verified CI release. Source SHA: $SHA. Windows update: open 声笺 → 设置 → 检查更新."
+          set -euo pipefail
+          test "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" = "$SHA"
+          gh api "repos/$GH_REPO/git/matching-refs/tags/$TAG" > /tmp/tag-refs.json
+          jq -e --arg ref "refs/tags/$TAG" 'all(.[]; .ref != $ref)' /tmp/tag-refs.json >/dev/null
+          if test -n "$EXISTING_DRAFT_ID"; then
+            # Only discard our verified, unpublished draft after new CI artifacts pass.
+            gh api "repos/$GH_REPO/releases/$EXISTING_DRAFT_ID" > /tmp/existing-draft.json
+            python - <<'PY'
+          import json, os, pathlib
+          from scripts.release_assets import recoverable_draft_id
+          release = json.loads(pathlib.Path('/tmp/existing-draft.json').read_text())
+          draft_id = recoverable_draft_id([release], os.environ['TAG'], os.environ['SHA'])
+          assert draft_id == int(os.environ['EXISTING_DRAFT_ID']), 'Draft identity changed'
+          previous = next(item for item in json.loads(pathlib.Path('/tmp/releases.json').read_text()) if item['id'] == draft_id)
+          assert release['target_commitish'] == previous['target_commitish'], 'Draft target changed'
+          assert release['updated_at'] == previous['updated_at'], 'Draft changed after preflight'
+          PY
+            gh api --method DELETE "repos/$GH_REPO/releases/$EXISTING_DRAFT_ID"
+          fi
+          python - <<'PY'
+          import json, os, pathlib
+          from scripts.release_assets import release_body
+          payload = dict(tag_name=os.environ['TAG'], target_commitish=os.environ['SHA'],
+                         draft=True, prerelease=False, name=f"声笺 {os.environ['VERSION']}",
+                         body=release_body(os.environ['SHA']))
+          pathlib.Path('/tmp/new-release.json').write_text(json.dumps(payload), encoding='utf-8')
+          PY
+          gh api --method POST "repos/$GH_REPO/releases" --input /tmp/new-release.json > /tmp/created-release.json
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' /tmp/created-release.json)"
           gh release upload "$TAG" release-assets/* --repo "$GH_REPO"
-          gh api "repos/$GH_REPO/releases/tags/$TAG" > /tmp/verified-draft.json
-          jq -e --arg win "Shengjian-$VERSION-windows-x64-setup.exe" --arg mac "Shengjian-$VERSION-mac-arm64.dmg" \
-            '([.assets[].name] | sort) == ([$win, $mac] | sort) and .draft == true' \
-            /tmp/verified-draft.json >/dev/null
-          gh release edit "$TAG" --repo "$GH_REPO" --draft=false --latest
+          # The tags endpoint only returns published releases. Read drafts by numeric ID.
+          gh api "repos/$GH_REPO/releases/$release_id" > /tmp/verified-draft.json
+          python - <<'PY'
+          import json, os, pathlib
+          from scripts.release_assets import verify_uploaded_installers
+          release = json.loads(pathlib.Path('/tmp/verified-draft.json').read_text())
+          created = json.loads(pathlib.Path('/tmp/created-release.json').read_text())
+          assert release['id'] == created['id'], 'Release identity changed'
+          verify_uploaded_installers(release, os.environ['TAG'], os.environ['SHA'], pathlib.Path('release-assets'))
+          PY
+          test "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" = "$SHA"
+          gh api --method PATCH "repos/$GH_REPO/releases/$release_id" -F draft=false -f make_latest=true > /tmp/published-release.json
+          jq -e --arg tag "$TAG" --arg sha "$SHA" \
+            '.tag_name == $tag and .target_commitish == $sha and .draft == false and .prerelease == false' \
+            /tmp/published-release.json >/dev/null
+          test "$(gh api "repos/$GH_REPO/releases/latest" --jq .id)" = "$release_id"
       - name: Report release URL to request Issue
         env:
           TAG: ${{ steps.request.outputs.tag }}
