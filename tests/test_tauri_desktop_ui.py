@@ -124,7 +124,7 @@ def test_sidebar_surfaces_update_entry_point():
     source = APP_SOURCE.read_text(encoding="utf-8")
 
     assert 'className="update-indicator"' in source
-    assert "有新版本 {availableUpdate.version}" in source
+    assert "新版本 {availableUpdate.version} · 一键更新" in source
     assert "点击立即更新" in source
     assert "onClick={() => void installAvailableUpdate()}" in source
 
@@ -143,3 +143,12 @@ def test_manage_dialog_hides_fixed_update_source():
     assert "setUpdateUrl" not in source
     assert "update_url: updateUrl" not in source
     assert "更新源由发布端统一管理" in source
+
+def test_sidebar_status_card_can_check_updates_without_opening_settings():
+    source = APP_SOURCE.read_text(encoding='utf-8')
+    css = APP_STYLES.read_text(encoding='utf-8')
+    assert 'checkUpdateFromSidebar' in source
+    assert "('/desktop/update', { refresh: 1 })" in source
+    assert 'className="sidebar-check-update"' in source
+    assert '新版本 {availableUpdate.version} · 一键更新' in source
+    assert '.sidebar-footer .update-indicator' in css

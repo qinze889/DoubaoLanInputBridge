@@ -73,6 +73,19 @@ jobs:
       - name: Build Windows Tauri installer with bundled tunnel
         shell: pwsh
         run: ./scripts/build_tauri.ps1 -PythonExe (Get-Command python).Source
+      - name: Verify mobile Web at small viewport sizes
+        shell: pwsh
+        run: |
+          Push-Location desktop
+          try { npx playwright install chromium } finally { Pop-Location }
+          node scripts/smoke_mobile_web_ui.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Shengjian-mobile-ui
+          path: build/mobile-ui-check/phone-*.png
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Verify installed upgrade and two-way transfer
         shell: pwsh
         run: |

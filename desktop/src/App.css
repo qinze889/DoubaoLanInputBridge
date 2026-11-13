@@ -258,6 +258,25 @@ nav { display: grid; gap: 3px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(.99); } }
+
+/* First-run connection: built-in CF Quick Tunnel is prominent, experimental P2P is separate. */
+.connection-option { min-width: 0; }
+.connection-option small { color: var(--muted); font-size: 10px; font-weight: 500; line-height: 1.4; }
+.connection-option.selected small { color: var(--accent); }
+.connection-description { overflow-wrap: anywhere; }
+.connection-advanced { margin: 5px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); font-size: 11px; }
+.connection-advanced summary { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); cursor: pointer; }
+.connection-advanced summary > svg { transition: transform .2s; }
+.connection-advanced[open] summary > svg { transform: rotate(180deg); }
+.connection-advanced .connection-options { margin: 12px 0 8px; grid-template-columns: minmax(0, 1fr); }
+.connection-advanced .connection-option { min-height: 64px; }
+.connection-advanced p { margin: 6px 0 0; line-height: 1.65; }
+.connection-status-actions { align-items: center; row-gap: 9px; }
+.connection-retry { display: inline-flex; align-items: center; gap: 5px; border: none; background: transparent; font-size: 11px; color: var(--accent); cursor: pointer; }
+.sidebar-footer .update-indicator { width: 100%; margin: 10px 0 0; }
+.sidebar-footer .update-indicator > span { flex: 1; }
+.sidebar-check-update { display: flex; align-items: center; gap: 7px; width: 100%; padding: 8px 10px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--surface); font-size: 11px; text-align: left; cursor: pointer; }
+.sidebar-check-update:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
 @media (max-width: 1040px) {
   .app-shell { grid-template-columns: 190px minmax(0, 1fr); }
   .page-content { padding-inline: 24px; }

@@ -291,3 +291,35 @@ def test_html_page_does_not_show_clipboard_history_panel():
     assert "loadClipboardHistory" not in page
     assert "renderClipboardHistory" not in page
     assert '"/history"' not in page
+
+def test_phone_page_uses_shared_modern_layout_and_small_screen_bounds():
+    app = load_app()
+    page = app.html_page('mobile-test', 'http://127.0.0.1:8765/?key=mobile-test')
+    assert 'id="shengjian-mobile-modern"' in page
+    assert 'class="mobile-brand"' in page
+    assert '输入文字，直接发送到电脑' in page
+    assert 'width: min(100%, 700px)' in page
+    assert '@media (max-width: 600px)' in page
+    assert 'max-width: 100%' in page
+    assert 'overflow-x: clip' in page
+    assert 'id="send"' in page and 'id="fileToolsPanel"' in page
+
+
+def test_mac_served_phone_page_does_not_restore_legacy_ios_theme(monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, 'IS_MACOS', True)
+    page = app.html_page('mobile-test', 'http://127.0.0.1:8765/?key=mobile-test')
+    assert 'id="shengjian-mobile-modern"' in page
+    assert 'id="ios-appearance"' in page
+    assert page.index('id="shengjian-mobile-modern"') < page.index('id="ios-appearance"')
+    assert 'background:#f2f2f7!important' not in page
+    assert '已连接到 Mac' not in page
+    assert 'class="mobile-brand"' in page
+    assert 'class="mobile-connected">已连接</span>' in page
+
+
+def test_phone_page_uses_localized_offline_shared_file_error():
+    app = load_app()
+    page = app.html_page('mobile-test', 'http://127.0.0.1:8765/?key=mobile-test')
+    assert '无法读取来自电脑的内容，请确认连接后重试。' in page
+    assert 'sharedFilesListEl.textContent = String(err.message || err)' not in page

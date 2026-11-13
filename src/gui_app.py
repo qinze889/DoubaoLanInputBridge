@@ -22,6 +22,7 @@ import peer_share
 import mac_tunnel
 import relay_client
 import connection_modes
+import mobile_modern
 from http.client import HTTPConnection
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -3677,7 +3678,7 @@ def html_page(access_key: str, server_name: str) -> str:
         renderSharedItems(data.items || data.files || []);
       }} catch (err) {{
         sharedFilesPanelEl.hidden = false;
-        sharedFilesListEl.textContent = String(err.message || err);
+        sharedFilesListEl.textContent = "无法读取来自电脑的内容，请确认连接后重试。";
       }}
     }}
 
@@ -4008,6 +4009,7 @@ def html_page(access_key: str, server_name: str) -> str:
   </script>
 </body>
 </html>'''
+    page = mobile_modern.apply(page)
     if IS_MACOS:
         from ios_mobile import apply
         return apply(page)
@@ -4064,6 +4066,8 @@ class BridgeServer(ThreadingHTTPServer):
         except (OSError, ValueError, KeyError):
             self.add_log('中转配置无效，请重新导入 relay.json')
         self.connections = connection_modes.ConnectionModes(self, DATA_DIR, lambda: current_access_key(self.access_key), machine_lan_host)
+        # Restore explicit saved connection choices; a fresh install keeps the
+        # LAN QR available and offers Quick Tunnel as a one-click public option.
         if self.connections.path.exists():
             try: self.connections.select(self.connections.config['mode'], self.connections.config['enabled'])
             except (OSError, ValueError): self.add_log('连接模式未能恢复，请重新选择连接方式')
