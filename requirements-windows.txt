@@ -3,5 +3,7 @@ Pillow==12.3.0
 PySide6-Essentials==6.12.0
 pyinstaller==6.22.3
 pytest==9.1.1
+certifi==2026.10.23
 
 aiortc==1.15.0
+

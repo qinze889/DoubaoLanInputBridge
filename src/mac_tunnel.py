@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -14,7 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
+
+import certifi
 
 STARTUP_TIMEOUT = 90
 PROBE_TIMEOUT = 8
@@ -23,6 +26,14 @@ RETRY_INTERVAL = 2
 
 GET_PATHS = {'/', '/health', '/files/shared', '/files/download', '/prompt/library'}
 POST_PATHS = {'/peer/pair', '/peer/ping', '/peer/endpoint', '/peer/files/start', '/peer/files/chunk', '/peer/files/finish', '/send', '/files/clipboard', '/files/paste', '/files/share', '/prompt/enrich'}
+
+
+def public_probe_ssl_context():
+    # Frozen macOS Python can retain the builder's absolute OpenSSL CA paths.
+    # Keep platform/user trust and add the CA bundle collected with certifi.
+    context = ssl.create_default_context()
+    context.load_verify_locations(cafile=certifi.where())
+    return context
 
 
 class PublicGateway(ThreadingHTTPServer):
@@ -310,7 +321,8 @@ class TunnelManager:
         request = Request(url + '/health?probe=' + secrets.token_hex(8),
                           headers={'Cache-Control': 'no-cache', 'User-Agent': 'Shengjian-Tunnel-Probe'})
         try:
-            opener = build_opener(ProxyHandler({}), NoRedirect())
+            opener = build_opener(ProxyHandler({}), NoRedirect(),
+                                  HTTPSHandler(context=public_probe_ssl_context()))
             with opener.open(request, timeout=PROBE_TIMEOUT) as response:
                 raw = response.read(4097)
                 body = json.loads(raw) if len(raw) <= 4096 else None

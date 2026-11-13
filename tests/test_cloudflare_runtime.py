@@ -35,7 +35,9 @@ def running_server(server):
 
 def fetch(server, path="/health"):
     connection = http.client.HTTPConnection(
-        "127.0.0.1", server.server_port, timeout=2
+        # The gateway allows its origin health request up to 3 seconds. Some
+        # macOS kernels time out a reserved, non-listening origin socket.
+        "127.0.0.1", server.server_port, timeout=5
     )
     try:
         connection.request("GET", path)

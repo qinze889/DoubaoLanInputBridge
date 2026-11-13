@@ -41,10 +41,10 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-windows.txt
-      - run: python -m pip install pytest==9.1.1
+      - run: python -m pip install pytest==9.1.1 certifi==2026.10.23
       - run: python -m compileall -q src server
       - name: Check Cloudflare public probe syntax
         run: python -m py_compile scripts/smoke_cloudflare.py
       - name: Test CI gates, release integrity and desktop contracts
-        run: python -m pytest -q tests/test_ci_tiers.py tests/test_release_assets.py tests/test_tauri_desktop_ui.py tests/test_cloudflare_runtime.py
+        run: python -m pytest -q tests/test_ci_tiers.py tests/test_release_assets.py tests/test_tauri_desktop_ui.py tests/test_cloudflare_runtime.py tests/test_cloudflare_ca.py
 

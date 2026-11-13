@@ -236,6 +236,28 @@ class Service:
         env = {**os.environ, 'DOUBAO_BRIDGE_DATA_DIR': str(self.folder), 'QT_QPA_PLATFORM': 'offscreen'}
         for name in ('DOUBAO_BRIDGE_PUBLIC_URL', 'DOUBAO_BRIDGE_PUBLIC_PROBE'):
             env.pop(name, None)
+        isolated_ca = bool(self.args.service and sys.platform in ('darwin', 'win32'))
+        if isolated_ca:
+            # Prove that the frozen Python probe does not borrow the builder's
+            # OpenSSL CA paths. The outer HTTPS test client keeps normal trust.
+            empty_ca = self.folder.parent / 'empty-default-ca'
+            empty_ca.mkdir(exist_ok=True)
+            missing_ca = self.folder.parent / 'missing-default-ca.pem'
+            require(not missing_ca.exists() and not any(empty_ca.iterdir()),
+                    'default CA isolation paths are not empty')
+            env['SSL_CERT_FILE'] = str(missing_ca)
+            env['SSL_CERT_DIR'] = str(empty_ca)
+            # cloudflared 2026.10.2 uses Go 1.27, which otherwise also honors
+            # SSL_CERT_* on Windows/macOS. Keep its native platform trust while
+            # isolating Python; no TLS verification is disabled for either.
+            debug = [item for item in env.get('GODEBUG', '').split(',')
+                     if item and item.split('=', 1)[0].strip() != 'x509sslcertoverrideplatform']
+            env['GODEBUG'] = ','.join([*debug, 'x509sslcertoverrideplatform=0'])
+        self.evidence.result['service_tls'] = {
+            'default_openssl_ca_paths_isolated': isolated_ca,
+            'go_platform_trust_preserved': isolated_ca,
+            'tls_verification': True,
+        }
         if not self.args.service:
             # Source mode has no packaged resource; require the supplied binary.
             env['PATH'] = str(self.args.cloudflared.parent) + os.pathsep + env.get('PATH', '')
