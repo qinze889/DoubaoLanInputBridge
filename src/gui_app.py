@@ -3678,7 +3678,7 @@ def html_page(access_key: str, server_name: str) -> str:
         renderSharedItems(data.items || data.files || []);
       }} catch (err) {{
         sharedFilesPanelEl.hidden = false;
-        sharedFilesListEl.textContent = String(err.message || err);
+        sharedFilesListEl.textContent = "无法读取来自电脑的内容，请确认连接后重试。";
       }}
     }}
 
