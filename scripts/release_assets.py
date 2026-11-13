@@ -61,7 +61,8 @@ def main():
     for run_path, workflow, run_id in ((args.windows_run, 'windows-client.yml', args.windows_run_id),
                                        (args.apple_run, 'apple-clients.yml', args.apple_run_id)):
         verify_run(json.loads(run_path.read_text()), workflow, commit, args.repository, run_id)
-    win_files = {'Shengjian-windows-x64-setup.exe', 'Shengjian-windows-x64.exe',
+    # CI keeps metadata and checksums, while public Releases offer one installer per desktop OS.
+    win_files = {'Shengjian-windows-x64-setup.exe',
                  'cloudflared-LICENSE.txt', 'INSTALL-Windows.txt'}
     mac_files = {'Shengjian-mac-arm64.dmg', 'Shengjian-mac-arm64.zip',
                  'cloudflared-LICENSE.txt', 'INSTALL-macOS.txt'}
@@ -73,25 +74,16 @@ def main():
     assert windows['architecture'] == 'x64' and mac['architecture'] == 'arm64'
     assert mac['signing'] == 'ad-hoc' and mac['notarized'] is False
     args.output.mkdir()  # Never silently combine artifacts from different builds.
-    for root, names, metadata in ((args.windows, win_files, 'Windows-build.json'),
-                                   (args.macos, mac_files, 'Mac-build.json')):
-        for name in sorted(names | {metadata}):
-            target = name.replace('Shengjian-', f'Shengjian-{version}-', 1) if name.startswith('Shengjian-') else name
-            path = root/name
-            if path.suffix in {'.exe', '.zip', '.dmg'}:
-                assert path.stat().st_size > 1_000_000, 'Package is unexpectedly small'
-            shutil.copy2(path, args.output/target)
-    for archive_format, suffix in (('zip', 'zip'), ('tar.gz', 'tar.gz')):
-        subprocess.run(['git', 'archive', f'--format={archive_format}', f'--prefix=Shengjian-{version}/',
-                        '-o', str(args.output/f'Shengjian-{version}-source.{suffix}'), 'HEAD'], check=True)
-    metadata = {'version': version, 'release_commit': commit,
-                'windows_workflow_run': int(args.windows_run_id), 'apple_workflow_run': int(args.apple_run_id),
-                'windows_workflow_url': f'https://github.com/{args.repository}/actions/runs/{args.windows_run_id}',
-                'apple_workflow_url': f'https://github.com/{args.repository}/actions/runs/{args.apple_run_id}'}
-    (args.output/'Release-build.json').write_text(json.dumps(metadata, indent=2)+'\n')
-    files = sorted(args.output.iterdir())
-    (args.output/'SHA256SUMS.txt').write_text(''.join(f'{sha256(p)}  {p.name}\n' for p in files))
-    print(f'Verified Mac, Windows and source assets for {args.tag} at {commit}.')
+    public_assets = (
+        (args.windows / 'Shengjian-windows-x64-setup.exe', f'Shengjian-{version}-windows-x64-setup.exe'),
+        (args.macos / 'Shengjian-mac-arm64.dmg', f'Shengjian-{version}-mac-arm64.dmg'),
+    )
+    for source, name in public_assets:
+        assert source.is_file() and not source.is_symlink(), 'Missing or invalid public installer'
+        assert source.stat().st_size > 1_000_000, 'Installer is unexpectedly small'
+        shutil.copy2(source, args.output / name)
+    assert {p.name for p in args.output.iterdir()} == {name for _, name in public_assets}, 'Release must contain exactly two installers'
+    print(f'Verified Windows installer and Mac DMG for {args.tag} at {commit}.')
 
 
 if __name__ == '__main__':
