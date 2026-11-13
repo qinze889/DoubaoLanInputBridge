@@ -176,7 +176,7 @@ struct Transfer: Identifiable {
         if let override = ProcessInfo.processInfo.environment["DOUBAO_BRIDGE_DATA_DIR"], !override.isEmpty { return URL(fileURLWithPath: override) }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DoubaoLanInputBridge")
     }()
-    static let modes = [("public", "固定公网", "globe"), ("cloudflare", "CF 隧道", "cloud"), ("p2p", "P2P 直连", "point.3.connected.trianglepath.dotted"), ("lan", "局域网", "wifi")]
+    static let modes = [("public", "固定公网", "globe"), ("cloudflare", "公网连接（推荐）", "cloud"), ("p2p", "P2P 直连（实验）", "point.3.connected.trianglepath.dotted"), ("lan", "局域网", "wifi")]
     var modeTitle: String { Self.modes.first { $0.0 == connectionMode }?.1 ?? "连接" }
     var connectedURL: String { publicEnabled && tunnelPhase == "ready" ? publicURL : "" }
     var publicHost: String { URL(string: publicURL)?.host ?? "正在准备连接" }
@@ -540,7 +540,7 @@ struct ConnectionView:View {
                                 }
                             }.animation(reduceMotion ? nil : .easeInOut(duration:0.2),value:model.connectionMode)
                             Text(model.modeDescription).font(.system(size:12)).foregroundStyle(.secondary).lineSpacing(4).frame(minHeight:40,alignment:.topLeading)
-                            if model.connectionMode == "p2p" { Text(model.p2pCount > 0 ? "直连中 · 内容不经过服务器" : "扫码后建立直连 · 失败可手动切换其他方式").font(.system(size:11)).foregroundStyle(.secondary) }
+                            if model.connectionMode == "p2p" { Text(model.p2pCount > 0 ? "实验直连中 · 内容不经过服务器" : "实验功能：跨 NAT 可能失败，不会自动中转，请手动切换").font(.system(size:11)).foregroundStyle(.secondary) }
                             HStack {
                                 Button("导入服务器配置") { model.importServerConfig() }.buttonStyle(.borderless).font(.system(size:11)).tint(accent)
                                 Spacer()
