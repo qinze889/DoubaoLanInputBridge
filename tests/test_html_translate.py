@@ -303,3 +303,16 @@ def test_phone_page_uses_shared_modern_layout_and_small_screen_bounds():
     assert 'max-width: 100%' in page
     assert 'overflow-x: clip' in page
     assert 'id="send"' in page and 'id="fileToolsPanel"' in page
+
+
+def test_mac_served_phone_page_does_not_restore_legacy_ios_theme(monkeypatch):
+    app = load_app()
+    monkeypatch.setattr(app, 'IS_MACOS', True)
+    page = app.html_page('mobile-test', 'http://127.0.0.1:8765/?key=mobile-test')
+    assert 'id="shengjian-mobile-modern"' in page
+    assert 'id="ios-appearance"' in page
+    assert page.index('id="shengjian-mobile-modern"') < page.index('id="ios-appearance"')
+    assert 'background:#f2f2f7!important' not in page
+    assert '已连接到 Mac' not in page
+    assert 'class="mobile-brand"' in page
+    assert 'class="mobile-connected">已连接</span>' in page
