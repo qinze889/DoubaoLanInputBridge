@@ -92,3 +92,73 @@ def test_missing_or_small_public_installer_fails_closed(tmp_path):
     (macos / 'Shengjian-mac-arm64.dmg').write_bytes(b'M' * 1_000_001)
     with pytest.raises(AssertionError):
         release.stage_public_installers(windows, macos, tmp_path / 'release', '1.4.2')
+
+def draft_record(commit='a'*40):
+    return {'id': 444, 'tag_name': 'v1.4.2', 'target_commitish': commit,
+            'draft': True, 'prerelease': False, 'published_at': None, 'immutable': False,
+            'author': {'login': 'github-actions[bot]'}, 'name': '声笺 1.4.2',
+            'body': release.release_body(commit), 'assets': []}
+
+
+def test_recovers_only_unpublished_ancestor_draft(monkeypatch):
+    calls = []
+    monkeypatch.setattr(release.subprocess, 'run', lambda args, **kw: calls.append((args, kw)))
+    assert release.recoverable_draft_id([draft_record()], 'v1.4.2', 'b'*40) == 444
+    assert calls == [(['git', 'merge-base', '--is-ancestor', 'a'*40, 'b'*40], {'check': True})]
+    assert release.recoverable_draft_id([], 'v1.4.2', 'b'*40) is None
+
+
+@pytest.mark.parametrize(('field', 'value'), [
+    ('draft', False), ('published_at', '2026-11-13T12:00:00Z'), ('prerelease', True),
+    ('immutable', True), ('author', {'login': 'someone-else'}), ('name', 'Manual draft'),
+    ('target_commitish', 'main'), ('body', 'User-written release notes'), ('id', -1),
+    ('assets', [{'name': 'private-config.json'}]),
+])
+def test_refuses_to_replace_published_or_unrecognized_draft(monkeypatch, field, value):
+    monkeypatch.setattr(release.subprocess, 'run', lambda *a, **kw: pytest.fail('Unsafe draft reached git check'))
+    draft = draft_record()
+    draft[field] = value
+    with pytest.raises(AssertionError):
+        release.recoverable_draft_id([draft], 'v1.4.2', 'b'*40)
+
+
+def test_refuses_duplicate_or_nonancestor_draft(monkeypatch):
+    with pytest.raises(AssertionError):
+        release.recoverable_draft_id([draft_record(), draft_record()], 'v1.4.2', 'b'*40)
+    def reject(*args, **kwargs):
+        raise release.subprocess.CalledProcessError(1, args[0])
+    monkeypatch.setattr(release.subprocess, 'run', reject)
+    with pytest.raises(release.subprocess.CalledProcessError):
+        release.recoverable_draft_id([draft_record()], 'v1.4.2', 'b'*40)
+
+
+def uploaded_release(tmp_path):
+    draft = draft_record()
+    for name, data in [('Shengjian-1.4.2-windows-x64-setup.exe', b'Windows installer'),
+                       ('Shengjian-1.4.2-mac-arm64.dmg', b'Mac installer')]:
+        path = tmp_path / name
+        path.write_bytes(data)
+        draft['assets'].append({'name': name, 'state': 'uploaded', 'size': len(data),
+                                'digest': 'sha256:' + release.sha256(path)})
+    return draft
+
+
+def test_uploaded_installers_match_verified_bytes(tmp_path):
+    release.verify_uploaded_installers(uploaded_release(tmp_path), 'v1.4.2', 'a'*40, tmp_path)
+
+
+@pytest.mark.parametrize('corruption', ['digest', 'size', 'state', 'extra', 'missing', 'source', 'published'])
+def test_rejects_changed_or_incomplete_upload(tmp_path, corruption):
+    draft = uploaded_release(tmp_path)
+    if corruption in ('digest', 'size', 'state'):
+        draft['assets'][0][corruption] = {'digest': 'sha256:'+'0'*64, 'size': 0, 'state': 'new'}[corruption]
+    elif corruption == 'extra':
+        draft['assets'].append(dict(draft['assets'][0]))
+    elif corruption == 'missing':
+        draft['assets'].pop()
+    elif corruption == 'source':
+        draft['target_commitish'] = 'b'*40
+    else:
+        draft['draft'] = False
+    with pytest.raises(AssertionError):
+        release.verify_uploaded_installers(draft, 'v1.4.2', 'a'*40, tmp_path)

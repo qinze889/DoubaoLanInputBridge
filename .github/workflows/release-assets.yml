@@ -19,7 +19,7 @@ permissions:
   contents: write
   actions: read
 concurrency:
-  group: release-assets-${{ inputs.tag }}
+  group: shengjian-owner-release
   cancel-in-progress: false
 jobs:
   publish:
@@ -77,7 +77,9 @@ jobs:
           test "$(gh release view "$REL_TAG" --json isDraft --jq .isDraft)" = true
           test "$(gh release view "$REL_TAG" --json assets --jq '.assets | length')" = 0
           gh release upload "$REL_TAG" release-assets/*
-          gh api "repos/$GH_REPO/releases/tags/$REL_TAG" > /tmp/verified-draft.json
+          release_id="$(gh release view "$REL_TAG" --repo "$GH_REPO" --json databaseId --jq .databaseId)"
+          [[ "$release_id" =~ ^[0-9]+$ ]]
+          gh api "repos/$GH_REPO/releases/$release_id" > /tmp/verified-draft.json
           version="${REL_TAG#v}"
           jq -e --arg win "Shengjian-$version-windows-x64-setup.exe" --arg mac "Shengjian-$version-mac-arm64.dmg" \
             '([.assets[].name] | sort) == ([$win, $mac] | sort) and .draft == true' \
