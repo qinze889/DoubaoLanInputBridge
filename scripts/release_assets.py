@@ -42,6 +42,21 @@ def verify_artifact(root, expected_names, metadata_name, version, commit, run_id
     return metadata
 
 
+
+def stage_public_installers(windows_root, macos_root, output, version):
+    """Only two public downloads; checksums/metadata stay in private CI artifacts."""
+    output.mkdir()  # Never combine files from unrelated builds.
+    public_assets = (
+        (windows_root / 'Shengjian-windows-x64-setup.exe', f'Shengjian-{version}-windows-x64-setup.exe'),
+        (macos_root / 'Shengjian-mac-arm64.dmg', f'Shengjian-{version}-mac-arm64.dmg'),
+    )
+    for source, name in public_assets:
+        assert source.is_file() and not source.is_symlink(), 'Missing or invalid public installer'
+        assert source.stat().st_size > 1_000_000, 'Installer is unexpectedly small'
+        shutil.copy2(source, output / name)
+    assert {p.name for p in output.iterdir()} == {name for _, name in public_assets}, 'Release must contain exactly two installers'
+    return [name for _, name in public_assets]
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--tag', required=True)
@@ -73,16 +88,7 @@ def main():
     assert mac['dmg_zip_signature_and_frozen_p2p_verified'] is True
     assert windows['architecture'] == 'x64' and mac['architecture'] == 'arm64'
     assert mac['signing'] == 'ad-hoc' and mac['notarized'] is False
-    args.output.mkdir()  # Never silently combine artifacts from different builds.
-    public_assets = (
-        (args.windows / 'Shengjian-windows-x64-setup.exe', f'Shengjian-{version}-windows-x64-setup.exe'),
-        (args.macos / 'Shengjian-mac-arm64.dmg', f'Shengjian-{version}-mac-arm64.dmg'),
-    )
-    for source, name in public_assets:
-        assert source.is_file() and not source.is_symlink(), 'Missing or invalid public installer'
-        assert source.stat().st_size > 1_000_000, 'Installer is unexpectedly small'
-        shutil.copy2(source, args.output / name)
-    assert {p.name for p in args.output.iterdir()} == {name for _, name in public_assets}, 'Release must contain exactly two installers'
+    stage_public_installers(args.windows, args.macos, args.output, version)
     print(f'Verified Windows installer and Mac DMG for {args.tag} at {commit}.')
 
 
