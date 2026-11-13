@@ -28,7 +28,7 @@ class Service:
                 if key.exists():
                     self.key = key.read_text().strip()
                     try:
-                        if self.call('/desktop/state')['version'] == '1.4.0': return
+                        if self.call('/desktop/state')['version'] == (Path(__file__).resolve().parents[1] / 'VERSION').read_text().strip(): return
                     except (OSError, ValueError, RuntimeError): pass
                 time.sleep(.25)
             raise RuntimeError('packaged service readiness timeout')

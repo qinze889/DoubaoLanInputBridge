@@ -2,7 +2,13 @@
 
 发行包与完整说明以 [GitHub Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases) 为准。`VERSION` 表示当前分支源码版本。
 
-## 未发布
+## 1.4.1 — 2026-11-13
+
+- Windows 机器共享改为与 Mac 一致的卡片与邀请/配对弹窗，分享窗口调整为纵向布局。
+- Windows Playwright UI 回归覆盖新的机器共享流程。
+- 增加由仓库所有者经 GitHub Issue 发起、受 Windows / Mac 成功 CI 约束的 Release 发布工作流。
+- Mac 系统分享扩展、附件临时保存及相关测试继续纳入版本。
+
 
 - Mac 新增系统分享扩展：截屏或预览中选择“分享 → 声笺”，图片会带入发送窗口，可选择手机或已配对电脑。
 - 修复首页底部两张卡片没有点击动作，分别打开文字分享和文件分享。
