@@ -56,7 +56,7 @@ from qrcode.constants import ERROR_CORRECT_M
 
 APP_NAME = "声笺"
 APP_ID = "DoubaoLanInputBridge"
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 APP_ICON_RELATIVE_PATH = "assets/app-icon-master.png" if sys.platform == "darwin" else "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20

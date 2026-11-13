@@ -15,7 +15,7 @@
 | Windows | [Release 中的 `windows-x64-setup.exe`](https://github.com/qinze889/DoubaoLanInputBridge/releases/latest) | 仅发布 Tauri 正式安装版，可从客户端原位升级 |
 | iPhone / iPad | 手机浏览器扫码，或查看 [iOS 源码](ios/README.md) | 原生客户端需要自行用 Xcode 签名构建 |
 
-当前源码版本为 **1.4.1**，Mac / Windows 提供四种连接方式的统一入口。正式发布包从 [Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases/latest) 下载；Actions 附件用于测试。
+当前源码版本为 **1.4.2**，Mac / Windows 提供四种连接方式的统一入口。正式发布包从 [Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases/latest) 下载；Actions 附件用于测试。
 
 ## 开始使用
 
