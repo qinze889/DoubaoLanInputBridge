@@ -316,3 +316,10 @@ def test_mac_served_phone_page_does_not_restore_legacy_ios_theme(monkeypatch):
     assert '已连接到 Mac' not in page
     assert 'class="mobile-brand"' in page
     assert 'class="mobile-connected">已连接</span>' in page
+
+
+def test_phone_page_uses_localized_offline_shared_file_error():
+    app = load_app()
+    page = app.html_page('mobile-test', 'http://127.0.0.1:8765/?key=mobile-test')
+    assert '无法读取来自电脑的内容，请确认连接后重试。' in page
+    assert 'sharedFilesListEl.textContent = String(err.message || err)' not in page
