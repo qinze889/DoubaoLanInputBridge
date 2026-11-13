@@ -130,6 +130,8 @@ def main():
     assert windows['installed_upgrade_and_transfer_verified'] is True
     assert windows['frozen_p2p_verified'] is True
     assert mac['dmg_zip_signature_and_frozen_p2p_verified'] is True
+    assert windows.get('cloudflare_public_e2e_verified') is True, 'Windows public Cloudflare E2E was not verified'
+    assert mac.get('cloudflare_public_e2e_verified') is True, 'macOS public Cloudflare E2E was not verified'
     assert windows['architecture'] == 'x64' and mac['architecture'] == 'arm64'
     assert mac['signing'] == 'ad-hoc' and mac['notarized'] is False
     stage_public_installers(args.windows, args.macos, args.output, version)

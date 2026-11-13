@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -162,3 +163,95 @@ def test_rejects_changed_or_incomplete_upload(tmp_path, corruption):
         draft['draft'] = False
     with pytest.raises(AssertionError):
         release.verify_uploaded_installers(draft, 'v1.4.2', 'a'*40, tmp_path)
+
+
+@pytest.fixture
+def release_cli_artifacts(tmp_path, monkeypatch):
+    """Exercise main() with real files and checksums, stubbing only git HEAD."""
+    commit, version = 'a' * 40, '1.4.3'
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'VERSION').write_text(version + '\n')
+    configurations = {
+        'windows': (321, 'windows-client.yml', 'Windows-build.json', {
+            'architecture': 'x64', 'installed_upgrade_and_transfer_verified': True,
+            'frozen_p2p_verified': True, 'cloudflare_public_e2e_verified': True,
+        }, {
+            'Shengjian-windows-x64-setup.exe': b'W' * 1_000_001,
+            'cloudflared-LICENSE.txt': b'license', 'INSTALL-Windows.txt': b'install',
+        }),
+        'macos': (654, 'apple-clients.yml', 'Mac-build.json', {
+            'architecture': 'arm64', 'dmg_zip_signature_and_frozen_p2p_verified': True,
+            'cloudflare_public_e2e_verified': True, 'signing': 'ad-hoc', 'notarized': False,
+        }, {
+            'Shengjian-mac-arm64.dmg': b'M' * 1_000_001,
+            'Shengjian-mac-arm64.zip': b'CI verification archive',
+            'cloudflared-LICENSE.txt': b'license', 'INSTALL-macOS.txt': b'install',
+        }),
+    }
+    roots, metadata_paths = {}, {}
+    for platform, (run_id, workflow, metadata_name, metadata, files) in configurations.items():
+        root = tmp_path / platform
+        root.mkdir()
+        roots[platform] = root
+        for name, data in files.items():
+            (root / name).write_bytes(data)
+        metadata.update(version=version, source_commit=commit, workflow_run=str(run_id))
+        metadata_paths[platform] = root / metadata_name
+        metadata_paths[platform].write_text(json.dumps(metadata))
+        (root / 'SHA256SUMS.txt').write_text(''.join(
+            f'{release.sha256(path)}  {path.name}\n' for path in sorted(root.iterdir())))
+        (tmp_path / f'{platform}-run.json').write_text(json.dumps({
+            'id': run_id, 'repository': {'full_name': 'owner/repo'},
+            'path': f'.github/workflows/{workflow}', 'status': 'completed',
+            'conclusion': 'success', 'head_sha': commit,
+        }))
+
+    def git_head(command, **kwargs):
+        assert command == ['git', 'rev-parse', 'HEAD'] and kwargs == {'text': True}
+        return commit + '\n'
+
+    monkeypatch.setattr(release.subprocess, 'check_output', git_head)
+    monkeypatch.setattr(sys, 'argv', [
+        'release_assets.py', '--tag', f'v{version}', '--repository', 'owner/repo',
+        '--windows-run', str(tmp_path / 'windows-run.json'),
+        '--apple-run', str(tmp_path / 'macos-run.json'),
+        '--windows-run-id', '321', '--apple-run-id', '654',
+        '--windows', str(roots['windows']), '--macos', str(roots['macos']),
+        '--output', str(tmp_path / 'release'),
+    ])
+    return roots, metadata_paths, tmp_path / 'release'
+
+
+def test_main_stages_installers_only_after_both_public_cloudflare_checks(release_cli_artifacts):
+    roots, _, output = release_cli_artifacts
+    release.main()
+    assert {path.name for path in output.iterdir()} == {
+        'Shengjian-1.4.3-windows-x64-setup.exe', 'Shengjian-1.4.3-mac-arm64.dmg'}
+    assert (output / 'Shengjian-1.4.3-windows-x64-setup.exe').read_bytes() == (
+        roots['windows'] / 'Shengjian-windows-x64-setup.exe').read_bytes()
+    assert (output / 'Shengjian-1.4.3-mac-arm64.dmg').read_bytes() == (
+        roots['macos'] / 'Shengjian-mac-arm64.dmg').read_bytes()
+
+
+@pytest.mark.parametrize(('platform', 'label'), [('windows', 'Windows'), ('macos', 'macOS')])
+@pytest.mark.parametrize('proof', ['missing', False])
+def test_main_rejects_missing_or_failed_public_cloudflare_proof(
+        release_cli_artifacts, platform, label, proof):
+    roots, metadata_paths, output = release_cli_artifacts
+    metadata_path = metadata_paths[platform]
+    metadata = json.loads(metadata_path.read_text())
+    if proof == 'missing':
+        del metadata['cloudflare_public_e2e_verified']
+    else:
+        metadata['cloudflare_public_e2e_verified'] = proof
+    metadata_path.write_text(json.dumps(metadata))
+    # Keep the modified artifact internally valid: this must fail the release
+    # evidence gate, not an earlier stale-checksum or version check.
+    root = roots[platform]
+    (root / 'SHA256SUMS.txt').write_text(''.join(
+        f'{release.sha256(path)}  {path.name}\n'
+        for path in sorted(root.iterdir()) if path.name != 'SHA256SUMS.txt'))
+
+    with pytest.raises(AssertionError, match=f'{label} public Cloudflare E2E was not verified'):
+        release.main()
+    assert not output.exists(), 'Unverified installers must not reach staging'

@@ -6,6 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 (async () => {
+ const version = (await fs.readFile(path.resolve(__dirname, '../VERSION'), 'utf8')).trim();
+ assert.match(version, /^\d+\.\d+\.\d+$/);
  const output = process.env.SHENGJIAN_UI_OUTPUT || path.resolve(__dirname, '../build/windows-ui-check');
  await fs.mkdir(output, {recursive:true});
  const browser = await chromium.launch({headless:true,...(process.env.SHENGJIAN_UI_BROWSER ? {executablePath:process.env.SHENGJIAN_UI_BROWSER} : {})});
@@ -44,7 +46,7 @@ const path = require('node:path');
   const req=route.request(),u=new URL(req.url()); const data=req.postDataJSON()||{};
   calls.push({path:u.pathname,method:req.method(),query:Object.fromEntries(u.searchParams),data});
   let result={ok:true}; let status=200;
-  if(u.pathname==='/desktop/state')result={ok:true,version:'1.4.2',port:18700,key:'ui-fixture-only',mobile_url:'https://example.invalid',local_url:'http://192.168.1.8:18700/',host:'Windows',data_dir:'C:\\UI-Fixtures'};
+  if(u.pathname==='/desktop/state')result={ok:true,version,port:18700,key:'ui-fixture-only',mobile_url:'https://example.invalid',local_url:'http://192.168.1.8:18700/',host:'Windows',data_dir:'C:\\UI-Fixtures'};
   else if(u.pathname==='/desktop/connections'){
    if(req.method()==='POST'){mode=data.mode;enabled=data.enabled;}
    result=state();
@@ -54,7 +56,7 @@ const path = require('node:path');
    const items=records.filter(r=>(u.searchParams.get('category')==='all'||u.searchParams.get('category')===r.category)&&(!u.searchParams.get('q')||r.summary.preview.includes(u.searchParams.get('q'))));
    result={ok:true,items,total:items.length,has_more:false};
   }
-  else if(u.pathname==='/desktop/update')result={ok:true,result:{configured:true,available:false,version:'1.4.2'}};
+  else if(u.pathname==='/desktop/update')result={ok:true,result:{configured:true,available:false,version}};
   else if(u.pathname==='/desktop/peers')result={ok:true,device:{name:'Windows 电脑'},peers:[{id:'mac1',name:'我的 Mac',endpoint:'https://example.invalid'}],jobs:[],network:{endpoint:'https://example.invalid',tunnel:{phase:'ready',ready:true,error:'',cloudflared_available:true}}};
   else if(u.pathname==='/desktop/peers/invite')result={ok:true,invitation:'shengjian://pair?fixture=only',expires_in:300};
   else if(u.pathname==='/desktop/config')result={ok:true,minimax_configured:false,minimax_model:'',update_url:'',update_source:'github'};
@@ -128,10 +130,10 @@ const path = require('node:path');
   assert(calls.some(c=>c.path==='/desktop/peers/join'&&c.data.invitation==='shengjian://pair?fixture=other'));
   await checkHeading('机器共享');
   await page.locator('.sidebar-footer').getByRole('button',{name:'检查更新',exact:true}).click();
-  await page.getByText('当前已是最新版 1.4.2',{exact:true}).waitFor();
+  await page.getByText(`当前已是最新版 ${version}`,{exact:true}).waitFor();
   await nav('设置').click(); await checkHeading('设置');
   await page.locator('.page-settings').getByRole('button',{name:'检查更新',exact:true}).click();
-  await page.getByText('当前已是最新版 1.4.2').first().waitFor();
+  await page.getByText(`当前已是最新版 ${version}`).first().waitFor();
   await page.locator('.toast').waitFor({state:'hidden'}); await page.screenshot({path:path.join(output, 'settings.png')}); await nav('连接设备').click(); await checkHeading('连接你的手机');
   await page.getByText('局域网已就绪',{exact:true}).first().waitFor();
   await page.setViewportSize({width:900,height:620}); await assertNoOverflow();

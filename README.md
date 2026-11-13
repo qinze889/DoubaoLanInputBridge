@@ -15,7 +15,7 @@
 | Windows | [Release 中的 `windows-x64-setup.exe`](https://github.com/qinze889/DoubaoLanInputBridge/releases/latest) | 仅发布 Tauri 正式安装版，可从客户端原位升级 |
 | iPhone / iPad | 手机浏览器扫码，或查看 [iOS 源码](ios/README.md) | 原生客户端需要自行用 Xcode 签名构建 |
 
-当前源码版本为 **1.4.2**，Mac / Windows 提供四种连接方式的统一入口。正式发布包从 [Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases/latest) 下载；Actions 附件用于测试。
+当前源码版本为 **1.4.3**，Mac / Windows 提供四种连接方式的统一入口。正式可下载版本以 [Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases/latest) 为准；Actions 附件用于测试。
 
 ## 开始使用
 
@@ -62,7 +62,7 @@ CI 在 **GitHub Actions 的托管 runner** 上运行，结果见 [Actions 页面
 
 - [Windows workflow](.github/workflows/windows-client.yml)：回归测试、构建唯一的 Tauri 安装版、实际安装 / 升级、双向文件 SHA256 校验，并上传构建附件。
 - [Apple workflow](.github/workflows/apple-clients.yml)：Mac 回归、原生应用和 DMG / ZIP 构建、安装包完整性与冻结 P2P 验证；iOS 单元测试与模拟器构建。
-- [发行附件 workflow](.github/workflows/release-assets.yml)：手动核对成功的 Mac / Windows 构建与发行标签为同一提交，校验摘要，生成源码包并上传到草稿 Release。
+- [正式发行 workflow](.github/workflows/release-on-request.yml)：接收仓库所有者的发行请求，核对同一 main 提交的 Mac / Windows 成功构建、版本与 SHA256，仅公开 Windows NSIS 和 Mac DMG 两个安装包。
 
 触发条件、附件下载和发布流程见 [CI 说明](docs/CI.md)。
 
