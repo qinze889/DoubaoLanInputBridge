@@ -1,0 +1,1248 @@
+"""Quick Tunnel regressions without GUI imports or external network access."""
+
+import http.client
+import io
+import json
+import socket
+import ssl
+import threading
+import urllib.request as urllib_request
+from contextlib import ExitStack, contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlsplit
+from urllib.request import HTTPSHandler, ProxyHandler
+
+import pytest
+
+import mac_tunnel
+
+
+REAL_DNS_QUERY = mac_tunnel.TunnelManager._query_dns_visibility
+
+
+@pytest.fixture(autouse=True)
+def isolate_dns_observation_network(monkeypatch):
+    # All runtime/worker tests stay offline. Decoder tests invoke the saved
+    # method only after installing a fake HTTP opener.
+    monkeypatch.setattr(mac_tunnel.TunnelManager, "_query_dns_visibility",
+                        lambda self, host, timeout: ("unavailable", "test_network_disabled"))
+
+
+@contextmanager
+def running_server(server):
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def fetch(server, path="/health"):
+    connection = http.client.HTTPConnection(
+        # The gateway allows its origin health request up to 3 seconds. Some
+        # macOS kernels time out a reserved, non-listening origin socket.
+        "127.0.0.1", server.server_port, timeout=5
+    )
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+    finally:
+        connection.close()
+
+
+class HealthOrigin(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        self.server.requests.append(self.path)
+        self.send_response(self.server.health_status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(self.server.health_body)))
+        self.end_headers()
+        self.wfile.write(self.server.health_body)
+
+
+@pytest.fixture
+def services():
+    """Keep every listener alive until its public gateway has been stopped."""
+    with ExitStack() as stack:
+        def origin(payload=None, status=200):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), HealthOrigin)
+            server.health_status = status
+            server.health_body = (
+                payload if isinstance(payload, bytes)
+                else json.dumps({"ok": True} if payload is None else payload).encode()
+            )
+            server.requests = []
+            return stack.enter_context(running_server(server))
+
+        def gateway(origin_port):
+            return stack.enter_context(
+                running_server(mac_tunnel.PublicGateway(origin_port))
+            )
+
+        yield origin, gateway
+
+
+def test_public_health_checks_origin_and_returns_only_probe_identity(services):
+    make_origin, make_gateway = services
+    origin = make_origin({
+        "ok": True,
+        "name": "private origin name",
+        "pid": 424242,
+        "data_dir": "/private/user/bridge-data",
+        "access_key": "never-return-this-key",
+    })
+    gateway = make_gateway(origin.server_port)
+
+    status, headers, raw_body = fetch(gateway)
+    body = json.loads(raw_body)
+
+    assert status == 200
+    assert origin.requests == ["/health"]
+    assert body["ok"] is True
+    assert body["probe_id"] == gateway.probe_id
+    assert isinstance(body["probe_id"], str) and body["probe_id"]
+    assert set(body) <= {"ok", "name", "probe_id"}
+    if "name" in body:
+        assert body["name"] == "Shengjian"
+    assert "no-store" in headers.get("Cache-Control", "").lower()
+    assert b"never-return-this-key" not in raw_body
+    assert b"/private/user/bridge-data" not in raw_body
+
+
+def test_probe_identity_is_stable_per_gateway_and_distinct_after_restart(services):
+    make_origin, make_gateway = services
+    origin = make_origin()
+    first = make_gateway(origin.server_port)
+    replacement = make_gateway(origin.server_port)
+
+    first_id = json.loads(fetch(first)[2])["probe_id"]
+    repeated_id = json.loads(fetch(first)[2])["probe_id"]
+    replacement_id = json.loads(fetch(replacement)[2])["probe_id"]
+
+    assert first_id == repeated_id == first.probe_id
+    assert replacement_id == replacement.probe_id
+    assert first_id != replacement_id
+    assert origin.requests == ["/health", "/health", "/health"]
+
+
+def test_public_health_rejects_unreachable_origin(services):
+    _, make_gateway = services
+    # Reserve the port without listening so no other test can acquire it.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as unavailable:
+        unavailable.bind(("127.0.0.1", 0))
+        gateway = make_gateway(unavailable.getsockname()[1])
+        status, _, _ = fetch(gateway)
+
+    assert status == 502
+
+
+@pytest.mark.parametrize(("status", "payload"), [
+    (503, {"ok": True}),
+    (200, {"ok": False}),
+    (200, {}),
+    (200, []),
+    (200, {"ok": "true"}),
+    (200, b"not JSON"),
+])
+def test_public_health_rejects_unhealthy_or_invalid_origin(services, status, payload):
+    make_origin, make_gateway = services
+    origin = make_origin(payload, status)
+    gateway = make_gateway(origin.server_port)
+
+    response_status, _, _ = fetch(gateway)
+
+    assert response_status == 502
+    assert origin.requests == ["/health"]
+
+
+@pytest.mark.parametrize("path", [
+    "/desktop/state?key=synthetic-test-key",
+    "/desktop/connections",
+    "/desktop/tunnel",
+    "/__updates__/update.json",
+])
+def test_public_probe_does_not_open_management_routes(services, path):
+    make_origin, make_gateway = services
+    origin = make_origin()
+    gateway = make_gateway(origin.server_port)
+
+    status, _, _ = fetch(gateway, path)
+
+    assert status == 403
+    assert origin.requests == []
+
+
+class FakeProcess:
+    pid = 12345
+
+    def __init__(self):
+        self.stdout = io.StringIO()
+        self.returncode = None
+        self.calls = []
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.calls.append("terminate")
+        self.returncode = 0
+
+    def wait(self, timeout=None):
+        self.calls.append("wait")
+        self.returncode = 0
+        return 0
+
+    def kill(self):
+        self.calls.append("kill")
+        self.returncode = -9
+
+
+class FakeGateway:
+    server_port = 34567
+    probe_id = "active-test-gateway"
+
+    def __init__(self, origin_port):
+        self.origin_port = origin_port
+        self.closed = False
+
+    def serve_forever(self):
+        pass
+
+    def shutdown(self):
+        pass
+
+    def server_close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def active_manager(tmp_path, monkeypatch):
+    """An owned live process with no worker threads or real connector."""
+    monkeypatch.setattr(mac_tunnel, "find_binary", lambda configured="": "/test/cloudflared")
+    manager = mac_tunnel.TunnelManager(tmp_path)
+    manager.process = FakeProcess()
+    manager.gateway = FakeGateway(8767)
+    manager.generation = 7
+    manager.phase = "starting"
+    manager.stage = "allocating"
+    try:
+        yield manager
+    finally:
+        manager.stop()
+
+
+PUBLIC_URL = "https://active-test.trycloudflare.com"
+PUBLIC_HOST = "active-test.trycloudflare.com"
+
+
+def allocation_banner(url=PUBLIC_URL):
+    return [
+        "2026-11-13T13:45:14Z INF +--------------------------------------------------------------------------------------------+",
+        "2026-11-13T13:45:14Z INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |",
+        f"2026-11-13T13:45:14Z INF |  {url}                          |",
+        "2026-11-13T13:45:14Z INF +--------------------------------------------------------------------------------------------+",
+    ]
+
+
+def allocate(manager):
+    for line in allocation_banner():
+        manager._handle_line(line, manager.generation)
+
+
+def register(manager, index=0):
+    manager._handle_line(
+        f"INF Registered tunnel connection connIndex={index} protocol=http2",
+        manager.generation,
+    )
+
+
+def verify(manager):
+    manager._apply_probe(manager.generation, manager.probe_epoch, True, "")
+
+
+@pytest.fixture
+def waiting_manager_clock(active_manager, monkeypatch):
+    manager = active_manager
+    clock = [100.0]
+    monkeypatch.setattr(mac_tunnel.time, "monotonic", lambda: clock[0])
+    manager.attempt_started = clock[0]
+    manager.deadline_at = clock[0] + mac_tunnel.STARTUP_TIMEOUT
+    allocate(manager)
+    register(manager)
+    return manager, clock
+
+
+@pytest.fixture
+def ready_manager_clock(waiting_manager_clock):
+    manager, clock = waiting_manager_clock
+    verify(manager)
+    return manager, clock
+
+
+def test_only_successful_creation_banner_assigns_public_origin(active_manager):
+    manager = active_manager
+    for line in (
+        'ERR failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": connection refused',
+        "https://bare-example.trycloudflare.com",
+        'INF management example="https://management-example.trycloudflare.com"',
+        "2026-11-13T13:45:14Z INF | https://unannounced-example.trycloudflare.com |",
+    ):
+        manager._handle_line(line, manager.generation)
+
+    before = manager.status()
+    assert manager.url == ""
+    assert before["stage"] == "allocating"
+    assert before["candidate_host"] == ""
+    assert before["url_assignments"] == 0
+
+    allocate(manager)
+
+    allocated = manager.status()
+    assert manager.url == PUBLIC_URL
+    assert allocated["candidate_host"] == PUBLIC_HOST
+    assert allocated["url_assignments"] == 1
+    assert allocated["public_url"] == ""
+    assert allocated["ready"] is False
+
+
+@pytest.mark.parametrize("service_host", ["api.trycloudflare.com", "login.trycloudflare.com"])
+def test_service_hosts_cannot_be_assigned_even_inside_creation_banner(active_manager, service_host):
+    manager = active_manager
+    for line in allocation_banner("https://" + service_host):
+        manager._handle_line(line, manager.generation)
+
+    assert manager.url == ""
+    assert manager.status()["candidate_host"] == ""
+    assert manager.status()["url_assignments"] == 0
+    allocate(manager)
+    assert manager.url == PUBLIC_URL
+
+
+def test_later_examples_or_banners_cannot_replace_assigned_origin(active_manager):
+    manager = active_manager
+    allocate(manager)
+    register(manager)
+    verify(manager)
+    epoch = manager.probe_epoch
+
+    for line in [
+        'INF precheck management example="https://sample-only.trycloudflare.com"',
+        "https://sample-only.trycloudflare.com",
+        *allocation_banner("https://other-attempt.trycloudflare.com"),
+    ]:
+        manager._handle_line(line, manager.generation)
+
+    status = manager.status()
+    assert manager.url == PUBLIC_URL
+    assert manager.probe_epoch == epoch
+    assert status["candidate_host"] == PUBLIC_HOST
+    assert status["url_assignments"] == 1
+    assert status["ready"] is True
+
+
+def test_old_creation_banner_cannot_arm_current_generation_parser(active_manager):
+    manager = active_manager
+    for line in allocation_banner("https://old-attempt.trycloudflare.com"):
+        manager._handle_line(line, manager.generation - 1)
+    manager._handle_line(
+        "2026-11-13T13:45:14Z INF | https://unannounced.trycloudflare.com |",
+        manager.generation,
+    )
+
+    assert manager.url == ""
+    assert manager.status()["candidate_host"] == ""
+    allocate(manager)
+    assert manager.status()["candidate_host"] == PUBLIC_HOST
+    assert manager.status()["url_assignments"] == 1
+
+
+def test_registration_waits_for_public_identity_verification(active_manager):
+    manager = active_manager
+    allocate(manager)
+    assert manager.status()["stage"] == "connecting"
+    register(manager)
+
+    waiting = manager.status()
+    assert waiting["stage"] == "verifying"
+    assert waiting["ready"] is False
+    assert waiting["public_url"] == ""
+
+    verify(manager)
+
+    ready = manager.status()
+    assert ready["ready"] is True
+    assert ready["stage"] == "ready"
+    assert ready["public_url"] == PUBLIC_URL
+    assert ready["verified_at"]
+
+
+def test_all_edge_connections_must_be_lost_before_revoking_ready(active_manager):
+    manager = active_manager
+    allocate(manager)
+    register(manager, 0)
+    register(manager, 1)
+    verify(manager)
+    assert len(manager.connections) == 2
+
+    manager._handle_line("ERR Connection terminated connIndex=0", manager.generation)
+    assert manager.status()["ready"] is True
+    assert len(manager.connections) == 1
+
+    manager._handle_line("ERR Connection terminated connIndex=1", manager.generation)
+
+    disconnected = manager.status()
+    assert not manager.connections
+    assert disconnected["ready"] is False
+    assert disconnected["public_url"] == ""
+    assert disconnected["stage"] == "reconnecting"
+
+
+def test_later_public_probe_failure_revokes_ready_even_while_process_lives(active_manager):
+    manager = active_manager
+    allocate(manager)
+    register(manager)
+    verify(manager)
+    assert manager.status()["ready"] is True
+
+    manager._apply_probe(
+        manager.generation, manager.probe_epoch, False, "public probe timed out"
+    )
+
+    disconnected = manager.status()
+    assert manager.process.poll() is None
+    assert disconnected["ready"] is False
+    assert disconnected["public_url"] == ""
+    assert "timed out" in disconnected["last_error"]
+
+    verify(manager)
+    assert manager.status()["ready"] is True
+
+
+def test_successful_periodic_probe_renews_readiness_using_monotonic_time(ready_manager_clock, monkeypatch):
+    manager, clock = ready_manager_clock
+    first_expiry = manager.verification_expires_at
+    wall_clock = [1000.0]
+    monkeypatch.setattr(mac_tunnel.time, "time", lambda: wall_clock[0])
+    clock[0] = first_expiry - 1
+
+    assert manager._apply_probe(manager.generation, manager.probe_epoch, True, "") is True
+    renewed_expiry = manager.verification_expires_at
+    assert renewed_expiry == clock[0] + mac_tunnel.READY_MAX_AGE
+    assert renewed_expiry > first_expiry
+
+    clock[0] = first_expiry + 1
+    for wall_clock[0] in (-1_000_000_000.0, 9_000_000_000.0):
+        assert manager.status()["ready"] is True
+        assert manager.verification_expires_at == renewed_expiry
+        assert manager.deadline_at is None
+
+
+def test_late_periodic_success_cannot_renew_readiness_before_watchdog_runs(ready_manager_clock):
+    manager, clock = ready_manager_clock
+    generation, epoch = manager.generation, manager.probe_epoch
+    clock[0] = manager.verification_expires_at + 1
+
+    assert manager._apply_probe(generation, epoch, True, "") is False
+
+    expired = manager.status()
+    assert expired["ready"] is False
+    assert expired["public_url"] == ""
+    assert expired["phase"] == "starting"
+    assert expired["stage"] == "verifying"
+    assert manager.probe_epoch != epoch
+    assert manager.verification_expires_at is None
+    recovery_deadline = manager.deadline_at
+    assert recovery_deadline == clock[0] + mac_tunnel.STARTUP_TIMEOUT
+
+    clock[0] += 10
+    assert manager._apply_probe(generation, epoch, True, "") is False
+    assert manager.status()["ready"] is False
+    assert manager.deadline_at == recovery_deadline
+
+
+def test_blocked_periodic_probe_loses_readiness_and_watchdog_ends_recovery(ready_manager_clock, monkeypatch):
+    manager, clock = ready_manager_clock
+    generation = manager.generation
+    process, gateway = manager.process, manager.gateway
+    probe_entered = threading.Event()
+    release_probe = threading.Event()
+    worker_errors = []
+
+    def blocked_probe(url, current_gateway):
+        probe_entered.set()
+        if not release_probe.wait(timeout=3):
+            raise AssertionError("test did not release its blocked public probe")
+        return True, ""
+
+    def run_verifier():
+        try:
+            manager._verify(generation, manager.cancel)
+        except BaseException as error:
+            worker_errors.append(error)
+
+    class OneWatchdogTick:
+        waited = False
+
+        def wait(self, delay):
+            if self.waited:
+                return True
+            self.waited = True
+            return False
+
+    monkeypatch.setattr(manager, "_probe_public", blocked_probe)
+    clock[0] += mac_tunnel.PROBE_INTERVAL
+    worker = threading.Thread(target=run_verifier, daemon=True)
+    worker.start()
+    try:
+        assert probe_entered.wait(timeout=3)
+        clock[0] = manager.verification_expires_at + 1
+        manager._deadline(generation, OneWatchdogTick())
+
+        # Inspect phase before status(), which can also revoke expired readiness.
+        assert manager.phase == "starting"
+        assert manager.status()["public_url"] == ""
+        assert worker.is_alive()
+        recovery_deadline = manager.deadline_at
+        assert recovery_deadline == clock[0] + mac_tunnel.STARTUP_TIMEOUT
+
+        clock[0] += 10
+        manager._deadline(generation, OneWatchdogTick())
+        assert manager.deadline_at == recovery_deadline
+        assert manager.status()["ready"] is False
+
+        clock[0] = recovery_deadline
+        manager._deadline(generation, OneWatchdogTick())
+        assert manager.status()["phase"] == "error"
+        assert "terminate" in process.calls
+        assert gateway.closed
+    finally:
+        manager.cancel.set()
+        release_probe.set()
+        worker.join(timeout=3)
+
+    assert not worker.is_alive()
+    assert not worker_errors
+    # The formerly blocked successful response belongs to the stopped attempt.
+    assert manager.status()["phase"] == "error"
+    assert manager.status()["ready"] is False
+    assert manager.status()["public_url"] == ""
+
+
+def test_stop_clears_readiness_freshness_and_rejects_old_success(ready_manager_clock):
+    manager, clock = ready_manager_clock
+    generation, epoch = manager.generation, manager.probe_epoch
+    assert manager.verification_expires_at is not None
+
+    manager.stop()
+    clock[0] += mac_tunnel.READY_MAX_AGE
+
+    assert manager.verification_expires_at is None
+    assert manager._apply_probe(generation, epoch, True, "") is False
+    assert manager.status()["phase"] == "off"
+    assert manager.deadline_at is None
+
+
+def test_probe_started_before_disconnect_cannot_mark_reconnected_tunnel_ready(active_manager):
+    manager = active_manager
+    allocate(manager)
+    register(manager)
+    stale_epoch = manager.probe_epoch
+    manager._handle_line("ERR Connection terminated connIndex=0", manager.generation)
+    register(manager)
+    assert manager.probe_epoch != stale_epoch
+
+    manager._apply_probe(manager.generation, stale_epoch, True, "")
+    assert manager.status()["ready"] is False
+
+    verify(manager)
+    assert manager.status()["ready"] is True
+
+
+def test_old_generation_logs_and_probe_results_cannot_change_current_attempt(active_manager):
+    manager = active_manager
+    allocate(manager)
+    register(manager)
+    previous_generation = manager.generation - 1
+    before = manager.status()
+
+    manager._handle_line("https://stale-test.trycloudflare.com", previous_generation)
+    manager._handle_line("ERR Connection terminated connIndex=0", previous_generation)
+    manager._handle_line("ERR stale generation error", previous_generation)
+    manager._apply_probe(previous_generation, manager.probe_epoch, True, "")
+
+    after = manager.status()
+    assert manager.url == PUBLIC_URL
+    assert len(manager.connections) == 1
+    for key in ("phase", "stage", "ready", "public_url", "last_error", "log_tail", "candidate_host", "url_assignments"):
+        assert after[key] == before[key]
+
+
+def test_probe_cannot_restore_ready_after_user_stops_tunnel(active_manager):
+    manager = active_manager
+    allocate(manager)
+    register(manager)
+    generation, epoch = manager.generation, manager.probe_epoch
+    manager.stop()
+
+    manager._apply_probe(generation, epoch, True, "")
+
+    stopped = manager.status()
+    assert stopped["phase"] == "off"
+    assert stopped["stage"] == "off"
+    assert stopped["ready"] is False
+    assert stopped["public_url"] == ""
+    assert stopped["candidate_host"] == ""
+    assert stopped["url_assignments"] == 0
+
+
+def test_continuous_verifier_rechecks_success_detects_loss_and_recovers(active_manager, monkeypatch):
+    manager = active_manager
+    clock = [100.0]
+    monkeypatch.setattr(mac_tunnel.time, "monotonic", lambda: clock[0])
+    manager.attempt_started = clock[0]
+    manager.deadline_at = clock[0] + mac_tunnel.STARTUP_TIMEOUT
+    allocate(manager)
+    register(manager)
+    results = [(True, ""), (False, "public route unavailable"), (True, "")]
+    probe_times = []
+    readiness = []
+
+    def probe(url, gateway):
+        assert url == PUBLIC_URL
+        assert gateway is manager.gateway
+        probe_times.append(clock[0])
+        return results[len(probe_times) - 1]
+
+    class ControlledCancel:
+        stopped = False
+        waits = 0
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, delay):
+            self.waits += 1
+            assert self.waits <= 40, "verifier failed to schedule the next bounded probe"
+            if len(readiness) < len(probe_times):
+                readiness.append(manager.status()["ready"])
+            clock[0] += delay
+            self.stopped = len(probe_times) == len(results)
+            return self.stopped
+
+    monkeypatch.setattr(manager, "_probe_public", probe)
+    manager._verify(manager.generation, ControlledCancel())
+
+    assert readiness == [True, False, True]
+    assert probe_times[1] - probe_times[0] >= mac_tunnel.PROBE_INTERVAL
+    assert probe_times[2] - probe_times[1] >= mac_tunnel.RETRY_INTERVAL
+
+
+def test_successful_probe_after_startup_deadline_cannot_make_tunnel_ready(active_manager, monkeypatch):
+    manager = active_manager
+    clock = [100.0]
+    monkeypatch.setattr(mac_tunnel.time, "monotonic", lambda: clock[0])
+    manager.attempt_started = clock[0]
+    manager.deadline_at = clock[0] + mac_tunnel.STARTUP_TIMEOUT
+    allocate(manager)
+    register(manager)
+    process, gateway = manager.process, manager.gateway
+
+    def late_success(url, probed_gateway):
+        clock[0] = manager.deadline_at + 1
+        return True, ""
+
+    monkeypatch.setattr(manager, "_probe_public", late_success)
+    clock[0] = manager.dns_wait_until
+    manager._verify(manager.generation, manager.cancel)
+
+    failed = manager.status()
+    assert failed["phase"] == "error"
+    assert failed["stage"] == "verifying"
+    assert failed["ready"] is False
+    assert failed["candidate_host"] == PUBLIC_HOST
+    assert failed["url_assignments"] == 1
+    assert failed["public_url"] == ""
+    assert failed["verified_at"] == 0
+    assert "terminate" in process.calls
+    assert gateway.closed
+
+
+def test_old_monitor_preserves_current_attempt_state_and_log(active_manager):
+    manager = active_manager
+    allocate(manager)
+    current_process = manager.process
+    current_log = "current generation diagnostics\n"
+    manager.log_file.write_text(current_log, encoding="utf-8")
+    old_process = FakeProcess()
+    old_process.stdout = io.StringIO(
+        "https://old-generation.trycloudflare.com\n"
+        "INF Registered tunnel connection connIndex=0\n"
+    )
+
+    manager._monitor(old_process, manager.generation - 1)
+
+    assert manager.process is current_process
+    assert manager.url == PUBLIC_URL
+    assert manager.status()["phase"] == "starting"
+    assert manager.log_file.read_text(encoding="utf-8") == current_log
+    assert "terminate" not in current_process.calls
+
+
+def test_failure_stops_owned_process_and_preserves_failed_stage_and_reason(active_manager):
+    manager = active_manager
+    process, gateway = manager.process, manager.gateway
+    allocate(manager)
+    manager._handle_line(
+        'ERR Unable to establish connection with Cloudflare edge error="dial tcp: i/o timeout" connIndex=0',
+        manager.generation,
+    )
+
+    manager._fail(manager.generation, "Connection startup deadline exceeded")
+
+    failed = manager.status()
+    assert failed["phase"] == "error"
+    assert failed["stage"] == "connecting"
+    assert failed["ready"] is False
+    assert "i/o timeout" in failed["last_error"]
+    assert "i/o timeout" in failed["log_tail"]
+    assert failed["error"]
+    assert "terminate" in process.calls
+    assert gateway.closed
+
+
+def test_start_uses_explicit_empty_config_and_records_elapsed_time(tmp_path, monkeypatch):
+    commands = []
+    process = FakeProcess()
+    clock = [100.0]
+    binary = str(tmp_path / "cloudflared")
+
+    class DeferredThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            pass
+
+    def popen(command, **kwargs):
+        commands.append(command)
+        return process
+
+    monkeypatch.setattr(mac_tunnel, "find_binary", lambda configured="": binary)
+    monkeypatch.setattr(mac_tunnel, "PublicGateway", FakeGateway)
+    monkeypatch.setattr(mac_tunnel.subprocess, "Popen", popen)
+    monkeypatch.setattr(mac_tunnel.threading, "Thread", DeferredThread)
+    monkeypatch.setattr(mac_tunnel.time, "monotonic", lambda: clock[0])
+    manager = mac_tunnel.TunnelManager(tmp_path)
+
+    try:
+        manager.start(8767)
+        clock[0] += 4.5
+        command = commands[0]
+        config_path = Path(command[command.index("--config") + 1])
+        status = manager.status()
+
+        assert json.loads(config_path.read_text()) == {}
+        assert command[command.index("--protocol") + 1] == "http2"
+        assert command[command.index("--url") + 1] == "http://127.0.0.1:34567"
+        assert status["stage"] == "allocating"
+        assert status["protocol"] == "http2"
+        assert status["binary_path"] == str(Path(binary).resolve())
+        assert 4 <= status["elapsed_seconds"] <= 5
+        assert status["ready"] is False
+        assert status["candidate_host"] == ""
+        assert status["url_assignments"] == 0
+        assert manager.verification_expires_at is None
+    finally:
+        manager.stop()
+
+
+@pytest.mark.parametrize("text", [
+    "GET https://active-test.trycloudflare.com/?key=pairing-secret&mode=quick",
+    "request token=pairing-secret&mode=quick",
+    '{"key":"pairing-secret","message":"i/o timeout"}',
+    "Authorization: Bearer pairing-secret",
+])
+def test_log_redaction_hides_credentials_without_discarding_diagnostics(text):
+    redacted = mac_tunnel.redact_log(text)
+    assert "pairing-secret" not in redacted
+    assert redacted
+    if "i/o timeout" in text:
+        assert "i/o timeout" in redacted
+
+
+def test_runtime_diagnostics_redact_pairing_keys(active_manager):
+    manager = active_manager
+    allocate(manager)
+    manager._handle_line(
+        'ERR Serve tunnel error url="https://active-test.trycloudflare.com/?key=pairing-secret" error="i/o timeout" connIndex=0',
+        manager.generation,
+    )
+
+    status = manager.status()
+    assert isinstance(status["log_tail"], str)
+    assert "pairing-secret" not in status["log_tail"]
+    assert "pairing-secret" not in status["last_error"]
+    assert "i/o timeout" in status["log_tail"]
+    assert "i/o timeout" in status["last_error"]
+    assert status["candidate_host"] == PUBLIC_HOST
+    assert status["public_url"] == ""
+
+    manager._fail(manager.generation, "Public validation failed")
+    failed = manager.status()
+    assert failed["candidate_host"] == PUBLIC_HOST
+    assert failed["url_assignments"] == 1
+    assert failed["public_url"] == ""
+    assert "pairing-secret" not in json.dumps(failed)
+
+
+class ProbeResponse:
+    def __init__(self, status, payload):
+        self.status = status
+        self.body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+
+    def getcode(self):
+        return self.status
+
+    def read(self, limit=-1):
+        return self.body if limit < 0 else self.body[:limit]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+@pytest.mark.parametrize(("status", "payload", "expected"), [
+    (200, {"ok": True, "probe_id": "this-probe"}, True),
+    (200, {"ok": True, "probe_id": "previous-probe"}, False),
+    (200, {"ok": False, "probe_id": "this-probe"}, False),
+    (200, {"ok": "true", "probe_id": "this-probe"}, False),
+    (200, {"ok": True}, False),
+    (200, [], False),
+    (200, b"not JSON", False),
+    (503, {"ok": True, "probe_id": "this-probe"}, False),
+])
+def test_public_probe_requires_success_and_current_gateway_identity(
+    tmp_path, monkeypatch, status, payload, expected
+):
+    requests = []
+    handlers_seen = []
+    system_proxies = {"https": "http://configured-proxy.invalid:8080"}
+
+    class Opener:
+        def open(self, request, timeout=None):
+            requests.append((getattr(request, "full_url", request), timeout))
+            return ProbeResponse(status, payload)
+
+    def opener_factory(*handlers):
+        handlers_seen.extend(handlers)
+        return Opener()
+
+    monkeypatch.setattr(mac_tunnel, "build_opener", opener_factory)
+    monkeypatch.setattr(urllib_request, "getproxies", lambda: system_proxies)
+    manager = mac_tunnel.TunnelManager(tmp_path)
+    ok, reason = manager._probe_public(PUBLIC_URL, SimpleNamespace(probe_id="this-probe"))
+
+    assert ok is expected
+    if not expected:
+        assert reason
+    parsed = urlsplit(requests[0][0])
+    assert parsed.scheme == "https"
+    assert parsed.hostname == "active-test.trycloudflare.com"
+    assert parsed.path == "/health"
+    assert 0 < requests[0][1] <= mac_tunnel.PROBE_TIMEOUT
+    assert any(isinstance(handler, ProxyHandler) and handler.proxies == system_proxies for handler in handlers_seen)
+    assert any(isinstance(handler, mac_tunnel.NoRedirect) for handler in handlers_seen)
+    for handler in handlers_seen:
+        if isinstance(handler, HTTPSHandler):
+            context = handler._context
+            assert context is None or (
+                context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
+            )
+
+
+def test_public_probe_reports_tls_failure_without_insecure_retry(tmp_path, monkeypatch):
+    attempts = []
+
+    class Opener:
+        def open(self, request, timeout=None):
+            attempts.append(request)
+            raise ssl.SSLCertVerificationError("certificate verify failed")
+
+    monkeypatch.setattr(mac_tunnel, "build_opener", lambda *handlers: Opener())
+    manager = mac_tunnel.TunnelManager(tmp_path)
+
+    ok, reason = manager._probe_public(PUBLIC_URL, SimpleNamespace(probe_id="this-probe"))
+
+    assert ok is False
+    assert reason
+    assert len(attempts) == 1
+
+
+def test_public_probe_does_not_bypass_configured_proxy_after_failure(tmp_path, monkeypatch):
+    system_proxies = {"https": "http://configured-proxy.invalid:8080"}
+    attempts = []
+    builds = []
+
+    class Opener:
+        def open(self, request, timeout=None):
+            attempts.append(request)
+            raise URLError("configured proxy is unavailable")
+
+    def opener_factory(*handlers):
+        builds.append(handlers)
+        return Opener()
+
+    monkeypatch.setattr(urllib_request, "getproxies", lambda: system_proxies)
+    monkeypatch.setattr(mac_tunnel, "build_opener", opener_factory)
+    manager = mac_tunnel.TunnelManager(tmp_path)
+
+    ok, reason = manager._probe_public(PUBLIC_URL, SimpleNamespace(probe_id="this-probe"))
+
+    assert ok is False
+    assert "configured proxy" in reason
+    assert len(attempts) == len(builds) == 1
+    assert any(
+        isinstance(handler, ProxyHandler) and handler.proxies == system_proxies
+        for handler in builds[0]
+    )
+
+
+@pytest.mark.parametrize("status", [302, 503])
+def test_public_probe_reports_http_errors_and_closes_response(tmp_path, monkeypatch, status):
+    response_body = io.BytesIO(b"upstream error")
+
+    class Opener:
+        def open(self, request, timeout=None):
+            raise HTTPError(PUBLIC_URL + "/health", status, "test failure", {}, response_body)
+
+    monkeypatch.setattr(mac_tunnel, "build_opener", lambda *handlers: Opener())
+    manager = mac_tunnel.TunnelManager(tmp_path)
+
+    ok, reason = manager._probe_public(PUBLIC_URL, SimpleNamespace(probe_id="this-probe"))
+
+    assert ok is False
+    assert str(status) in reason
+    assert response_body.closed
+
+
+def test_probe_redirect_handler_does_not_visit_redirect_destination(services):
+    make_origin, _ = services
+    destination = make_origin()
+
+    class RedirectOrigin(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{destination.server_port}/health")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    opener = mac_tunnel.build_opener(ProxyHandler({}), mac_tunnel.NoRedirect())
+    redirector = ThreadingHTTPServer(("127.0.0.1", 0), RedirectOrigin)
+    with running_server(redirector):
+        with pytest.raises(HTTPError) as failure:
+            opener.open(f"http://127.0.0.1:{redirector.server_port}/health", timeout=2)
+        assert failure.value.code == 302
+        failure.value.close()
+
+    assert destination.requests == []
+
+
+def test_dns_grace_performs_no_queries_and_starts_only_one_observer(waiting_manager_clock, monkeypatch):
+    manager, clock = waiting_manager_clock
+    workers = []
+
+    class DeferredThread:
+        def __init__(self, *args, **kwargs):
+            workers.append(kwargs)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(mac_tunnel.threading, "Thread", DeferredThread)
+    clock[0] = manager.dns_grace_until - 0.01
+    with manager.lock:
+        assert manager._dns_wait_complete(manager.generation, manager.cancel, clock[0]) is False
+    assert not workers
+    assert manager.status()["public_probe_attempts"] == 0
+    assert manager.status()["dns_observation_count"] == 0
+    assert manager.status()["first_public_probe_delay_seconds"] is None
+
+    clock[0] = manager.dns_grace_until
+    for _ in range(3):
+        with manager.lock:
+            assert manager._dns_wait_complete(manager.generation, manager.cancel, clock[0]) is False
+    assert len(workers) == 1
+    assert workers[0]["daemon"] is True
+    assert manager.status()["public_probe_attempts"] == 0
+    assert manager.deadline_at == 100 + mac_tunnel.STARTUP_TIMEOUT
+
+
+@pytest.mark.parametrize("observations, expected_state", [
+    ([("pending", "nxdomain"), ("visible", "a_record_visible")], "visible"),
+    ([("pending", "no_a_record"), ("visible", "a_record_visible")], "visible"),
+    ([("unavailable", "request_failed")], "unavailable"),
+])
+def test_optional_dns_observation_only_releases_normal_https_gate(
+    waiting_manager_clock, monkeypatch, observations, expected_state
+):
+    manager, clock = waiting_manager_clock
+    queries, public_requests, workers = [], [], []
+
+    class ControlledCancel:
+        stopped = False
+        waits = 0
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, delay):
+            self.waits += 1
+            assert self.waits < 30
+            if not self.stopped:
+                clock[0] += delay
+            return self.stopped
+
+    cancel = ControlledCancel()
+
+    def query(host, timeout):
+        assert clock[0] >= manager.dns_grace_until
+        assert manager.status()["ready"] is False
+        assert manager.status()["public_probe_attempts"] == 0
+        queries.append((host, timeout))
+        return observations[len(queries) - 1]
+
+    class InlineThread:
+        def __init__(self, target, args, daemon):
+            self.target, self.args = target, args
+            workers.append(self)
+
+        def start(self):
+            self.target(*self.args)
+
+    def public_probe(url, gateway):
+        public_requests.append(url)
+        assert manager.status()["ready"] is False
+        assert manager.status()["public_probe_attempts"] == 1
+        cancel.stopped = True
+        return True, ""
+
+    monkeypatch.setattr(manager, "_query_dns_visibility", query)
+    monkeypatch.setattr(manager, "_probe_public", public_probe)
+    monkeypatch.setattr(mac_tunnel.threading, "Thread", InlineThread)
+    manager._verify(manager.generation, cancel)
+
+    status = manager.status()
+    assert len(workers) == 1
+    assert public_requests == [PUBLIC_URL]
+    assert all(host == PUBLIC_HOST and 0 < timeout <= mac_tunnel.DNS_OBSERVE_TIMEOUT for host, timeout in queries)
+    assert status["ready"] is True
+    assert status["dns_wait_state"] == expected_state
+    assert status["dns_observation_count"] == len(observations)
+    assert status["public_probe_attempts"] == 1
+    assert mac_tunnel.DNS_GRACE <= status["first_public_probe_delay_seconds"] <= mac_tunnel.DNS_WAIT_LIMIT
+
+
+def test_hung_dns_observer_cannot_hold_normal_https_past_wait_limit(waiting_manager_clock, monkeypatch):
+    manager, clock = waiting_manager_clock
+    entered, release = threading.Event(), threading.Event()
+    workers, public_requests = [], []
+    real_thread = threading.Thread
+
+    def thread_factory(*args, **kwargs):
+        worker = real_thread(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    def blocked_query(host, timeout):
+        entered.set()
+        release.wait(timeout=3)
+        return "visible", "a_record_visible"
+
+    class CancelAfterProbe:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, delay):
+            assert self.stopped
+            return True
+
+    cancel = CancelAfterProbe()
+
+    def public_probe(url, gateway):
+        public_requests.append(url)
+        cancel.stopped = True
+        return False, "origin is unavailable"
+
+    monkeypatch.setattr(mac_tunnel.threading, "Thread", thread_factory)
+    monkeypatch.setattr(manager, "_query_dns_visibility", blocked_query)
+    monkeypatch.setattr(manager, "_probe_public", public_probe)
+    clock[0] = manager.dns_grace_until
+    try:
+        with manager.lock:
+            assert manager._dns_wait_complete(manager.generation, manager.cancel, clock[0]) is False
+        assert entered.wait(timeout=3)
+        assert manager.status()["public_probe_attempts"] == 0
+
+        clock[0] = manager.dns_wait_until
+        manager._verify(manager.generation, cancel)
+        before_late_result = manager.status()
+        assert public_requests == [PUBLIC_URL]
+        assert before_late_result["dns_wait_state"] == "expired"
+        assert before_late_result["first_public_probe_delay_seconds"] == mac_tunnel.DNS_WAIT_LIMIT
+        assert before_late_result["public_probe_attempts"] == 1
+        assert before_late_result["ready"] is False
+        assert manager.deadline_at == 100 + mac_tunnel.STARTUP_TIMEOUT
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(timeout=3)
+
+    assert len(workers) == 1 and not workers[0].is_alive()
+    assert manager.status()["dns_wait_state"] == "expired"
+    assert manager.status()["ready"] is False
+    manager._fail(manager.generation, "validation failed")
+    failed = manager.status()
+    for field in ("dns_wait_state", "dns_observation_count", "first_public_probe_delay_seconds", "public_probe_attempts"):
+        assert failed[field] == before_late_result[field]
+    manager.stop()
+    stopped = manager.status()
+    assert stopped["dns_wait_state"] == "off"
+    assert stopped["dns_observation_count"] == stopped["public_probe_attempts"] == 0
+    assert stopped["first_public_probe_delay_seconds"] is None
+
+
+def test_cancelled_dns_observation_cannot_change_new_attempt(waiting_manager_clock, monkeypatch):
+    manager, clock = waiting_manager_clock
+    entered, release = threading.Event(), threading.Event()
+    workers = []
+    real_thread = threading.Thread
+
+    def thread_factory(*args, **kwargs):
+        worker = real_thread(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    def blocked_query(host, timeout):
+        entered.set()
+        release.wait(timeout=3)
+        return "visible", "a_record_visible"
+
+    monkeypatch.setattr(mac_tunnel.threading, "Thread", thread_factory)
+    monkeypatch.setattr(manager, "_query_dns_visibility", blocked_query)
+    clock[0] = manager.dns_grace_until
+    try:
+        with manager.lock:
+            manager._dns_wait_complete(manager.generation, manager.cancel, clock[0])
+        assert entered.wait(timeout=3)
+        manager.stop()
+        manager.phase, manager.stage = "starting", "allocating"
+        manager.cancel = threading.Event()
+        for line in allocation_banner("https://replacement-test.trycloudflare.com"):
+            manager._handle_line(line, manager.generation)
+        clock[0] = manager.dns_grace_until
+        with manager.lock:
+            assert manager._dns_wait_complete(manager.generation, manager.cancel, clock[0]) is True
+        assert len(workers) == 1
+        assert manager.status()["dns_wait_reason"] == "worker_busy"
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(timeout=3)
+
+    status = manager.status()
+    assert len(workers) == 1 and not workers[0].is_alive()
+    assert status["candidate_host"] == "replacement-test.trycloudflare.com"
+    assert status["dns_wait_state"] == "unavailable"
+    assert status["dns_wait_reason"] == "worker_busy"
+    assert status["dns_observation_count"] == status["public_probe_attempts"] == 0
+    assert status["ready"] is False
+
+
+def test_dns_wait_is_clamped_to_original_startup_deadline(active_manager, monkeypatch):
+    manager = active_manager
+    clock = [100.0]
+    monkeypatch.setattr(mac_tunnel.time, "monotonic", lambda: clock[0])
+    manager.attempt_started = 16.0
+    manager.deadline_at = manager.attempt_started + mac_tunnel.STARTUP_TIMEOUT
+    allocate(manager)
+    register(manager)
+    assert manager.dns_grace_until == manager.dns_wait_until == 106.0
+
+    clock[0] = manager.deadline_at
+    manager._verify(manager.generation, manager.cancel)
+
+    status = manager.status()
+    assert status["phase"] == "error"
+    assert status["public_probe_attempts"] == status["dns_observation_count"] == 0
+
+
+def dns_answer(status=0, answers=None, question=PUBLIC_HOST):
+    return {"Status": status, "Question": [{"name": question + ".", "type": 1}],
+            "Answer": [] if answers is None else answers}
+
+
+@pytest.mark.parametrize("payload, expected_state", [
+    (dns_answer(answers=[{"name": PUBLIC_HOST + ".", "type": 1, "data": "198.51.100.7"}]), "visible"),
+    (dns_answer(status=3), "pending"),
+    (dns_answer(), "pending"),
+    (dns_answer(status=2), "unavailable"),
+    (dns_answer(question="other.trycloudflare.com"), "unavailable"),
+    (dns_answer(answers=[{"name": "other.trycloudflare.com.", "type": 1, "data": "198.51.100.7"}]), "pending"),
+    (dns_answer(answers=[{"name": PUBLIC_HOST, "type": 1, "data": "invalid-address"}]), "unavailable"),
+    (b"not JSON", "unavailable"),
+])
+def test_dns_visibility_decoder_returns_no_addresses_or_readiness(tmp_path, monkeypatch, payload, expected_state):
+    requests, seen_handlers = [], []
+    proxies = {"https": "http://configured-proxy.invalid:8080"}
+
+    class Opener:
+        def open(self, request, timeout=None):
+            requests.append((request, timeout))
+            return ProbeResponse(200, payload)
+
+    def opener_factory(*handlers):
+        seen_handlers.extend(handlers)
+        return Opener()
+
+    monkeypatch.setattr(urllib_request, "getproxies", lambda: proxies)
+    monkeypatch.setattr(mac_tunnel, "build_opener", opener_factory)
+    manager = mac_tunnel.TunnelManager(tmp_path)
+    result = REAL_DNS_QUERY(manager, PUBLIC_HOST, mac_tunnel.DNS_OBSERVE_TIMEOUT)
+
+    assert result[0] == expected_state
+    assert "198.51.100.7" not in str(result)
+    request, timeout = requests[0]
+    parsed = urlsplit(request.full_url)
+    assert parsed.scheme == "https" and parsed.hostname == "cloudflare-dns.com"
+    assert parse_qs(parsed.query) == {"name": [PUBLIC_HOST], "type": ["A"]}
+    assert timeout == mac_tunnel.DNS_OBSERVE_TIMEOUT
+    assert any(isinstance(handler, ProxyHandler) and handler.proxies == proxies for handler in seen_handlers)
+    assert any(isinstance(handler, mac_tunnel.NoRedirect) for handler in seen_handlers)
+    contexts = [handler._context for handler in seen_handlers if isinstance(handler, HTTPSHandler)]
+    assert contexts and all(context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED for context in contexts)
+    status = manager.status()
+    assert status["ready"] is False
+    assert status["public_probe_attempts"] == 0
+    assert "198.51.100.7" not in json.dumps(status)

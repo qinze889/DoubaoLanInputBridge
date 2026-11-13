@@ -93,6 +93,77 @@ jobs:
           python scripts/smoke_windows_installer.py --installer $installer --expected-service desktop/sidecar-dist/bridge-service.exe
       - name: Verify frozen P2P data channels
         run: python scripts/smoke_packaged_rtc.py --service desktop/sidecar-dist/bridge-service.exe
+      - name: Verify real Cloudflare public access from the installed NSIS package
+        id: cloudflare_e2e
+        timeout-minutes: 8
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, subprocess, sys, tempfile
+          from PyInstaller.archive.readers import CArchiveReader
+
+          root = pathlib.Path.cwd()
+          evidence = root / 'build/cloudflare-e2e-evidence/windows'
+          evidence.mkdir(parents=True, exist_ok=True)
+          record = {'platform': 'windows', 'status': 'running', 'stage': 'select_installer',
+                    'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'workflow_run': os.environ['GITHUB_RUN_ID']}
+          def digest(path):
+              with path.open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          def save_record():
+              (evidence / 'package.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+          save_record()
+          try:
+              installers = list((root / 'desktop/src-tauri/target/release/bundle/nsis').glob('*.exe'))
+              assert len(installers) == 1, 'Expected one NSIS installer'
+              installer = installers[0]
+              record['installer_sha256'] = digest(installer)
+              with tempfile.TemporaryDirectory(prefix='shengjian-cf-package-', dir=os.environ['RUNNER_TEMP']) as temporary:
+                  install = pathlib.Path(temporary) / 'installed'
+                  install.mkdir()
+                  record['stage'] = 'install_nsis'
+                  save_record()
+                  # NSIS requires /D last, without quotes, even when its path has spaces.
+                  subprocess.run(f'"{installer}" /S /D={install}', check=True, timeout=120,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  service = install / 'bridge-service.exe'
+                  record['stage'] = 'verify_installed_payload'
+                  assert service.is_file(), 'Installed backend is missing'
+                  assert digest(service) == digest(root / 'desktop/sidecar-dist/bridge-service.exe'), 'Installed backend differs'
+                  assert (install / 'VERSION').read_text().strip() == (root / 'VERSION').read_text().strip(), 'Installed version differs'
+                  # Extract the reference binary from the final installed onefile payload.
+                  # The smoke test compares it with the backend's running _MEIPASS binary.
+                  archive = CArchiveReader(str(service))
+                  assert 'cloudflared.exe' in archive.toc, 'Bundled cloudflared is missing'
+                  binary = archive.extract('cloudflared.exe')
+                  assert binary and len(binary) > 1_000_000, 'Bundled cloudflared is incomplete'
+                  cloudflared = pathlib.Path(temporary) / 'cloudflared.exe'
+                  cloudflared.write_bytes(binary)
+                  record.update(service_sha256=digest(service), cloudflared_sha256=digest(cloudflared), stage='public_e2e')
+                  save_record()
+                  subprocess.run([sys.executable, str(root / 'scripts/smoke_cloudflare.py'),
+                                  '--cloudflared', str(cloudflared), '--service', str(service),
+                                  '--service-kind', 'gui', '--timeout', '180', '--output', str(evidence)],
+                                 check=True, timeout=300)
+                  record['stage'] = 'cleanup_package'
+              record.update(status='passed', stage='complete')
+          except Exception as error:
+              record.update(status='failed', error_type=type(error).__name__)
+              save_record()
+              raise SystemExit('Packaged Cloudflare public check failed; see sanitized evidence.') from None
+          save_record()
+      - name: Upload sanitized Windows Cloudflare evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shengjian-windows-cloudflare-e2e
+          path: |
+            build/cloudflare-e2e-evidence/windows/package.json
+            build/cloudflare-e2e-evidence/windows/result.json
+            build/cloudflare-e2e-evidence/windows/service.log
+            build/cloudflare-e2e-evidence/windows/cloudflare.log
+          if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
       - name: Stage Windows downloads
         shell: pwsh
         run: |
@@ -100,7 +171,7 @@ jobs:
           Copy-Item desktop/src-tauri/target/release/bundle/nsis/*.exe dist/windows/Shengjian-windows-x64-setup.exe
           Copy-Item docs/cloudflared-LICENSE dist/windows/cloudflared-LICENSE.txt
           Copy-Item docs/INSTALL-Windows.txt dist/windows/
-          @{version=(Get-Content VERSION).Trim(); source_commit=(git rev-parse HEAD); workflow_run=$env:GITHUB_RUN_ID; architecture='x64'; installed_upgrade_and_transfer_verified=$true; frozen_p2p_verified=$true} | ConvertTo-Json | Set-Content dist/windows/Windows-build.json -Encoding utf8
+          @{version=(Get-Content VERSION).Trim(); source_commit=(git rev-parse HEAD); workflow_run=$env:GITHUB_RUN_ID; architecture='x64'; installed_upgrade_and_transfer_verified=$true; frozen_p2p_verified=$true; cloudflare_public_e2e_verified=$true} | ConvertTo-Json | Set-Content dist/windows/Windows-build.json -Encoding utf8
           Get-ChildItem dist/windows -File | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content dist/windows/SHA256SUMS.txt -Encoding utf8
       - uses: actions/upload-artifact@v4
         with:
@@ -108,3 +179,4 @@ jobs:
           path: dist/windows/
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+

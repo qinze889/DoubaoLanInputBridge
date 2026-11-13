@@ -56,7 +56,7 @@ from qrcode.constants import ERROR_CORRECT_M
 
 APP_NAME = "声笺"
 APP_ID = "DoubaoLanInputBridge"
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 APP_ICON_RELATIVE_PATH = "assets/app-icon-master.png" if sys.platform == "darwin" else "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20
@@ -2603,6 +2603,7 @@ def parse_multipart_upload_stream(
     content_type: str,
     upload_dir: Path = HISTORY_ARCHIVE_DIR,
     categorize: bool = True,
+    authorize=None,
 ) -> dict:
     if content_length <= 0:
         raise ValueError("empty upload")
@@ -2622,6 +2623,10 @@ def parse_multipart_upload_stream(
         },
         keep_blank_values=True,
     )
+    if authorize is not None:
+        keys = form.getlist('key')
+        if len(keys) != 1 or not isinstance(keys[0], str) or not authorize(keys[0]):
+            raise PermissionError('invalid access key')
     fields: dict[str, str] = {}
     files: list[dict] = []
     for part in form.list or []:
@@ -4309,6 +4314,14 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/desktop/tunnel":
+            if self.server.connections.config.get('mode') == 'cloudflare':
+                quick = self.server.quick_tunnel.status()
+                json_response(self, HTTPStatus.OK, {
+                    'ok': True, 'config': {'mode': 'quick'}, 'status': quick,
+                    'candidates': [], 'probe_url': quick['public_url'] + '/health' if quick['ready'] else '',
+                    'log_path': str(self.server.quick_tunnel.log_file), 'log_tail': quick['log_tail'],
+                })
+                return
             config = read_tunnel_config()
             json_response(
                 self,
@@ -4395,7 +4408,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if parsed.path in ("/files/clipboard", "/files/share", "/files/paste"):
             # The bundled phone page already sends the key in the query string.
             # Reject before multipart parsing can create files on disk.
-            if IS_MACOS:
+            if IS_MACOS or self.headers.get('X-Bridge-Public') == '1':
                 upload_key = (parse_qs(parsed.query).get("key") or [""])[0]
                 if not self.is_authorized(upload_key):
                     json_response(self, HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid access key"})
@@ -4412,7 +4425,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     self.headers.get("Content-Type", ""),
                     upload_dir,
                     categorize=parsed.path != "/files/share",
+                    authorize=self.is_authorized,
                 )
+            except PermissionError:
+                json_response(self, HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid access key"})
+                return
             except Exception as exc:
                 json_response(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
@@ -4529,7 +4546,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
     def handle_desktop_post(self, path: str, data: dict) -> None:
         port = int(self.server.server_port)
         if path == '/desktop/connections':
-            result = self.server.connections.select(str(data.get('mode', '')), bool(data.get('enabled', True)))
+            result = self.server.connections.select(str(data.get('mode', '')), bool(data.get('enabled', True)), restart=bool(data.get('retry', False)))
             json_response(self, HTTPStatus.OK, {'ok': True, **result})
             return
         if path == '/desktop/connections/config':
@@ -6118,6 +6135,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 

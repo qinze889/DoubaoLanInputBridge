@@ -56,15 +56,17 @@ class ConnectionModes:
         mode, enabled = self.config['mode'], self.config['enabled']
         configured = bool(relay_client.phone_url(self.root, True))
         client = getattr(self.server, 'relay', None)
+        cloudflare = self.server.quick_tunnel.status() if mode == 'cloudflare' else None
         if not enabled: phase, error = 'off', ''
         elif mode in ('public', 'p2p'):
             phase = client.status['phase'] if client else 'error'
             error = client.status['error'] if client else '请导入这台机器的服务器配置'
         elif mode == 'cloudflare':
-            state = self.server.quick_tunnel.status();phase, error = state['phase'], state['error']
+            phase, error = cloudflare['phase'], cloudflare['error']
         else: phase, error = ('ready', '') if self.url() else ('error', '未检测到可用局域网地址')
         engine = getattr(client, 'rtc', None)
         return {'mode': mode, 'enabled': enabled, 'phase': phase, 'error': error,
+                'cloudflare': cloudflare,
                 'ready': enabled and phase in ('ready', 'online'), 'url': self.url(),
                 'peer_endpoint': self.peer_endpoint(),
                 'p2p': dict(engine.status) if engine else {'available': rtc_bridge.available(), 'connections': 0},
@@ -74,7 +76,7 @@ class ConnectionModes:
                            'experimental': ident == 'p2p'}
                           for ident, (title, detail) in MODES.items()]}
 
-    def select(self, mode, enabled=True):
+    def select(self, mode, enabled=True, restart=False):
         if mode not in MODES: raise ValueError('请选择四种连接方式之一')
         if enabled and mode in ('public', 'p2p') and not relay_client.phone_url(self.root, True):
             raise ValueError('请先导入本机的服务器配置 relay.json')
@@ -89,7 +91,7 @@ class ConnectionModes:
             if previous:
                 previous.close()
                 self.server.relay = None
-            if mode != 'cloudflare' or not enabled:
+            if mode != 'cloudflare' or not enabled or restart:
                 self.server.quick_tunnel.stop()
             self.config = {'mode': mode, 'enabled': bool(enabled)}
             peer_share.atomic_json(self.path, self.config)
@@ -118,3 +120,4 @@ class ConnectionModes:
         clean['enabled'] = False
         peer_share.atomic_json(self.root/'relay.json', clean)
         return self.select('public', True)
+
