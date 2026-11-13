@@ -25,7 +25,10 @@ class ConnectionModes:
         self.lock = threading.RLock()
         self.config = peer_share.load_json(self.path, {})
         if self.config.get('mode') not in MODES:
-            self.config = {'mode': 'public' if relay_client.phone_url(root, True) else ('cloudflare' if mac_tunnel.find_binary() else 'lan'), 'enabled': True}
+            default_mode = 'public' if relay_client.phone_url(root, True) else ('cloudflare' if mac_tunnel.find_binary() else 'lan')
+            # Do not expose a fresh installation to the Internet without a click.
+            # CF is preselected, and the existing Enable switch activates it.
+            self.config = {'mode': default_mode, 'enabled': default_mode != 'cloudflare'}
 
     def url(self):
         if not self.config['enabled']: return ''
