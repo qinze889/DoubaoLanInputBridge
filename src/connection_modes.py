@@ -7,7 +7,6 @@ from urllib.parse import quote
 import peer_share
 import relay_client
 import rtc_bridge
-import mac_tunnel
 
 MODES = {
     'public': ('固定公网', '经自己的服务器中转，域名固定，适合跨网络稳定连接。'),
@@ -25,10 +24,10 @@ class ConnectionModes:
         self.lock = threading.RLock()
         self.config = peer_share.load_json(self.path, {})
         if self.config.get('mode') not in MODES:
-            default_mode = 'public' if relay_client.phone_url(root, True) else ('cloudflare' if mac_tunnel.find_binary() else 'lan')
-            # Do not expose a fresh installation to the Internet without a click.
-            # CF is preselected, and the existing Enable switch activates it.
-            self.config = {'mode': default_mode, 'enabled': default_mode != 'cloudflare'}
+            # Keep a reachable LAN QR code on first launch; recommend the bundled
+            # Quick Tunnel in the UI, but do not expose it publicly until clicked.
+            self.config = {'mode': 'public' if relay_client.phone_url(root, True) else 'lan',
+                           'enabled': True}
 
     def url(self):
         if not self.config['enabled']: return ''
