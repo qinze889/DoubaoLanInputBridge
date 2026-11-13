@@ -1,0 +1,145 @@
+name: Release on owner request
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  actions: read
+  issues: write
+
+concurrency:
+  group: shengjian-owner-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.issue.user.login == github.repository_owner &&
+      startsWith(github.event.issue.title, 'Release v') &&
+      !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REQUEST_ISSUE: ${{ github.event.issue.number }}
+    steps:
+      - name: Check out the exact main commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate release request and version consistency
+        id: request
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, plistlib, re, subprocess, tomllib
+          event = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          issue = event['issue']
+          owner = os.environ['GITHUB_REPOSITORY_OWNER']
+          assert issue['user']['login'] == owner, 'Only repository owner requests are accepted'
+          title = issue['title'].strip()
+          match = re.fullmatch(r'Release (v\d+\.\d+\.\d+)', title)
+          assert match, 'Use exactly: Release vX.Y.Z'
+          tag = match.group(1)
+          body = (issue.get('body') or '').strip()
+          commit_match = re.fullmatch(r'commit: ([0-9a-f]{40})', body)
+          assert commit_match, 'Body must be exactly: commit: <40-character SHA>'
+          sha = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
+          assert commit_match.group(1) == sha, 'Requested SHA is not the checkout commit'
+          version = pathlib.Path('VERSION').read_text().strip()
+          assert tag == f'v{version}', 'Release tag does not match VERSION'
+          assert json.loads(pathlib.Path('desktop/package.json').read_text())['version'] == version
+          assert json.loads(pathlib.Path('desktop/src-tauri/tauri.conf.json').read_text())['version'] == version
+          assert tomllib.loads(pathlib.Path('desktop/src-tauri/Cargo.toml').read_text())['package']['version'] == version
+          assert plistlib.loads(pathlib.Path('packaging/Info-native.plist').read_bytes())['CFBundleShortVersionString'] == version
+          assert re.search(r'^APP_VERSION\s*=\s*["\x27]' + re.escape(version) + r'["\x27]\s*$', pathlib.Path('src/gui_app.py').read_text(), re.M), 'Python app version differs'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'tag={tag}\nversion={version}\ncommit={sha}\n')
+          PY
+      - name: Verify main HEAD and release uniqueness
+        env:
+          TAG: ${{ steps.request.outputs.tag }}
+          SHA: ${{ steps.request.outputs.commit }}
+        shell: bash
+        run: |
+          test "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" = "$SHA" || { echo 'main moved after release request'; exit 1; }
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then echo 'Release already exists'; exit 1; fi
+          if gh api "repos/$GH_REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then echo 'Git tag already exists'; exit 1; fi
+          CURRENT_TAG="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
+          python - "$CURRENT_TAG" "$TAG" <<'PY'
+          import re,sys
+          def semver(tag):
+              match=re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', tag)
+              assert match, f'Unexpected release tag: {tag}'
+              return tuple(map(int,match.groups()))
+          assert semver(sys.argv[2]) > semver(sys.argv[1]), 'Version must increase'
+          PY
+      - name: Require successful Windows and Apple CI from exact main commit
+        id: ci
+        env:
+          SHA: ${{ steps.request.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for workflow in windows-client.yml apple-clients.yml; do
+            gh api "repos/$GH_REPO/actions/workflows/$workflow/runs?head_sha=$SHA&branch=main&event=push&status=success&per_page=50" > "/tmp/$workflow-runs.json"
+          done
+          win_id="$(jq -r --arg sha "$SHA" '[.workflow_runs[] | select(.head_sha==$sha and .head_branch=="main" and .event=="push" and .status=="completed" and .conclusion=="success") | .id][0] // empty' /tmp/windows-client.yml-runs.json)"
+          apple_id="$(jq -r --arg sha "$SHA" '[.workflow_runs[] | select(.head_sha==$sha and .head_branch=="main" and .event=="push" and .status=="completed" and .conclusion=="success") | .id][0] // empty' /tmp/apple-clients.yml-runs.json)"
+          test -n "$win_id" && test -n "$apple_id" || { echo 'Missing successful exact-commit Windows or Apple CI'; exit 1; }
+          gh api "repos/$GH_REPO/actions/runs/$win_id" > /tmp/windows-run.json
+          gh api "repos/$GH_REPO/actions/runs/$apple_id" > /tmp/apple-run.json
+          echo "windows_run_id=$win_id" >> "$GITHUB_OUTPUT"
+          echo "apple_run_id=$apple_id" >> "$GITHUB_OUTPUT"
+      - name: Download validated Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Shengjian-windows-x64
+          path: verified-windows
+          run-id: ${{ steps.ci.outputs.windows_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download validated Apple artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Shengjian-macos-arm64
+          path: verified-macos
+          run-id: ${{ steps.ci.outputs.apple_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify exact commits, artifacts and SHA256 manifests
+        env:
+          TAG: ${{ steps.request.outputs.tag }}
+          WIN: ${{ steps.ci.outputs.windows_run_id }}
+          APPLE: ${{ steps.ci.outputs.apple_run_id }}
+        shell: bash
+        run: |
+          python scripts/release_assets.py --tag "$TAG" --repository "$GH_REPO" \
+            --windows-run /tmp/windows-run.json --apple-run /tmp/apple-run.json \
+            --windows-run-id "$WIN" --apple-run-id "$APPLE" \
+            --windows verified-windows --macos verified-macos --output release-assets
+      - name: Create draft Release with verified assets
+        env:
+          TAG: ${{ steps.request.outputs.tag }}
+          SHA: ${{ steps.request.outputs.commit }}
+          VERSION: ${{ steps.request.outputs.version }}
+        shell: bash
+        run: |
+          gh release create "$TAG" --repo "$GH_REPO" --target "$SHA" --draft \
+            --title "声笺 $VERSION" \
+            --notes "Windows / macOS verified CI release. Source SHA: $SHA. Windows update: open 声笺 → 设置 → 检查更新."
+          gh release upload "$TAG" release-assets/* --repo "$GH_REPO"
+          gh release edit "$TAG" --repo "$GH_REPO" --draft=false --latest
+      - name: Report release URL to request Issue
+        env:
+          TAG: ${{ steps.request.outputs.tag }}
+        shell: bash
+        run: |
+          url="$(gh release view "$TAG" --repo "$GH_REPO" --json url --jq .url)"
+          gh issue comment "$REQUEST_ISSUE" --repo "$GH_REPO" --body "Release published after exact-commit Windows/Apple CI and SHA256 checks: $url"
