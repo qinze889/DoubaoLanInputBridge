@@ -55,7 +55,7 @@ from qrcode.constants import ERROR_CORRECT_M
 
 APP_NAME = "声笺"
 APP_ID = "DoubaoLanInputBridge"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 APP_ICON_RELATIVE_PATH = "assets/app-icon-master.png" if sys.platform == "darwin" else "assets/app.ico"
 DEFAULT_PORT = 8765
 PORT_AUTO_INCREMENT_LIMIT = 20
@@ -4378,6 +4378,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "/desktop/peers/join",
             "/desktop/peers/remove",
             "/desktop/peers/send",
+            "/desktop/peers/retry",
             "/desktop/peers/tunnel",
             "/desktop/firewall",
             "/desktop/tunnel/config",
@@ -4546,7 +4547,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             elif path.endswith("/remove"):
                 result = manager.remove(str(data.get("id", "")))
             elif path.endswith("/send"):
-                result = manager.send(str(data.get("id", "")), list(data.get("paths", [])))
+                result = manager.send(str(data.get("id", "")), data.get("paths", []), data.get("text", ""))
+            elif path.endswith("/retry"):
+                result = manager.retry(str(data.get("job_id", "")))
             else:
                 raise ValueError("未知机器共享操作")
             json_response(self, HTTPStatus.OK, {"ok": True, **result})

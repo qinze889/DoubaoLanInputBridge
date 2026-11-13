@@ -44,7 +44,7 @@ const path = require('node:path');
   const req=route.request(),u=new URL(req.url()); const data=req.postDataJSON()||{};
   calls.push({path:u.pathname,method:req.method(),query:Object.fromEntries(u.searchParams),data});
   let result={ok:true}; let status=200;
-  if(u.pathname==='/desktop/state')result={ok:true,version:'1.4.0',port:18700,key:'ui-fixture-only',mobile_url:'https://example.invalid',local_url:'http://192.168.1.8:18700/',host:'Windows',data_dir:'C:\\UI-Fixtures'};
+  if(u.pathname==='/desktop/state')result={ok:true,version:'1.4.1',port:18700,key:'ui-fixture-only',mobile_url:'https://example.invalid',local_url:'http://192.168.1.8:18700/',host:'Windows',data_dir:'C:\\UI-Fixtures'};
   else if(u.pathname==='/desktop/connections'){
    if(req.method()==='POST'){mode=data.mode;enabled=data.enabled;}
    result=state();
@@ -54,7 +54,7 @@ const path = require('node:path');
    const items=records.filter(r=>(u.searchParams.get('category')==='all'||u.searchParams.get('category')===r.category)&&(!u.searchParams.get('q')||r.summary.preview.includes(u.searchParams.get('q'))));
    result={ok:true,items,total:items.length,has_more:false};
   }
-  else if(u.pathname==='/desktop/update')result={ok:true,result:{configured:true,available:false,version:'1.4.0'}};
+  else if(u.pathname==='/desktop/update')result={ok:true,result:{configured:true,available:false,version:'1.4.1'}};
   else if(u.pathname==='/desktop/peers')result={ok:true,device:{name:'Windows 电脑'},peers:[{id:'mac1',name:'我的 Mac',endpoint:'https://example.invalid'}],jobs:[],network:{endpoint:'https://example.invalid',tunnel:{phase:'ready',ready:true,error:'',cloudflared_available:true}}};
   else if(u.pathname==='/desktop/peers/invite')result={ok:true,invitation:'shengjian://pair?fixture=only',expires_in:300};
   else if(u.pathname==='/desktop/config')result={ok:true,minimax_configured:false,minimax_model:'',update_url:'',update_source:'github'};
@@ -64,7 +64,7 @@ const path = require('node:path');
  const nav=label=>page.getByRole('navigation').getByRole('button',{name:label,exact:true});
  const checkHeading=async text=>assert.equal(await page.locator('h1').innerText(),text);
  const assertNoOverflow=async()=>{
-  const over=await page.locator('.workspace, .connection-card, .feature-grid, .page-content, .machine-pair-grid').evaluateAll(nodes=>nodes.filter(n=>n.scrollWidth>n.clientWidth+2).map(n=>n.className));
+  const over=await page.locator('.workspace, .connection-card, .feature-grid, .page-content, .machines-content, .machine-peer, .machine-job').evaluateAll(nodes=>nodes.filter(n=>n.scrollWidth>n.clientWidth+2).map(n=>n.className));
   assert.deepEqual(over,[]);
  };
  try {
@@ -116,12 +116,20 @@ const path = require('node:path');
   await page.getByText('没有找到相关记录',{exact:true}).waitFor();
   await nav('机器共享').click(); await checkHeading('机器共享');
   await page.getByText('我的 Mac',{exact:true}).waitFor();
-  await page.getByRole('button',{name:'生成邀请',exact:true}).click();
-  await page.getByRole('button',{name:/复制邀请/}).waitFor(); await assertNoOverflow();
-  await page.locator('.toast').waitFor({state:'hidden'}); await page.screenshot({path:path.join(output, 'machines.png')}); await page.keyboard.press('Escape'); await checkHeading('机器共享');
+  await page.locator('.toast').waitFor({state:'hidden'}); await assertNoOverflow(); await page.screenshot({path:path.join(output, 'machines.png')});
+  await page.getByRole('button',{name:'邀请机器',exact:true}).click();
+  await page.getByRole('dialog',{name:'邀请另一台机器'}).waitFor();
+  await page.getByRole('button',{name:'复制配对邀请',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.__uiClipboard),'shengjian://pair?fixture=only');
+  await page.screenshot({path:path.join(output, 'machines-invite.png')}); await page.keyboard.press('Escape');
+  await page.getByRole('button',{name:'添加机器',exact:true}).click();
+  await page.getByRole('dialog',{name:'添加另一台机器'}).getByRole('textbox').fill('shengjian://pair?fixture=other');
+  await page.getByRole('button',{name:'配对',exact:true}).click();
+  assert(calls.some(c=>c.path==='/desktop/peers/join'&&c.data.invitation==='shengjian://pair?fixture=other'));
+  await checkHeading('机器共享');
   await nav('设置').click(); await checkHeading('设置');
   await page.getByRole('button',{name:'检查更新',exact:true}).click();
-  await page.getByText('当前已是最新版 1.4.0').first().waitFor();
+  await page.getByText('当前已是最新版 1.4.1').first().waitFor();
   await page.locator('.toast').waitFor({state:'hidden'}); await page.screenshot({path:path.join(output, 'settings.png')}); await nav('连接设备').click(); await checkHeading('连接你的手机');
   await page.getByText('局域网已就绪',{exact:true}).first().waitFor();
   await page.setViewportSize({width:900,height:620}); await assertNoOverflow();
@@ -134,6 +142,6 @@ const path = require('node:path');
   await page.keyboard.press('Control+n'); await page.getByRole('dialog').waitFor();
   await page.keyboard.press('Escape');
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({passed:true,checks:['navigation','connection-switch','qr-refresh','connection-toggle','text-sharing','file-picker-sharing','failed-send-keeps-draft','history-filter','open-containing-folder','machine-polling-and-invitation','settings-update','keyboard-shortcuts','light-dark-small-layout'],syntheticOnly:true,apiCalls:calls.length,pageErrors:errors}));
+  console.log(JSON.stringify({passed:true,checks:['navigation','connection-switch','qr-refresh','connection-toggle','text-sharing','file-picker-sharing','failed-send-keeps-draft','history-filter','open-containing-folder','machine-polling-invitation-and-pairing','settings-update','keyboard-shortcuts','light-dark-small-layout'],syntheticOnly:true,apiCalls:calls.length,pageErrors:errors}));
  } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});
