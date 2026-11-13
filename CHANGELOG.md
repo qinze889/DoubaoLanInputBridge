@@ -2,6 +2,11 @@
 
 发行包与完整说明以 [GitHub Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases) 为准。`VERSION` 表示当前分支源码版本。
 
+## 未发布
+
+- Windows 只保留 Tauri + React 正式安装版，停止构建 Qt 便携版。
+- 发行页面只上传 Mac DMG 与 Windows NSIS 两个安装包；其他验证文件继续保存在 CI artifacts。
+
 ## 1.4.1 — 2026-11-13
 
 - Windows 机器共享改为与 Mac 一致的卡片与邀请/配对弹窗，分享窗口调整为纵向布局。
