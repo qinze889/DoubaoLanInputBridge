@@ -1,0 +1,114 @@
+name: Publish verified stable release
+on:
+  workflow_run:
+    workflows: [Windows client, Apple clients]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: stable-release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Select exactly matching successful CI runs
+        id: select
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, re, subprocess
+          def gh(*args):
+              return subprocess.check_output(['gh', 'api', *args], text=True)
+          repo = os.environ['GH_REPO']
+          sha = os.environ['RELEASE_COMMIT']
+          version = pathlib.Path('VERSION').read_text(encoding='utf-8').strip()
+          if not re.fullmatch(r'[0-9]+[.][0-9]+[.][0-9]+', version):
+              raise SystemExit('Invalid release VERSION')
+          tag = 'v' + version
+          try:
+              subprocess.check_output(['gh', 'release', 'view', tag, '--repo', repo], stderr=subprocess.DEVNULL)
+          except subprocess.CalledProcessError:
+              pass
+          else:
+              print(f'{tag} already has a release; skipping.')
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as out: out.write('ready=false\n')
+              raise SystemExit(0)
+          ids = {}
+          for key, workflow in [('win','windows-client.yml'), ('apple','apple-clients.yml')]:
+              data = json.loads(gh(f'repos/{repo}/actions/workflows/{workflow}/runs?branch=main&status=success&per_page=50'))
+              matches = [run for run in data['workflow_runs']
+                         if run['head_sha'] == sha and run['event'] == 'push'
+                         and run['status'] == 'completed' and run['conclusion'] == 'success']
+              if not matches:
+                  print(f'Waiting for successful {workflow} on exact main commit {sha}; no release yet.')
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as out: out.write('ready=false\n')
+                  raise SystemExit(0)
+              ids[key] = matches[0]['id']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'ready=true\ntag={tag}\nwin={ids["win"]}\napple={ids["apple"]}\n')
+          print(f'Publishing {tag} from {sha}: Windows={ids["win"]}, Apple={ids["apple"]}.')
+          PY
+      - name: Fetch matching Windows / Apple run metadata
+        if: steps.select.outputs.ready == 'true'
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/${{ steps.select.outputs.win }}" > /tmp/windows-run.json
+          gh api "repos/$GH_REPO/actions/runs/${{ steps.select.outputs.apple }}" > /tmp/apple-run.json
+      - uses: actions/download-artifact@v4
+        if: steps.select.outputs.ready == 'true'
+        with:
+          name: Shengjian-windows-x64
+          path: verified-windows
+          run-id: ${{ steps.select.outputs.win }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        if: steps.select.outputs.ready == 'true'
+        with:
+          name: Shengjian-macos-arm64
+          path: verified-macos
+          run-id: ${{ steps.select.outputs.apple }}
+          github-token: ${{ github.token }}
+      - name: Verify source, successful CI, hashes and packages
+        if: steps.select.outputs.ready == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.select.outputs.tag }}
+        run: |
+          python scripts/release_assets.py --tag "$RELEASE_TAG" --repository "$GH_REPO" \
+            --windows-run /tmp/windows-run.json --apple-run /tmp/apple-run.json \
+            --windows-run-id "${{ steps.select.outputs.win }}" \
+            --apple-run-id "${{ steps.select.outputs.apple }}" \
+            --windows verified-windows --macos verified-macos --output release-assets
+      - name: Create verified release and publish
+        if: steps.select.outputs.ready == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.select.outputs.tag }}
+        run: |
+          cat > release-notes.md <<'EOF'
+          声笺 1.4.1：Windows 界面向 macOS 统一，改进机器共享卡片、配对弹窗、跨设备文本分享与传输重试。
+          Windows 安装版可在声笺客户端内点击「下载并更新」进行原位升级，应用将自动重新启动。
+          两个平台安装包均来自同一提交，并通过完整 CI 与 SHA256 检验。
+          EOF
+          gh release create "$RELEASE_TAG" --repo "$GH_REPO" --target "$RELEASE_COMMIT" \
+            --title "声笺 1.4.1 · Windows / Mac" --notes-file release-notes.md --draft
+          gh release upload "$RELEASE_TAG" release-assets/* --repo "$GH_REPO"
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --latest
