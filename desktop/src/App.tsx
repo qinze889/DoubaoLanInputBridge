@@ -156,6 +156,7 @@ function App() {
   const [notice, setNotice] = useState('')
   const [availableUpdate, setAvailableUpdate] = useState<UpdateResult | null>(null)
   const [autoUpdating, setAutoUpdating] = useState(false)
+  const [checkingSidebarUpdate, setCheckingSidebarUpdate] = useState(false)
   const updateCheckInFlightRef = useRef(false)
   const lastUpdateCheckAtRef = useRef(0)
   const dismissedUpdateVersionRef = useRef<string | null>(null)
@@ -394,6 +395,25 @@ function App() {
     }
   }
 
+  const checkUpdateFromSidebar = async () => {
+    if (!bridge || checkingSidebarUpdate) return
+    setCheckingSidebarUpdate(true)
+    try {
+      const response = await apiGet<{ result: UpdateResult }>('/desktop/update', { refresh: 1 })
+      if (response.result.error) throw new Error(response.result.error)
+      if (response.result.available) {
+        setAvailableUpdate(response.result)
+        notify('发现新版本 ' + response.result.version)
+      } else {
+        notify('当前已是最新版 ' + bridge.version)
+      }
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : '检查更新失败')
+    } finally {
+      setCheckingSidebarUpdate(false)
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -407,15 +427,6 @@ function App() {
           <button className={`nav-item ${page === 'machines' ? 'active' : ''}`} aria-current={page === 'machines' ? 'page' : undefined} onClick={() => setPage('machines')}><MonitorSmartphone size={18} /><span>机器共享</span></button>
           <button className={`nav-item ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}><Settings size={18} /><span>设置</span></button>
         </nav>
-        {availableUpdate && (
-          <button className="update-indicator" disabled={autoUpdating} onClick={() => void installAvailableUpdate()}>
-            {autoUpdating ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}
-            <span>
-              <strong>有新版本 {availableUpdate.version}</strong>
-              <small>{autoUpdating ? '正在下载安装…' : '点击立即更新'}</small>
-            </span>
-          </button>
-        )}
         <div className="sidebar-footer">
         <div className={`service-summary ${bridge ? 'online' : ''}`}>
           <span className="status-dot" />
@@ -424,6 +435,20 @@ function App() {
             {runtime.running ? <Square size={16} /> : <Play size={16} />}
           </button>
         </div>
+        {availableUpdate ? (
+          <button className="update-indicator" disabled={autoUpdating} onClick={() => void installAvailableUpdate()}>
+            {autoUpdating ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}
+            <span>
+              <strong>新版本 {availableUpdate.version} · 一键更新</strong>
+              <small>{autoUpdating ? '正在下载安装…' : '点击立即更新'}</small>
+            </span>
+          </button>
+        ) : (
+          <button className="sidebar-check-update" disabled={!bridge || checkingSidebarUpdate} onClick={() => void checkUpdateFromSidebar()}>
+            {checkingSidebarUpdate ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}
+            {checkingSidebarUpdate ? '正在检查更新…' : '检查更新'}
+          </button>
+        )}
         <p className="privacy-caption"><LockKeyhole size={12} />你的内容，只在你的设备</p>
         </div>
       </aside>
