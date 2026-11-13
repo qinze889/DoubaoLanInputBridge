@@ -2,8 +2,13 @@
 
 发行包与完整说明以 [GitHub Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases) 为准。`VERSION` 表示当前分支源码版本。
 
-## 未发布
+## 1.4.2 — 2026-11-13
 
+- CF Quick Tunnel 作为一键开启的推荐公网方式，保留首次安装的局域网入口，避免未授权公网暴露。
+- P2P 明确标记实验功能；跨 NAT 失败需人工切换，不会隐式改用中转。
+- Mac / Windows 手机网页统一现代化响应式设计，修复小屏超宽、展开工具溢出、Mac 旧样式覆盖与英文离线报错。
+- Windows 左下角连接状态区提供检查更新与发现版本后的一键更新入口。
+- CI 采用 Draft 快测、Ready 完整验收、main 精确提交构建和 Release 校验分层机制。
 - Windows 只保留 Tauri + React 正式安装版，停止构建 Qt 便携版。
 - 发行页面只上传 Mac DMG 与 Windows NSIS 两个安装包；其他验证文件继续保存在 CI artifacts。
 
