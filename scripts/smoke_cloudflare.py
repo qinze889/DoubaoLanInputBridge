@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import http.client
 import json
+import math
 import os
 import queue
 import re
@@ -492,8 +493,12 @@ class PublicDiagnostics:
         if host and host not in self.evidence.secrets:
             self.evidence.secrets.append(host)
         now = time.monotonic()
+        attempts = state.get('public_probe_attempts', 0)
+        # Publication waiting/DoH hints must not cause this observer to make
+        # the first system DNS lookup and seed a negative result itself.
+        actual_probe_started = type(attempts) is int and attempts > 0
         if (not host or not state.get('managed') or state.get('stage') != 'verifying'
-                or not state.get('last_error') or self.count >= 2
+                or not actual_probe_started or not state.get('last_error') or self.count >= 2
                 or (self.last_started is not None and now - self.last_started < DIAGNOSTIC_INTERVAL_SECONDS)):
             return
         self.last_started, self.count = now, self.count + 1
@@ -505,6 +510,7 @@ class PublicDiagnostics:
             'managed_at_capture': bool(state.get('managed')),
             'ready_at_capture': bool(state.get('ready')),
             'url_assignments': state.get('url_assignments'),
+            'public_probe_attempts_at_capture': attempts,
             'tls_verification': True,
             'diagnostics_do_not_set_ready': True,
         }
@@ -725,6 +731,21 @@ def check_running_binary(state, args, expected_hash, evidence):
     evidence.result['cloudflared']['running_matches_package'] = True
 
 
+def record_startup_verification(state, evidence):
+    """Keep successful-start evidence without copying URLs or arbitrary state."""
+    wait_state = state.get('dns_wait_state')
+    allowed_states = {'off', 'grace', 'checking', 'pending', 'visible', 'unavailable', 'expired'}
+    summary = {'dns_wait_state': wait_state if isinstance(wait_state, str) and wait_state in allowed_states else None}
+    for name in ('dns_observation_count', 'public_probe_attempts'):
+        value = state.get(name)
+        summary[name] = value if type(value) is int and value >= 0 else None
+    delay = state.get('first_public_probe_delay_seconds')
+    summary['first_public_probe_delay_seconds'] = (
+        round(delay, 3) if type(delay) in (int, float) and delay >= 0
+        and (type(delay) is int or math.isfinite(delay)) else None)
+    evidence.result['startup_verification'] = summary
+
+
 def start_tunnel(service, args, evidence, reference_hash):
     service.tunnel_requested = True
     snapshot = service.control('/desktop/connections', {'mode': 'cloudflare', 'enabled': True})
@@ -747,9 +768,12 @@ def start_tunnel(service, args, evidence, reference_hash):
         if state.get('managed') and not binary_checked:
             check_running_binary(state, args, reference_hash, evidence)
             binary_checked = True
+        if state.get('phase') == 'error':
+            record_startup_verification(state, evidence)
         require(state.get('phase') != 'error', f"tunnel failed: {state.get('error') or state.get('error_code') or 'unknown error'}")
         if snapshot.get('ready') and state.get('ready'):
             require(binary_checked, 'ready tunnel has no verified owned cloudflared process')
+            record_startup_verification(state, evidence)
             return state['public_url']
         service.budget.pause(.4)
         snapshot = service.control('/desktop/connections')

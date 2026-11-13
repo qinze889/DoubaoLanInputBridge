@@ -204,7 +204,7 @@ def test_first_active_error_is_captured_twice_at_most_and_persisted_redacted(tmp
     state = {'managed': True, 'phase': 'starting', 'stage': 'verifying', 'candidate_host': HOST,
              'last_error': f'DNS failed for {HOST}; 10.20.30.40; fd12:3456::7; '
                            'http://user:secret@private.proxy.invalid:8080',
-             'ready': False, 'url_assignments': 1}
+             'ready': False, 'url_assignments': 1, 'public_probe_attempts': 1}
     for change in ({'managed': False}, {'stage': 'connecting'}, {'last_error': ''}, {'candidate_host': ''}):
         diagnostics.observe({**state, **change})
     assert calls == []
@@ -221,6 +221,7 @@ def test_first_active_error_is_captured_twice_at_most_and_persisted_redacted(tmp
     entry = evidence.result['diagnostics'][0]
     assert entry['candidate_host_sha256'] == hashlib.sha256(HOST.encode()).hexdigest()
     assert entry['managed_at_capture'] is True
+    assert entry['public_probe_attempts_at_capture'] == 1
     assert entry['ready_at_capture'] is False
     assert state['ready'] is False
     assert entry['diagnostics_do_not_set_ready'] is True
@@ -230,15 +231,36 @@ def test_first_active_error_is_captured_twice_at_most_and_persisted_redacted(tmp
     assert not any(value in saved for value in (HOST, '10.20.30.40', 'fd12:3456', 'private.proxy', 'user:secret'))
 
 
+@pytest.mark.parametrize('attempts', [0, None, -1, '1', True])
+def test_publication_error_without_actual_public_probe_never_starts_dns_observation(tmp_path, monkeypatch, attempts):
+    evidence = smoke.Evidence(tmp_path / 'evidence')
+    diagnostics = smoke.PublicDiagnostics(evidence, smoke.Budget(180))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('diagnostics must not initiate a lookup before the real public probe')
+
+    monkeypatch.setattr(smoke, 'collect_diagnostics', forbidden)
+    for name in ('diagnostic_resolve', 'diagnostic_dig', 'diagnostic_doh', 'diagnostic_https'):
+        monkeypatch.setattr(smoke, name, forbidden)
+    diagnostics.observe({'managed': True, 'phase': 'starting', 'stage': 'verifying',
+                         'candidate_host': HOST, 'last_error': 'publication is pending',
+                         'public_probe_attempts': attempts})
+    assert evidence.result['diagnostics'] == []
+    assert diagnostics.count == 0
+    assert diagnostics.last_started is None
+
+
 def test_successful_diagnostic_does_not_override_failed_tunnel(tmp_path, monkeypatch):
     evidence = smoke.Evidence(tmp_path / 'evidence')
     states = iter([
         {'mode': 'cloudflare', 'enabled': True, 'ready': False, 'cloudflare': {
             'phase': 'starting', 'stage': 'verifying', 'managed': True, 'ready': False,
-            'candidate_host': HOST, 'last_error': 'DNS failed'}},
+            'candidate_host': HOST, 'last_error': 'DNS failed', 'public_probe_attempts': 1}},
         {'mode': 'cloudflare', 'enabled': True, 'ready': False, 'cloudflare': {
             'phase': 'error', 'stage': 'verifying', 'managed': False, 'ready': False,
-            'candidate_host': HOST, 'last_error': 'DNS failed', 'error': 'DNS failed'}},
+            'candidate_host': HOST, 'last_error': 'DNS failed', 'error': 'DNS failed',
+            'public_probe_attempts': 2, 'dns_wait_state': 'expired',
+            'dns_observation_count': 4, 'first_public_probe_delay_seconds': 30.25}},
     ])
     budget = SimpleNamespace(deadline=time.monotonic() + 180, pause=lambda seconds: None)
     service = SimpleNamespace(control=lambda *args: next(states), process=SimpleNamespace(poll=lambda: None),
@@ -250,6 +272,46 @@ def test_successful_diagnostic_does_not_override_failed_tunnel(tmp_path, monkeyp
         smoke.start_tunnel(service, SimpleNamespace(), evidence, 'unused')
     assert evidence.result['ok'] is False
     assert len(evidence.result['diagnostics']) == 1
+    assert evidence.result['startup_verification'] == {
+        'dns_wait_state': 'expired', 'dns_observation_count': 4,
+        'first_public_probe_delay_seconds': 30.25, 'public_probe_attempts': 2}
+
+
+@pytest.mark.parametrize(('wait_state', 'delay'), [('visible', 10.123), ('unavailable', 14.5), ('expired', 30.25)])
+def test_ready_tunnel_records_safe_startup_verification_even_without_diagnostics(tmp_path, monkeypatch, wait_state, delay):
+    evidence = smoke.Evidence(tmp_path / 'evidence')
+    state = {'phase': 'ready', 'stage': 'ready', 'managed': True, 'ready': True,
+             'candidate_host': HOST, 'public_url': 'https://' + HOST,
+             'dns_wait_state': wait_state, 'dns_observation_count': 2,
+             'first_public_probe_delay_seconds': delay, 'public_probe_attempts': 1,
+             'private_extra': 'http://user:secret@private.proxy.invalid:8080'}
+    snapshot = {'mode': 'cloudflare', 'enabled': True, 'ready': True, 'cloudflare': state}
+    service = SimpleNamespace(control=lambda *args: snapshot, process=SimpleNamespace(poll=lambda: None),
+                              budget=smoke.Budget(180), tunnel_requested=False)
+    monkeypatch.setattr(smoke, 'check_running_binary', lambda *args: None)
+    assert smoke.start_tunnel(service, SimpleNamespace(), evidence, 'unused') == 'https://' + HOST
+    assert evidence.result['diagnostics'] == []
+    assert evidence.result['startup_verification'] == {
+        'dns_wait_state': wait_state, 'dns_observation_count': 2,
+        'first_public_probe_delay_seconds': delay, 'public_probe_attempts': 1}
+    serialized = json.dumps(evidence.result)
+    assert HOST not in serialized
+    assert 'private.proxy.invalid' not in serialized
+    assert 'user:secret' not in serialized
+
+
+def test_startup_evidence_rejects_non_scalar_and_unexpected_sensitive_values(tmp_path):
+    evidence = smoke.Evidence(tmp_path / 'evidence')
+    smoke.record_startup_verification({
+        'dns_wait_state': 'https://private.proxy.invalid',
+        'dns_observation_count': {'secret': 'private'},
+        'first_public_probe_delay_seconds': float('nan'),
+        'public_probe_attempts': True,
+        'public_url': 'https://' + HOST,
+    }, evidence)
+    assert evidence.result['startup_verification'] == {
+        'dns_wait_state': None, 'dns_observation_count': None,
+        'first_public_probe_delay_seconds': None, 'public_probe_attempts': None}
 
 
 def test_uninterruptible_resolver_stays_in_disposable_child():
