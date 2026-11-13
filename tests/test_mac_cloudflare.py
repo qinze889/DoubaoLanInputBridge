@@ -52,7 +52,7 @@ def test_public_health_does_not_leak_local_paths_or_pid(public_service):
     _,gateway=public_service
     status,body=fetch(gateway.server_port,'/health')
     assert status==200
-    assert json.loads(body)=={'ok':True,'name':'Shengjian'}
+    assert json.loads(body)=={'ok':True,'name':'Shengjian','probe_id':gateway.probe_id}
 
 
 def test_cloudflare_headers_never_count_as_desktop_client(public_service):
@@ -72,13 +72,61 @@ def test_public_send_passes_unicode_and_payload(public_service,monkeypatch):
     assert json.loads(body)['ok']
 
 
+def test_quick_tunnel_diagnostics_read_current_manager_on_desktop_only(public_service):
+    server, gateway = public_service
+    server.connections.config = {'mode': 'cloudflare', 'enabled': True}
+    tunnel = server.quick_tunnel
+    tunnel.phase, tunnel.stage = 'error', 'connecting'
+    tunnel.error = 'TCP 7844 connection timed out'
+    tunnel.logs.append('ERR failed to reach the current quick tunnel')
+    status, body = fetch(server.server_port, '/desktop/tunnel?key=gateway-test-key')
+    result = json.loads(body)
+    assert status == 200
+    assert result['status']['stage'] == 'connecting'
+    assert result['log_path'] == str(tunnel.log_file)
+    assert 'current quick tunnel' in result['log_tail']
+    _, body = fetch(server.server_port, '/desktop/connections?key=gateway-test-key')
+    assert json.loads(body)['cloudflare']['error'] == tunnel.error
+    assert fetch(gateway.server_port, '/desktop/tunnel?key=gateway-test-key')[0] == 403
+
+
+@pytest.mark.parametrize('endpoint', ['/files/share', '/files/clipboard', '/files/paste'])
+@pytest.mark.parametrize('query', ['', '?key=wrong-key'])
+def test_public_upload_rejects_key_before_parser_can_write_files(public_service, monkeypatch, endpoint, query):
+    _, gateway = public_service
+    def forbidden_parser(*args, **kwargs):
+        pytest.fail('unauthenticated public upload reached the file-writing parser')
+    monkeypatch.setattr(bridge, 'IS_MACOS', False)
+    monkeypatch.setattr(bridge, 'parse_multipart_upload_stream', forbidden_parser)
+    status, body = fetch(gateway.server_port, endpoint + query, 'POST', b'--test--\r\n',
+                         {'Content-Type': 'multipart/form-data; boundary=test'})
+    assert status == 401
+    assert json.loads(body)['ok'] is False
+
+
+@pytest.mark.parametrize('keys', [['wrong-key'], ['gateway-test-key', 'wrong-key']])
+def test_public_upload_rejects_invalid_body_key_without_business_files(public_service, monkeypatch, tmp_path, keys):
+    _, gateway = public_service
+    directory = tmp_path / 'shared'
+    monkeypatch.setattr(bridge, 'MOBILE_SHARE_DIR', directory)
+    boundary = 'public-upload-test'
+    fields = ''.join(f'--{boundary}\r\nContent-Disposition: form-data; name="key"\r\n\r\n{key}\r\n' for key in keys)
+    payload = (fields + f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="rejected.txt"\r\n'
+               f'Content-Type: text/plain\r\n\r\nshould-not-be-written\r\n--{boundary}--\r\n').encode()
+    status, body = fetch(gateway.server_port, '/files/share?key=gateway-test-key', 'POST', payload,
+                         {'Content-Type': 'multipart/form-data; boundary=' + boundary})
+    assert status == 401
+    assert json.loads(body)['ok'] is False
+    assert not list(directory.rglob('*'))
+
+
 def test_parser_ignores_other_urls():
     assert mac_tunnel.quick_url('Visit https://hello-world-123.trycloudflare.com now')=='https://hello-world-123.trycloudflare.com'
     assert not mac_tunnel.quick_url('https://trycloudflare.com.evil.example')
     assert not mac_tunnel.quick_url('https://example.com')
 
 
-def test_url_only_becomes_ready_after_edge_registration(tmp_path):
+def test_edge_registration_alone_never_proves_public_readiness(tmp_path):
     manager=mac_tunnel.TunnelManager(tmp_path)
     manager.phase='starting';manager.generation=1
     observations=[]
@@ -93,9 +141,11 @@ def test_url_only_becomes_ready_after_edge_registration(tmp_path):
         pid=123
         stdout=Output()
         def poll(self):return None
+        def terminate(self):pass
+        def wait(self,timeout):pass
     process=Process();manager.process=process
     manager._monitor(process,1)
-    assert observations==[False,True]
+    assert observations==[False,False]
     assert manager.status()['phase']=='error'
     assert manager.status()['public_url']==''
 
@@ -143,3 +193,4 @@ def test_native_service_skips_specific_loopback_port_conflict():
     finally:
         if service:service.shutdown();service.server_close()
         occupied.shutdown();occupied.server_close()
+

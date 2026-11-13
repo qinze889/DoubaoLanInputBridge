@@ -40,6 +40,80 @@ jobs:
         run: DOUBAO_BRIDGE_DATA_DIR="$(mktemp -d)" bash scripts/build_macos.sh
       - name: Verify distributable packages and frozen P2P transfer
         run: .venv/bin/python scripts/verify_macos_package.py
+      - name: Verify real Cloudflare public access from the final DMG
+        id: cloudflare_e2e
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          .venv/bin/python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, sys, tempfile
+
+          root = pathlib.Path.cwd()
+          evidence = root / 'build/cloudflare-e2e-evidence/macos'
+          evidence.mkdir(parents=True, exist_ok=True)
+          record = {'platform': 'macos', 'status': 'running', 'stage': 'mount_dmg',
+                    'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'workflow_run': os.environ['GITHUB_RUN_ID']}
+          def digest(path):
+              with path.open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          def save_record():
+              (evidence / 'package.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+          save_record()
+          try:
+              dmg = root / 'dist/macos/Shengjian-mac-arm64.dmg'
+              record['installer_sha256'] = digest(dmg)
+              with tempfile.TemporaryDirectory(prefix='shengjian-cf-dmg-', dir=os.environ['RUNNER_TEMP']) as temporary:
+                  mount = pathlib.Path(temporary) / 'mounted'
+                  mount.mkdir()
+                  subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', str(mount), str(dmg)],
+                                 check=True, timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  try:
+                      bundle = mount / '声笺.app/Contents/Resources/bridge-service'
+                      service, cloudflared = bundle / 'bridge-service', bundle / 'cloudflared'
+                      record['stage'] = 'verify_dmg_payload'
+                      assert service.is_file() and cloudflared.is_file(), 'DMG runtime is incomplete'
+                      record.update(service_sha256=digest(service), cloudflared_sha256=digest(cloudflared), stage='public_e2e')
+                      save_record()
+                      subprocess.run([sys.executable, str(root / 'scripts/smoke_cloudflare.py'),
+                                      '--cloudflared', str(cloudflared), '--service', str(service),
+                                      '--service-kind', 'mac', '--timeout', '180', '--output', str(evidence)],
+                                     check=True, timeout=300)
+                      record['stage'] = 'detach_dmg'
+                  finally:
+                      detached = subprocess.run(['hdiutil', 'detach', str(mount)], timeout=30,
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                      if detached.returncode:
+                          subprocess.run(['hdiutil', 'detach', '-force', str(mount)], check=True, timeout=30,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              # Record this live gate only after the final DMG has passed it.
+              record['stage'] = 'record_build_metadata'
+              metadata_path = root / 'dist/macos/Mac-build.json'
+              metadata = json.loads(metadata_path.read_text())
+              metadata['cloudflare_public_e2e_verified'] = True
+              metadata_path.write_text(json.dumps(metadata, indent=2) + '\n')
+              output = root / 'dist/macos'
+              files = sorted(path for path in output.iterdir() if path.name != 'SHA256SUMS.txt')
+              (output / 'SHA256SUMS.txt').write_text(''.join(f'{digest(path)}  {path.name}\n' for path in files))
+              record.update(status='passed', stage='complete')
+          except Exception as error:
+              record.update(status='failed', error_type=type(error).__name__)
+              save_record()
+              raise SystemExit('Packaged Cloudflare public check failed; see sanitized evidence.') from None
+          save_record()
+          PY
+      - name: Upload sanitized Mac Cloudflare evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shengjian-macos-cloudflare-e2e
+          path: |
+            build/cloudflare-e2e-evidence/macos/package.json
+            build/cloudflare-e2e-evidence/macos/result.json
+            build/cloudflare-e2e-evidence/macos/service.log
+            build/cloudflare-e2e-evidence/macos/cloudflare.log
+          if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
       - uses: actions/upload-artifact@v4
         with:
           name: Shengjian-macos-arm64
@@ -54,3 +128,4 @@ jobs:
       - run: swift test --package-path ios
       - name: Build iOS simulator app
         run: xcodebuild -project ios/ShengjianIOS.xcodeproj -scheme ShengjianIOS -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ios/DerivedData CODE_SIGNING_ALLOWED=NO build
+

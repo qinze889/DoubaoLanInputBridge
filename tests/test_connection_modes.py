@@ -87,3 +87,14 @@ def test_p2p_is_explicitly_experimental_and_not_a_silent_relay(tmp_path, monkeyp
     assert p2p['experimental'] is True
     assert '手动切换' in p2p['description']
     assert '实验' in p2p['title']
+
+
+def test_explicit_cloudflare_retry_stops_previous_attempt(tmp_path, monkeypatch):
+    server, manager, _ = setup_modes(tmp_path, monkeypatch)
+    manager.select('cloudflare')
+    stopped = server.quick_tunnel.stopped
+    manager.select('cloudflare', restart=True)
+    assert server.quick_tunnel.stopped == stopped + 1
+    assert server.quick_tunnel.started == 2
+    assert manager.snapshot()['cloudflare']['ready']
+

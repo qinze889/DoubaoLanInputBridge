@@ -8,6 +8,7 @@ export type ConnectionState = {
   phase: string
   url: string
   error: string
+  cloudflare?: { stage: string; elapsed_seconds: number; protocol: string; last_error: string; log_tail: string } | null
   p2p: { connections: number }
   modes: { id: string; title: string; description: string; available: boolean; configured: boolean; experimental?: boolean }[]
 }
@@ -15,6 +16,10 @@ type ApiGet = <T>(path: string, params?: Record<string, string | number>) => Pro
 type ApiPost = <T>(path: string, data?: Record<string, unknown>) => Promise<T & { ok: boolean }>
 
 const icons = { public: Globe, cloudflare: Cloud, p2p: Network, lan: Wifi }
+const cloudflareStages: Record<string, string> = {
+  allocating: '正在申请公网地址', connecting: '正在连接 Cloudflare',
+  verifying: '正在验证公网访问', reconnecting: '连接中断，正在恢复', ready: '公网访问已验证', off: '已关闭',
+}
 
 export default function ConnectionPanel({ apiGet, apiPost, onState }: {
   apiGet: ApiGet; apiPost: ApiPost; onState?: (state: ConnectionState) => void
@@ -46,7 +51,8 @@ export default function ConnectionPanel({ apiGet, apiPost, onState }: {
   const mainModes = state?.modes.filter(mode => mode.id !== 'p2p') ?? []
   const p2p = state?.modes.find(mode => mode.id === 'p2p')
   const activeTitle = state?.modes.find(mode => mode.id === state.mode)?.title ?? '连接'
-  const status = !state?.enabled ? '连接已关闭' : state.ready ? activeTitle + '已就绪' : state.phase === 'error' ? '连接失败' : '正在建立连接'
+  const cloudflareStage = state?.cloudflare && cloudflareStages[state.cloudflare.stage]
+  const status = !state?.enabled ? '连接已关闭' : state.ready ? activeTitle + '已就绪' : state.phase === 'error' ? '连接失败' : cloudflareStage || '正在建立连接'
 
   function modeButton(mode: ConnectionState['modes'][number]) {
     const Icon = icons[mode.id as keyof typeof icons] || Globe
@@ -88,7 +94,7 @@ export default function ConnectionPanel({ apiGet, apiPost, onState }: {
 
     <div className="connection-heading connection-status-actions">
       <span role="status">{busy && <LoaderCircle size={14} className="spin"/>}{status}{state?.mode === 'p2p' && state.ready && ' · ' + state.p2p.connections + ' 个直连'}</span>
-      {state?.enabled && !state.ready && !busy && <button className="connection-retry" type="button" onClick={() => void run(() => apiPost('/desktop/connections', { mode: state.mode, enabled: true }))}><RotateCw size={14}/>重试</button>}
+      {state?.enabled && !state.ready && !busy && <button className="connection-retry" type="button" onClick={() => void run(() => apiPost('/desktop/connections', { mode: state.mode, enabled: true, retry: true }))}><RotateCw size={14}/>重试</button>}
       <label className="connection-import">导入自建服务器配置
         <input type="file" accept=".json,application/json" hidden disabled={busy} onChange={event => {
           const file = event.target.files?.[0]
@@ -101,5 +107,12 @@ export default function ConnectionPanel({ apiGet, apiPost, onState }: {
       </label>
     </div>
     {(error || state?.error) && <p className="machine-error" role="alert">{error || state?.error}</p>}
+    {state?.enabled && state.cloudflare && <details className="connection-advanced">
+      <summary><ChevronDown size={15}/>连接诊断</summary>
+      <p>{cloudflareStage || state.cloudflare.stage} · {state.cloudflare.elapsed_seconds} 秒 · HTTP/2（TCP 7844）</p>
+      {state.cloudflare.last_error && <p className="machine-error">{state.cloudflare.last_error}</p>}
+      <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 240, overflow: 'auto' }}>{state.cloudflare.log_tail || '等待 Cloudflare 日志…'}</pre>
+    </details>}
   </section>
 }
+
