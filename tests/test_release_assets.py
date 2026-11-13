@@ -68,3 +68,27 @@ def test_reject_tampered_or_misidentified_artifact(tmp_path, corruption):
         manifest.write_text(''.join(f'{release.sha256(root/name)}  {name}\n' for name in ['app.dmg', 'Mac-build.json']))
     with pytest.raises(AssertionError):
         verify(root)
+
+
+def test_stages_only_windows_setup_and_mac_dmg(tmp_path):
+    windows, macos, output = (tmp_path / name for name in ('win-ci', 'mac-ci', 'release'))
+    windows.mkdir()
+    macos.mkdir()
+    (windows / 'Shengjian-windows-x64-setup.exe').write_bytes(b'W' * 1_000_001)
+    (macos / 'Shengjian-mac-arm64.dmg').write_bytes(b'M' * 1_000_001)
+    # Files used to validate a build stay in the CI artifact, not the user-facing Release.
+    (windows / 'Windows-build.json').write_text('{}')
+    (macos / 'Shengjian-mac-arm64.zip').write_bytes(b'private verification artifact')
+    result = release.stage_public_installers(windows, macos, output, '1.4.2')
+    assert set(result) == {'Shengjian-1.4.2-windows-x64-setup.exe', 'Shengjian-1.4.2-mac-arm64.dmg'}
+    assert {p.name for p in output.iterdir()} == set(result)
+
+
+def test_missing_or_small_public_installer_fails_closed(tmp_path):
+    windows, macos = tmp_path / 'windows', tmp_path / 'macos'
+    windows.mkdir()
+    macos.mkdir()
+    (windows / 'Shengjian-windows-x64-setup.exe').write_bytes(b'not a real installer')
+    (macos / 'Shengjian-mac-arm64.dmg').write_bytes(b'M' * 1_000_001)
+    with pytest.raises(AssertionError):
+        release.stage_public_installers(windows, macos, tmp_path / 'release', '1.4.2')
