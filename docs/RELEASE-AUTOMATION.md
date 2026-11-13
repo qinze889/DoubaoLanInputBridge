@@ -35,3 +35,6 @@ Mac 当前 CI 提供 DMG/ZIP，但原生 Mac 版暂未实现与 Windows 等价�
 工作流采用最小的 `contents: write`、`actions: read` 和 `issues: write`，使用自动生成的临时 GITHUB_TOKEN，不保存额外长效令牌。只有仓库所有者请求能进入发布任务。推荐保护 main，禁止未通过 CI 的提交进入主分支。
 
 这条工作流验证 **已成功完成的 main CI**，不会在发布 Issue 时从头重新构建；CI 在代码合并至 main 后自动运行。
+## 发行附件政策
+
+从下一版本开始，正式 GitHub Release 只上传 **两个文件**：`Shengjian-<版本>-windows-x64-setup.exe` 与 `Shengjian-<版本>-mac-arm64.dmg`。Qt 便携版不再构建或发布；Mac ZIP、SHA256、许可证、构建报告和安装说明只保留在 CI artifacts。GitHub 自动提供的 Source code (zip / tar.gz) 链接由平台生成，不属于额外上传的安装包。
