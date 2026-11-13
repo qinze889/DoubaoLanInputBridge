@@ -4066,9 +4066,9 @@ class BridgeServer(ThreadingHTTPServer):
         except (OSError, ValueError, KeyError):
             self.add_log('中转配置无效，请重新导入 relay.json')
         self.connections = connection_modes.ConnectionModes(self, DATA_DIR, lambda: current_access_key(self.access_key), machine_lan_host)
-        # On a fresh install, the bundled Cloudflare Quick Tunnel can start without
-        # external credentials. Preserve an existing user's explicit connection choice.
-        if self.connections.path.exists() or self.connections.config['mode'] == 'cloudflare':
+        # Restore explicit saved connection choices; a fresh install keeps the
+        # LAN QR available and offers Quick Tunnel as a one-click public option.
+        if self.connections.path.exists():
             try: self.connections.select(self.connections.config['mode'], self.connections.config['enabled'])
             except (OSError, ValueError): self.add_log('连接模式未能恢复，请重新选择连接方式')
 
