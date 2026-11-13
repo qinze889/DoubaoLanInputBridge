@@ -10,6 +10,7 @@ CI 的实现位于仓库隐藏目录 [`.github/workflows/`](../.github/workflows
 | --- | --- | --- | --- |
 | Windows client | [windows-client.yml](../.github/workflows/windows-client.yml) | PR、推送 `main`、手动运行 | `windows-2025` |
 | Apple clients | [apple-clients.yml](../.github/workflows/apple-clients.yml) | PR、推送 `main`、手动运行 | `macos-15`（arm64） |
+| Publish verified stable release | [release-on-ci.yml](../.github/workflows/release-on-ci.yml) | `main` 的 Windows / Apple CI 完整通过后自动发布新版本 | `ubuntu-latest` |
 | Publish verified release assets | [release-assets.yml](../.github/workflows/release-assets.yml) | 手动运行，指定草稿 tag、成功的 Windows / Apple run ID | `ubuntu-latest` |
 
 普通 PR 测试使用只读仓库权限；上传草稿 Release 附件的 workflow 单独申请 `contents: write`。Windows 与 Apple workflow 会取消同一 workflow / 分支仍在运行的旧执行；同一标签的发行附件任务串行执行。
