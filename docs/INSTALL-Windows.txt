@@ -1,7 +1,7 @@
-声笺 Windows 1.4.0 — Mac / Windows 互联
+声笺 Windows — Mac / Windows 互联
 
-推荐运行 *-windows-x64-setup.exe 安装 Tauri 正式版。
-*-windows-x64.exe 是 Qt 便携版，二选一运行即可。
+仅发布 *-windows-x64-setup.exe（Tauri / React 正式版）。
+旧 Qt 便携版已停止构建和发布；请勿下载没有 setup 后缀的旧 Windows EXE。
 安装包内置 cloudflared，无需另装 Python 或配置 Cloudflare 账号。
 
 1. Windows 和 Mac 均在「连接方式」选择可达的入口并等待就绪。
