@@ -2,7 +2,14 @@
 
 发行包与完整说明以 [GitHub Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases) 为准。`VERSION` 表示当前分支源码版本。
 
-## 未发布
+## 1.4.1 — 2026-11-13
+
+[发行说明与下载](https://github.com/qinze889/DoubaoLanInputBridge/releases/tag/v1.4.1)
+
+- Windows 机器共享界面向 Mac 统一：设备卡片、一次性邀请及添加机器弹窗。
+- 增强跨设备文本分享、传输重试及自动化回归测试。
+- GitHub Actions 验证同一提交的 Windows / Apple 构建后自动发布正式 Release。
+
 
 - Mac 新增系统分享扩展：截屏或预览中选择“分享 → 声笺”，图片会带入发送窗口，可选择手机或已配对电脑。
 - 修复首页底部两张卡片没有点击动作，分别打开文字分享和文件分享。
