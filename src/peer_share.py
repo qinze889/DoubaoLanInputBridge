@@ -114,6 +114,8 @@ class PeerManager:
         self.invites = {}
         self.nonces = {}
         self.jobs = {}
+        # Retry details never appear in the public peer snapshot.
+        self.retry_sources = {}
         self.upload_locks = {}
         self.advertised = ''
         self.rtc_outgoing = None
@@ -277,17 +279,47 @@ class PeerManager:
                 self.jobs['receive-'+ident] = {'id':'receive-'+ident,'peer_name':self.peers[peer_id]['name'],'direction':'receive','status':'complete','name':meta['name'],'sent':meta['size'],'total':meta['size'],'path':str(target),'error':''}
             return {'name':meta['name'],'sha256':checksum}
 
-    def send(self, peer_id, paths):
+    def send(self, peer_id, paths, text=''):
+        if not isinstance(paths, (list, tuple)) or not isinstance(text, str):
+            raise ValueError('无效的文件或文字参数')
+        if len(text) > 20000:
+            raise ValueError('文字过长，最多 20000 字')
         with self.lock:
             peer = dict(self.peers[peer_id])
         sources = [Path(path).expanduser().resolve(strict=True) for path in paths]
-        if not sources or any(not source.is_file() for source in sources): raise ValueError('请选择普通文件')
+        if any(not source.is_file() for source in sources): raise ValueError('请选择普通文件')
+        if text.strip():
+            # Keep the text source private and available for user-initiated retry.
+            folder = self.root / 'share-imports' / uuid.uuid4().hex
+            folder.mkdir(mode=0o700, parents=True, exist_ok=False)
+            note = folder / '分享文字.txt'
+            with note.open('x', encoding='utf-8') as output:
+                if os.name != 'nt': os.chmod(note, 0o600)
+                output.write(text)
+            sources.append(note)
+        if not sources: raise ValueError('请选择文件或输入文字')
         ident = uuid.uuid4().hex
         job = {'id':ident,'peer_name':peer['name'],'direction':'send','status':'sending','name':sources[0].name if len(sources)==1 else f'{len(sources)} 个文件',
                'sent':0,'total':sum(p.stat().st_size for p in sources),'error':''}
-        with self.lock: self.jobs[ident] = job
+        with self.lock:
+            self.jobs[ident] = job
+            self.retry_sources[ident] = (peer_id, tuple(str(source) for source in sources))
+            # Snapshot contains only the last 50 jobs; bound in-memory retry references too.
+            if len(self.retry_sources) > 100:
+                self.retry_sources.pop(next(iter(self.retry_sources)))
         threading.Thread(target=self._send_worker,args=(ident,peer,sources),daemon=True).start()
         return {'job_id':ident}
+
+    def retry(self, job_id):
+        with self.lock:
+            original = self.jobs.get(job_id)
+            saved = self.retry_sources.get(job_id)
+            if not original or original['direction'] != 'send' or original['status'] != 'error' or not saved:
+                raise ValueError('该任务无法重试，请重新选择文件')
+            peer_id, sources = saved
+            if peer_id not in self.peers:
+                raise ValueError('设备已解除配对，请重新配对')
+        return self.send(peer_id, list(sources))
 
     def _send_worker(self, ident, peer, sources):
         completed = 0
