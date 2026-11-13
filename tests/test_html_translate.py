@@ -291,3 +291,15 @@ def test_html_page_does_not_show_clipboard_history_panel():
     assert "loadClipboardHistory" not in page
     assert "renderClipboardHistory" not in page
     assert '"/history"' not in page
+
+def test_phone_page_uses_shared_modern_layout_and_small_screen_bounds():
+    app = load_app()
+    page = app.html_page('mobile-test', 'http://127.0.0.1:8765/?key=mobile-test')
+    assert 'id="shengjian-mobile-modern"' in page
+    assert 'class="mobile-brand"' in page
+    assert '输入文字，直接发送到电脑' in page
+    assert 'width: min(100%, 700px)' in page
+    assert '@media (max-width: 600px)' in page
+    assert 'max-width: 100%' in page
+    assert 'overflow-x: clip' in page
+    assert 'id="send"' in page and 'id="fileToolsPanel"' in page
