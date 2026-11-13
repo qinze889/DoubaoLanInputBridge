@@ -124,7 +124,7 @@ def test_sidebar_surfaces_update_entry_point():
     source = APP_SOURCE.read_text(encoding="utf-8")
 
     assert 'className="update-indicator"' in source
-    assert "有新版本 {availableUpdate.version}" in source
+    assert "新版本 {availableUpdate.version} · 一键更新" in source
     assert "点击立即更新" in source
     assert "onClick={() => void installAvailableUpdate()}" in source
 
