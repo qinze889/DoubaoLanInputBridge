@@ -4,12 +4,23 @@
 
 CI 的实现位于仓库隐藏目录 [`.github/workflows/`](../.github/workflows/)，由 GitHub 托管 runner 执行。设备后台服务器只提供运行服务，CI 构建不在该服务器上执行。
 
+## 三阶段 CI（按任务成熟度升级）
+
+1. **Draft PR / 日常开发：Fast checks**（`fast-checks.yml`）。仅执行前端 lint/TypeScript 构建、Python 语法和关键静态/发行契约测试，不打包 Windows EXE 或 Mac DMG；每次修改 PR 自动重新运行。
+2. **PR 准备验收：Full CI**。将 Draft PR 标记为 **Ready for review** 时，Windows client 和 Apple clients 自动执行完整跨平台构建；Ready PR 的新提交会重跑。完整回归还包括真实安装/覆盖升级、手机 Web 浏览器验证、文件/P2P 和签名/DMG/ZIP 验证。Draft PR 在这两套工作流中会显示 **skipped**，不代表完整 CI 成功，也不能据此合并。
+3. **合并 / Release：Full CI + 发行门禁**。合并进 `main` 后，两个平台会再次运行完整 CI；`release-on-request.yml` 只接受**同一最新 main SHA** 的两个成功 `push` workflow 和通过 SHA256 的产物，再发布仅含 Windows NSIS 安装版、Mac DMG 的 Release。PR 成功结果不能代替 main 的正式构建。
+
+需要手动重新执行完整检查时可使用已有 `workflow_dispatch`。完整 CI 不因标签、文档或费用考量自动降级发布门禁。
+
+Artifact 保留策略：PR 构建附件 **7 天**、`main` 推送或手动完整构建附件 **30 天**；前端截图在 main 上保留 14 天。公开仓库使用标准 GitHub-hosted runners 的计算成本为零；暂不将公网 PR 的工作流运行在个人 Mac 上。
+
 ## Workflow 与触发条件
 
 | Workflow | 配置 | 何时运行 | Runner |
 | --- | --- | --- | --- |
-| Windows client | [windows-client.yml](../.github/workflows/windows-client.yml) | PR、推送 `main`、手动运行 | `windows-2025` |
-| Apple clients | [apple-clients.yml](../.github/workflows/apple-clients.yml) | PR、推送 `main`、手动运行 | `macos-15`（arm64） |
+| Fast checks | [fast-checks.yml](../.github/workflows/fast-checks.yml) | Draft / Ready PR、手动运行 | `ubuntu-latest` |
+| Windows client | [windows-client.yml](../.github/workflows/windows-client.yml) | Ready PR、推送 `main`、手动运行；Draft PR 跳过 | `windows-2025` |
+| Apple clients | [apple-clients.yml](../.github/workflows/apple-clients.yml) | Ready PR、推送 `main`、手动运行；Draft PR 跳过 | `macos-15`（arm64） |
 | Publish verified release assets | [release-assets.yml](../.github/workflows/release-assets.yml) | 手动运行，指定草稿 tag、成功的 Windows / Apple run ID | `ubuntu-latest` |
 
 普通 PR 测试使用只读仓库权限；上传草稿 Release 附件的 workflow 单独申请 `contents: write`。Windows 与 Apple workflow 会取消同一 workflow / 分支仍在运行的旧执行；同一标签的发行附件任务串行执行。
@@ -22,7 +33,7 @@ CI 的实现位于仓库隐藏目录 [`.github/workflows/`](../.github/workflows
 4. 调用 [`scripts/build_tauri.ps1`](../scripts/build_tauri.ps1)，构建 Python sidecar 与唯一的 Tauri NSIS 安装版；不再构建 Qt 便携版。
 5. 调用 [`smoke_windows_installer.py`](../scripts/smoke_windows_installer.py)：在临时目录真实安装、覆盖升级，检查旧服务退出、安装后的二进制与预期一致。
 6. 调用 [`smoke_packaged_peers.py`](../scripts/smoke_packaged_peers.py)：运行两个打包后的服务，配对并双向传文件，验证 SHA256。
-7. 将安装包、安装说明、许可证、构建提交 / run ID 元数据和摘要上传为 `Shengjian-windows-x64` artifact，保留 30 天。
+7. 将安装包、安装说明、许可证、构建提交 / run ID 元数据和摘要上传为 `Shengjian-windows-x64` artifact，按事件保留 PR 7 天 / main 30 天。
 
 1.4.0 还调用 `scripts/smoke_packaged_rtc.py`，验证冻结后的 WebRTC 组件与 P2P 双向多分块文件传输。
 

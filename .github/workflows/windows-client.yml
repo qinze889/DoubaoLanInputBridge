@@ -1,6 +1,7 @@
 name: Windows client
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -11,6 +12,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   ui:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-2025
     timeout-minutes: 10
     steps:
@@ -35,8 +37,9 @@ jobs:
         with:
           name: Shengjian-windows-ui
           path: build/windows-ui-check/
-          retention-days: 14
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 14 }}
   windows:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-2025
     timeout-minutes: 30
     env:
@@ -91,4 +94,4 @@ jobs:
           name: Shengjian-windows-x64
           path: dist/windows/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
