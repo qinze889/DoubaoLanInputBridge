@@ -60,21 +60,24 @@ def test_p2p_never_silently_relays_file_to_public_receiver(tmp_path):
     with pytest.raises(ValueError, match='不会通过服务器'):
         own.request({'endpoint': 'https://test.xjiaoai.com/shengjian/bridge/'+'b'*24}, '/peer/files/start', b'{}')
 
-def test_fresh_install_preselects_bundled_cloudflare_but_requires_user_click(tmp_path, monkeypatch):
-    monkeypatch.setattr(modes.mac_tunnel, 'find_binary', lambda: '/bundled/cloudflared')
+def test_fresh_install_keeps_lan_working_and_offers_one_click_cloudflare(tmp_path, monkeypatch):
     server, manager, _ = setup_modes(tmp_path, monkeypatch)
-    assert manager.config == {'mode': 'cloudflare', 'enabled': False}
-    assert not manager.snapshot()['ready']
+    assert manager.config == {'mode': 'lan', 'enabled': True}
+    assert manager.url() == 'http://10.0.0.8:8766/?key=local-key'
     assert server.quick_tunnel.started == 0
+    cf = next(mode for mode in manager.snapshot()['modes'] if mode['id'] == 'cloudflare')
+    assert '推荐' in cf['title'] and cf['available']
     state = manager.select('cloudflare', True)
     assert state['ready'] and server.quick_tunnel.started == 1
     assert state['url'].startswith('https://test.trycloudflare.com/')
 
 
-def test_fresh_install_without_tunnel_binary_uses_lan(tmp_path, monkeypatch):
-    monkeypatch.setattr(modes.mac_tunnel, 'find_binary', lambda: '')
-    _, manager, _ = setup_modes(tmp_path, monkeypatch)
-    assert manager.config == {'mode': 'lan', 'enabled': True}
+def test_fresh_install_with_explicit_saved_cloudflare_off_stays_off(tmp_path, monkeypatch):
+    peer_share.atomic_json(tmp_path/'connections.json', {'mode': 'cloudflare', 'enabled': False})
+    server, manager, _ = setup_modes(tmp_path, monkeypatch)
+    assert manager.config == {'mode': 'cloudflare', 'enabled': False}
+    assert not manager.snapshot()['ready']
+    assert server.quick_tunnel.started == 0
 
 
 def test_p2p_is_explicitly_experimental_and_not_a_silent_relay(tmp_path, monkeypatch):
