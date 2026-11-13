@@ -130,7 +130,7 @@ BRAND = """
 <header class="mobile-brand">
   <span class="mobile-mark" aria-hidden="true">〽</span>
   <div class="mobile-brand-copy"><strong>声笺</strong><small>输入文字，直接发送到电脑</small></div>
-  <span class="mobile-connected">安全连接</span>
+  <span class="mobile-connected">已连接</span>
 </header>
 """
 
