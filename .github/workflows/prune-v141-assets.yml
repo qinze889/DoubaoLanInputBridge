@@ -1,0 +1,75 @@
+name: Prune v1.4.1 legacy Release assets
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: shengjian-prune-v141
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    if: >-
+      github.event.issue.user.login == github.repository_owner &&
+      github.event.issue.title == 'Prune Release v1.4.1' &&
+      !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REQUEST_ISSUE: ${{ github.event.issue.number }}
+      TARGET_TAG: v1.4.1
+      TARGET_SHA: dc1b33167a2e2db141a6650a31f9ecc882c50e14
+      KEEP_WIN: Shengjian-1.4.1-windows-x64-setup.exe
+      KEEP_MAC: Shengjian-1.4.1-mac-arm64.dmg
+    steps:
+      - name: Authorize exact owner cleanup request
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,os,pathlib
+          issue=json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())['issue']
+          assert issue['user']['login'] == os.environ['GITHUB_REPOSITORY_OWNER']
+          assert issue['title'] == 'Prune Release v1.4.1'
+          assert (issue.get('body') or '').strip() == 'keep: Windows setup and Mac DMG only'
+          assert os.environ['GH_REPO'] == 'qinze889/DoubaoLanInputBridge'
+          PY
+      - name: Verify target Release and preserved installer assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/releases/tags/$TARGET_TAG" > /tmp/shengjian-release.json
+          jq -e --arg tag "$TARGET_TAG" --arg sha "$TARGET_SHA" \
+            '.tag_name == $tag and .target_commitish == $sha and .draft == false and .prerelease == false' \
+            /tmp/shengjian-release.json >/dev/null
+          jq -e --arg win "$KEEP_WIN" --arg mac "$KEEP_MAC" \
+            '([.assets[] | select(.name == $win and .size > 1000000)] | length) == 1 and
+             ([.assets[] | select(.name == $mac and .size > 1000000)] | length) == 1' \
+            /tmp/shengjian-release.json >/dev/null
+      - name: Delete only non-installer attachments
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r --arg win "$KEEP_WIN" --arg mac "$KEEP_MAC" \
+            '.assets[] | select(.name != $win and .name != $mac) | .id' \
+            /tmp/shengjian-release.json | while read -r asset_id; do
+              [[ "$asset_id" =~ ^[0-9]+$ ]] || exit 1
+              gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id" >/dev/null
+          done
+      - name: Verify exactly two preserved attachments and report
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/releases/tags/$TARGET_TAG" > /tmp/shengjian-after.json
+          jq -e --arg win "$KEEP_WIN" --arg mac "$KEEP_MAC" \
+            '([.assets[].name] | sort) == ([$win, $mac] | sort)' \
+            /tmp/shengjian-after.json >/dev/null
+          gh issue comment "$REQUEST_ISSUE" --repo "$GH_REPO" \
+            --body "v1.4.1 Release cleaned: Windows Tauri setup + Mac DMG only. GitHub-generated source-code links are unaffected."
+          gh issue close "$REQUEST_ISSUE" --repo "$GH_REPO" --reason completed

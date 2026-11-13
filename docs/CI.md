@@ -19,10 +19,10 @@ CI 的实现位于仓库隐藏目录 [`.github/workflows/`](../.github/workflows
 1. 准备 Python 3.12、Node.js 24、Rust / MSVC 和构建缓存。
 2. 安装 `requirements-windows.txt`，执行 `python -m pytest -q tests`。
 3. 从 Cloudflare 官方发行版下载 cloudflared，先验证固定的 SHA256。
-4. 调用 [`scripts/build_tauri.ps1`](../scripts/build_tauri.ps1)，构建 Python sidecar、Tauri NSIS 安装版、Qt 便携版。
+4. 调用 [`scripts/build_tauri.ps1`](../scripts/build_tauri.ps1)，构建 Python sidecar 与唯一的 Tauri NSIS 安装版；不再构建 Qt 便携版。
 5. 调用 [`smoke_windows_installer.py`](../scripts/smoke_windows_installer.py)：在临时目录真实安装、覆盖升级，检查旧服务退出、安装后的二进制与预期一致。
 6. 调用 [`smoke_packaged_peers.py`](../scripts/smoke_packaged_peers.py)：运行两个打包后的服务，配对并双向传文件，验证 SHA256。
-7. 将安装包、便携版、安装说明、许可证、构建提交 / run ID 元数据和摘要上传为 `Shengjian-windows-x64` artifact，保留 30 天。
+7. 将安装包、安装说明、许可证、构建提交 / run ID 元数据和摘要上传为 `Shengjian-windows-x64` artifact，保留 30 天。
 
 1.4.0 还调用 `scripts/smoke_packaged_rtc.py`，验证冻结后的 WebRTC 组件与 P2P 双向多分块文件传输。
 
@@ -58,7 +58,7 @@ gh run download RUN_ID --repo qinze889/DoubaoLanInputBridge \
 
 `release-assets.yml` 接收三个参数：已有草稿 Release 的 tag、成功的 Windows workflow run ID、成功的 Apple workflow run ID。两个构建必须成功，且 `head_sha`、附件中记录的构建提交与标签所指向的提交完全一致；旧提交或只有部分 job 成功的构建均会被拒绝。
 
-[`release_assets.py`](../scripts/release_assets.py) 验证每个附件均列入 SHA256 清单、没有额外文件、版本和 run ID 一致，再生成版本化 Mac DMG / ZIP、Windows 安装版 / Qt 便携版、源码 ZIP / tar.gz、构建元数据和统一 `SHA256SUMS.txt`。源码只从标签提交的 Git 跟踪文件导出，不包含本地配置或运行目录。
+[`release_assets.py`](../scripts/release_assets.py) 验证每个附件均列入 SHA256 清单、没有额外文件、版本和 run ID 一致，但 **Release 只上传两个客户端文件：Windows `Shengjian-<版本>-windows-x64-setup.exe` 与 Mac `Shengjian-<版本>-mac-arm64.dmg`**。Mac ZIP、安装说明、许可证、构建元数据与 SHA256 清单保留在对应 CI artifacts 中供核验，不再作为 Release 附件；GitHub 平台会自动提供 Source code 两种源码归档链接。
 
 发布顺序：PR 检查通过 → 合并 → 等待合并提交的 Windows / Apple CI 全部通过 → 在该提交创建标签与草稿 Release → 指定两个 run ID 运行发行 workflow → 核对全部附件后公开 Release。
 

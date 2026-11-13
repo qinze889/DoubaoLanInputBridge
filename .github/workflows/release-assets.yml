@@ -75,4 +75,10 @@ jobs:
         shell: bash
         run: |
           test "$(gh release view "$REL_TAG" --json isDraft --jq .isDraft)" = true
-          gh release upload "$REL_TAG" release-assets/* --clobber
+          test "$(gh release view "$REL_TAG" --json assets --jq '.assets | length')" = 0
+          gh release upload "$REL_TAG" release-assets/*
+          gh api "repos/$GH_REPO/releases/tags/$REL_TAG" > /tmp/verified-draft.json
+          version="${REL_TAG#v}"
+          jq -e --arg win "Shengjian-$version-windows-x64-setup.exe" --arg mac "Shengjian-$version-mac-arm64.dmg" \
+            '([.assets[].name] | sort) == ([$win, $mac] | sort) and .draft == true' \
+            /tmp/verified-draft.json >/dev/null

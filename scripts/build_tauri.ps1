@@ -48,16 +48,6 @@ if ($LASTEXITCODE -ne 0) {
 
 Copy-Item -LiteralPath (Join-Path $SidecarDist "$SidecarName.exe") -Destination $SidecarTarget -Force
 
-# Also provide a Qt portable executable with the same sharing protocol.
-& $PythonExe -m PyInstaller --noconfirm --clean --onefile --noconsole `
-    --name "Shengjian-windows-x64" --distpath (Join-Path $ProjectRoot "dist") `
-    --workpath (Join-Path $ProjectRoot "build\windows-qt") `
-    --specpath (Join-Path $ProjectRoot "build\windows-qt") `
-    --icon "$Assets\app.ico" --add-data "$Assets;assets" --add-binary "$Cloudflared;." `
-    --add-data "$ProjectRoot\docs\cloudflared-LICENSE;." `
-    (Join-Path $ProjectRoot "src\qt_app.py")
-if ($LASTEXITCODE -ne 0) { throw "Portable app build failed." }
-
 Push-Location $DesktopRoot
 try {
     if (-not $SkipNpmInstall) {

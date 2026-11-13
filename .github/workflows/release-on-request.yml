@@ -135,6 +135,10 @@ jobs:
             --title "声笺 $VERSION" \
             --notes "Windows / macOS verified CI release. Source SHA: $SHA. Windows update: open 声笺 → 设置 → 检查更新."
           gh release upload "$TAG" release-assets/* --repo "$GH_REPO"
+          gh api "repos/$GH_REPO/releases/tags/$TAG" > /tmp/verified-draft.json
+          jq -e --arg win "Shengjian-$VERSION-windows-x64-setup.exe" --arg mac "Shengjian-$VERSION-mac-arm64.dmg" \
+            '([.assets[].name] | sort) == ([$win, $mac] | sort) and .draft == true' \
+            /tmp/verified-draft.json >/dev/null
           gh release edit "$TAG" --repo "$GH_REPO" --draft=false --latest
       - name: Report release URL to request Issue
         env:
