@@ -6,11 +6,12 @@ import json
 import socket
 import ssl
 import threading
+import urllib.request as urllib_request
 from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPSHandler, ProxyHandler
 
@@ -232,10 +233,21 @@ def active_manager(tmp_path, monkeypatch):
 
 
 PUBLIC_URL = "https://active-test.trycloudflare.com"
+PUBLIC_HOST = "active-test.trycloudflare.com"
+
+
+def allocation_banner(url=PUBLIC_URL):
+    return [
+        "2026-11-13T13:45:14Z INF +--------------------------------------------------------------------------------------------+",
+        "2026-11-13T13:45:14Z INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |",
+        f"2026-11-13T13:45:14Z INF |  {url}                          |",
+        "2026-11-13T13:45:14Z INF +--------------------------------------------------------------------------------------------+",
+    ]
 
 
 def allocate(manager):
-    manager._handle_line(PUBLIC_URL, manager.generation)
+    for line in allocation_banner():
+        manager._handle_line(line, manager.generation)
 
 
 def register(manager, index=0):
@@ -247,6 +259,83 @@ def register(manager, index=0):
 
 def verify(manager):
     manager._apply_probe(manager.generation, manager.probe_epoch, True, "")
+
+
+def test_only_successful_creation_banner_assigns_public_origin(active_manager):
+    manager = active_manager
+    for line in (
+        'ERR failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": connection refused',
+        "https://bare-example.trycloudflare.com",
+        'INF management example="https://management-example.trycloudflare.com"',
+        "2026-11-13T13:45:14Z INF | https://unannounced-example.trycloudflare.com |",
+    ):
+        manager._handle_line(line, manager.generation)
+
+    before = manager.status()
+    assert manager.url == ""
+    assert before["stage"] == "allocating"
+    assert before["candidate_host"] == ""
+    assert before["url_assignments"] == 0
+
+    allocate(manager)
+
+    allocated = manager.status()
+    assert manager.url == PUBLIC_URL
+    assert allocated["candidate_host"] == PUBLIC_HOST
+    assert allocated["url_assignments"] == 1
+    assert allocated["public_url"] == ""
+    assert allocated["ready"] is False
+
+
+@pytest.mark.parametrize("service_host", ["api.trycloudflare.com", "login.trycloudflare.com"])
+def test_service_hosts_cannot_be_assigned_even_inside_creation_banner(active_manager, service_host):
+    manager = active_manager
+    for line in allocation_banner("https://" + service_host):
+        manager._handle_line(line, manager.generation)
+
+    assert manager.url == ""
+    assert manager.status()["candidate_host"] == ""
+    assert manager.status()["url_assignments"] == 0
+    allocate(manager)
+    assert manager.url == PUBLIC_URL
+
+
+def test_later_examples_or_banners_cannot_replace_assigned_origin(active_manager):
+    manager = active_manager
+    allocate(manager)
+    register(manager)
+    verify(manager)
+    epoch = manager.probe_epoch
+
+    for line in [
+        'INF precheck management example="https://sample-only.trycloudflare.com"',
+        "https://sample-only.trycloudflare.com",
+        *allocation_banner("https://other-attempt.trycloudflare.com"),
+    ]:
+        manager._handle_line(line, manager.generation)
+
+    status = manager.status()
+    assert manager.url == PUBLIC_URL
+    assert manager.probe_epoch == epoch
+    assert status["candidate_host"] == PUBLIC_HOST
+    assert status["url_assignments"] == 1
+    assert status["ready"] is True
+
+
+def test_old_creation_banner_cannot_arm_current_generation_parser(active_manager):
+    manager = active_manager
+    for line in allocation_banner("https://old-attempt.trycloudflare.com"):
+        manager._handle_line(line, manager.generation - 1)
+    manager._handle_line(
+        "2026-11-13T13:45:14Z INF | https://unannounced.trycloudflare.com |",
+        manager.generation,
+    )
+
+    assert manager.url == ""
+    assert manager.status()["candidate_host"] == ""
+    allocate(manager)
+    assert manager.status()["candidate_host"] == PUBLIC_HOST
+    assert manager.status()["url_assignments"] == 1
 
 
 def test_registration_waits_for_public_identity_verification(active_manager):
@@ -342,7 +431,7 @@ def test_old_generation_logs_and_probe_results_cannot_change_current_attempt(act
     after = manager.status()
     assert manager.url == PUBLIC_URL
     assert len(manager.connections) == 1
-    for key in ("phase", "stage", "ready", "public_url", "last_error", "log_tail"):
+    for key in ("phase", "stage", "ready", "public_url", "last_error", "log_tail", "candidate_host", "url_assignments"):
         assert after[key] == before[key]
 
 
@@ -360,6 +449,8 @@ def test_probe_cannot_restore_ready_after_user_stops_tunnel(active_manager):
     assert stopped["stage"] == "off"
     assert stopped["ready"] is False
     assert stopped["public_url"] == ""
+    assert stopped["candidate_host"] == ""
+    assert stopped["url_assignments"] == 0
 
 
 def test_continuous_verifier_rechecks_success_detects_loss_and_recovers(active_manager, monkeypatch):
@@ -425,6 +516,8 @@ def test_successful_probe_after_startup_deadline_cannot_make_tunnel_ready(active
     assert failed["phase"] == "error"
     assert failed["stage"] == "verifying"
     assert failed["ready"] is False
+    assert failed["candidate_host"] == PUBLIC_HOST
+    assert failed["url_assignments"] == 1
     assert failed["public_url"] == ""
     assert failed["verified_at"] == 0
     assert "terminate" in process.calls
@@ -516,6 +609,8 @@ def test_start_uses_explicit_empty_config_and_records_elapsed_time(tmp_path, mon
         assert status["binary_path"] == str(Path(binary).resolve())
         assert 4 <= status["elapsed_seconds"] <= 5
         assert status["ready"] is False
+        assert status["candidate_host"] == ""
+        assert status["url_assignments"] == 0
     finally:
         manager.stop()
 
@@ -536,6 +631,7 @@ def test_log_redaction_hides_credentials_without_discarding_diagnostics(text):
 
 def test_runtime_diagnostics_redact_pairing_keys(active_manager):
     manager = active_manager
+    allocate(manager)
     manager._handle_line(
         'ERR Serve tunnel error url="https://active-test.trycloudflare.com/?key=pairing-secret" error="i/o timeout" connIndex=0',
         manager.generation,
@@ -547,6 +643,15 @@ def test_runtime_diagnostics_redact_pairing_keys(active_manager):
     assert "pairing-secret" not in status["last_error"]
     assert "i/o timeout" in status["log_tail"]
     assert "i/o timeout" in status["last_error"]
+    assert status["candidate_host"] == PUBLIC_HOST
+    assert status["public_url"] == ""
+
+    manager._fail(manager.generation, "Public validation failed")
+    failed = manager.status()
+    assert failed["candidate_host"] == PUBLIC_HOST
+    assert failed["url_assignments"] == 1
+    assert failed["public_url"] == ""
+    assert "pairing-secret" not in json.dumps(failed)
 
 
 class ProbeResponse:
@@ -582,6 +687,7 @@ def test_public_probe_requires_success_and_current_gateway_identity(
 ):
     requests = []
     handlers_seen = []
+    system_proxies = {"https": "http://configured-proxy.invalid:8080"}
 
     class Opener:
         def open(self, request, timeout=None):
@@ -593,6 +699,7 @@ def test_public_probe_requires_success_and_current_gateway_identity(
         return Opener()
 
     monkeypatch.setattr(mac_tunnel, "build_opener", opener_factory)
+    monkeypatch.setattr(urllib_request, "getproxies", lambda: system_proxies)
     manager = mac_tunnel.TunnelManager(tmp_path)
     ok, reason = manager._probe_public(PUBLIC_URL, SimpleNamespace(probe_id="this-probe"))
 
@@ -604,7 +711,7 @@ def test_public_probe_requires_success_and_current_gateway_identity(
     assert parsed.hostname == "active-test.trycloudflare.com"
     assert parsed.path == "/health"
     assert 0 < requests[0][1] <= mac_tunnel.PROBE_TIMEOUT
-    assert any(isinstance(handler, ProxyHandler) and handler.proxies == {} for handler in handlers_seen)
+    assert any(isinstance(handler, ProxyHandler) and handler.proxies == system_proxies for handler in handlers_seen)
     assert any(isinstance(handler, mac_tunnel.NoRedirect) for handler in handlers_seen)
     for handler in handlers_seen:
         if isinstance(handler, HTTPSHandler):
@@ -630,6 +737,35 @@ def test_public_probe_reports_tls_failure_without_insecure_retry(tmp_path, monke
     assert ok is False
     assert reason
     assert len(attempts) == 1
+
+
+def test_public_probe_does_not_bypass_configured_proxy_after_failure(tmp_path, monkeypatch):
+    system_proxies = {"https": "http://configured-proxy.invalid:8080"}
+    attempts = []
+    builds = []
+
+    class Opener:
+        def open(self, request, timeout=None):
+            attempts.append(request)
+            raise URLError("configured proxy is unavailable")
+
+    def opener_factory(*handlers):
+        builds.append(handlers)
+        return Opener()
+
+    monkeypatch.setattr(urllib_request, "getproxies", lambda: system_proxies)
+    monkeypatch.setattr(mac_tunnel, "build_opener", opener_factory)
+    manager = mac_tunnel.TunnelManager(tmp_path)
+
+    ok, reason = manager._probe_public(PUBLIC_URL, SimpleNamespace(probe_id="this-probe"))
+
+    assert ok is False
+    assert "configured proxy" in reason
+    assert len(attempts) == len(builds) == 1
+    assert any(
+        isinstance(handler, ProxyHandler) and handler.proxies == system_proxies
+        for handler in builds[0]
+    )
 
 
 @pytest.mark.parametrize("status", [302, 503])

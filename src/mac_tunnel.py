@@ -166,6 +166,9 @@ class TunnelManager:
         self.origin_port = 0
         self.gateway = None
         self.url = ''
+        self.candidate_host = ''
+        self.url_assignments = 0
+        self._allocation_pending = False
         self.phase = 'off'
         self.stage = 'off'
         self.error = ''
@@ -195,6 +198,7 @@ class TunnelManager:
                     'running': self.phase in {'starting', 'ready'}, 'managed': managed,
                     'owned_pid': self.process.pid if managed else 0,
                     'public_url': self.url if ready else '', 'error': self.error,
+                    'candidate_host': self.candidate_host, 'url_assignments': self.url_assignments,
                     'last_error': self.last_error, 'elapsed_seconds': max(0, elapsed),
                     'protocol': self.protocol, 'binary_path': self.binary_path,
                     'verified_at': self.verified_at, 'log_tail': '\n'.join(self.logs),
@@ -253,12 +257,30 @@ class TunnelManager:
             if generation != self.generation or self.phase not in {'starting', 'ready'}:
                 return
             self.logs.append(redact_log(line))
-            found = quick_url(line)
-            if found and found != self.url:
-                self.url = found
-                self.probe_epoch += 1
-                self.phase = 'starting'
-                self.stage = 'verifying' if self.connections else 'connecting'
+            if not self.url:
+                # Only the creation banner assigns this attempt's address.
+                # API failures and management/precheck examples can also contain
+                # trycloudflare URLs, but none may become the public origin.
+                message = re.sub(r'^(?:\S+\s+)?INF\s+', '', line.strip())
+                if message.startswith('|') and message.endswith('|'):
+                    message = message[1:-1].strip()
+                if message.startswith(('Your quick Tunnel has been created!',
+                                       'Your protected quick Tunnel has been created!')):
+                    self._allocation_pending = True
+                elif self._allocation_pending:
+                    found = quick_url(message)
+                    if found and found == message:
+                        self._allocation_pending = False
+                        host = urlsplit(found).hostname
+                        if host not in {'api.trycloudflare.com', 'login.trycloudflare.com'}:
+                            self.url = found
+                            self.candidate_host = host
+                            self.url_assignments += 1
+                            self.probe_epoch += 1
+                            self.phase = 'starting'
+                            self.stage = 'verifying' if self.connections else 'connecting'
+                    elif re.fullmatch(r'\+-+\+', message):
+                        self._allocation_pending = False
             match = re.search(r'\bconnIndex=(\d+)\b', line)
             index = match.group(1) if match else '0'
             if 'Registered tunnel connection' in line:
@@ -321,7 +343,9 @@ class TunnelManager:
         request = Request(url + '/health?probe=' + secrets.token_hex(8),
                           headers={'Cache-Control': 'no-cache', 'User-Agent': 'Shengjian-Tunnel-Probe'})
         try:
-            opener = build_opener(ProxyHandler({}), NoRedirect(),
+            # Public HTTPS follows the same system/environment proxy policy as
+            # the phone-facing test client and the other public app requests.
+            opener = build_opener(ProxyHandler(), NoRedirect(),
                                   HTTPSHandler(context=public_probe_ssl_context()))
             with opener.open(request, timeout=PROBE_TIMEOUT) as response:
                 raw = response.read(4097)
@@ -399,10 +423,12 @@ class TunnelManager:
             if generation != self.generation:
                 return
             stage, reason = self.stage, self.last_error
+            candidate_host, url_assignments = self.candidate_host, self.url_assignments
             elapsed = max(0, int(time.monotonic() - self.attempt_started)) if self.attempt_started else 0
             self.stop()
             self.phase, self.stage, self.error = 'error', stage, message
             self.last_error, self.elapsed_seconds = reason, elapsed
+            self.candidate_host, self.url_assignments = candidate_host, url_assignments
 
     def stop(self):
         with self.lock:
@@ -411,6 +437,9 @@ class TunnelManager:
             self.probe_epoch += 1
             process, self.process = self.process, None
             self.phase, self.stage, self.url, self.error = 'off', 'off', '', ''
+            self.candidate_host = ''
+            self.url_assignments = 0
+            self._allocation_pending = False
             self.last_error = ''
             self.connections.clear()
             self.deadline_at = None

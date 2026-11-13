@@ -16,26 +16,32 @@ import hashlib
 import http.client
 import json
 import os
+import queue
 import re
 import secrets
+import shutil
 import signal
 import socket
 import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
+from urllib.request import (HTTPRedirectHandler, HTTPSHandler, Request, build_opener,
+                            getproxies, proxy_bypass)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 LOG_TAIL_BYTES = 128 * 1024
 FILE_BYTES = 1024 * 1024 + 37
+DIAGNOSTIC_LIMIT_SECONDS = 12
+DIAGNOSTIC_INTERVAL_SECONDS = 20
 
 
 class CheckFailed(RuntimeError):
@@ -99,6 +105,7 @@ class Evidence:
             'scope': 'real public HTTPS, real packaged/source BridgeServer, synthetic data only',
             'user_phone_or_user_network_tested': False,
             'stages': [],
+            'diagnostics': [],
         }
 
     def redact(self, value):
@@ -174,6 +181,340 @@ def decode_json(status, body, expected=200):
 class NoRedirects(HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, newurl):
         return None  # Never forward a pairing key to another host.
+
+
+def candidate_hostname(value):
+    """Accept only a bare Quick Tunnel hostname, never a URL or resolver option."""
+    if not isinstance(value, str) or len(value) > 80:
+        return ''
+    if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com', value):
+        return ''
+    return value if len(value.split('.', 1)[0]) <= 63 else ''
+
+
+def diagnostic_error(error):
+    """Network exception text can contain private proxy hosts and credentials."""
+    reason = error.reason if isinstance(error, URLError) else error
+    result = {'error_type': type(error).__name__, 'reason_type': type(reason).__name__}
+    if isinstance(reason, socket.gaierror):
+        result['category'] = 'dns'
+    elif isinstance(reason, ssl.SSLCertVerificationError):
+        result['category'] = 'tls_certificate'
+    elif isinstance(reason, ssl.SSLError):
+        result['category'] = 'tls'
+    elif isinstance(reason, (TimeoutError, socket.timeout)):
+        result['category'] = 'timeout'
+    elif isinstance(error, HTTPError):
+        result['category'] = 'http'
+        result['http_status'] = error.code
+    else:
+        result['category'] = 'connection' if isinstance(reason, OSError) else 'other'
+    if isinstance(getattr(reason, 'errno', None), int):
+        result['errno'] = reason.errno
+    if isinstance(getattr(reason, 'verify_code', None), int):
+        result['verify_code'] = reason.verify_code
+    return result
+
+
+def diagnostic_resolve(host, family):
+    addresses = socket.getaddrinfo(host, 443, family, socket.SOCK_STREAM)
+    unique = {(entry[0], entry[4][0]) for entry in addresses}
+    return {'status': 'resolved', 'address_count': len(unique),
+            'ipv4_count': sum(item[0] == socket.AF_INET for item in unique),
+            'ipv6_count': sum(item[0] == socket.AF_INET6 for item in unique)}
+
+
+def diagnostic_proxy_presence(host):
+    proxies = getproxies()
+    https_configured = bool(proxies.get('https'))
+    return {'any_configured': any(bool(value) for key, value in proxies.items() if key != 'no'),
+            'https_configured': https_configured,
+            'candidate_bypassed_by_configuration': bool(proxy_bypass(host)) if https_configured else False}
+
+
+def diagnostic_https(host, timeout):
+    # Match PublicClient's default proxy route and verified TLS. A successful
+    # diagnostic response cannot mark the service ready or pass the business E2E.
+    opener = build_opener(NoRedirects(), HTTPSHandler(context=ssl.create_default_context()))
+    request = Request('https://' + host + '/health?probe=' + secrets.token_hex(8), headers={
+        'Cache-Control': 'no-store', 'User-Agent': 'Shengjian-Cloudflare-Diagnostics'})
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            body = response.read(4097)
+            result = {'status': 'response', 'http_status': response.status,
+                      'tls_verification': True, 'redirects_followed': False}
+            if len(body) <= 4096:
+                try:
+                    payload = json.loads(body)
+                except (ValueError, UnicodeError):
+                    payload = None
+                result['json_object'] = isinstance(payload, dict)
+                if isinstance(payload, dict):
+                    result['health_ok'] = payload.get('ok') is True
+                    result['service_name_matches'] = payload.get('name') == 'Shengjian'
+                    result['probe_identity_present'] = bool(payload.get('probe_id'))
+            else:
+                result['response_exceeds_diagnostic_limit'] = True
+            return result
+    except HTTPError as error:
+        error.close()
+        return {'status': 'response', 'http_status': error.code,
+                'tls_verification': True, 'redirects_followed': False}
+
+
+def summarize_dig(output, returncode):
+    """Keep DNS status and TTLs, never names, addresses, servers, or raw output."""
+    result = {'status': 'completed', 'available': True, 'returncode': returncode,
+              'rcode': 'unavailable', 'answer_types': {}, 'authority_types': {}}
+    header = re.search(r'\bstatus:\s*([A-Z0-9]+)', output)
+    if header:
+        known = {'NOERROR', 'FORMERR', 'SERVFAIL', 'NXDOMAIN', 'NOTIMP', 'REFUSED',
+                 'YXDOMAIN', 'YXRRSET', 'NXRRSET', 'NOTAUTH', 'NOTZONE', 'BADVERS'}
+        result['rcode'] = header.group(1) if header.group(1) in known else 'other'
+    section = None
+    negative_ttls = []
+    answer_ttls = []
+    soa = []
+    for line in output.splitlines():
+        if line.startswith(';; ANSWER SECTION:'):
+            section = 'answer_types'
+        elif line.startswith(';; AUTHORITY SECTION:'):
+            section = 'authority_types'
+        elif line.startswith(';;'):
+            if 'SECTION:' in line:
+                section = None
+        elif line.strip() and section:
+            fields = line.split()
+            if len(fields) < 5 or not fields[1].isdigit() or fields[2] != 'IN':
+                continue
+            record_type = fields[3]
+            if record_type not in {'A', 'AAAA', 'CNAME', 'SOA', 'NS', 'TXT', 'HTTPS', 'SVCB'}:
+                record_type = 'other'
+            result[section][record_type] = result[section].get(record_type, 0) + 1
+            if section == 'answer_types':
+                answer_ttls.append(int(fields[1]))
+            if record_type == 'SOA' and len(fields) >= 11 and fields[-1].isdigit():
+                ttl, minimum = int(fields[1]), int(fields[-1])
+                negative_ttls.append(min(ttl, minimum))
+                soa.append({'record_ttl_s': ttl, 'minimum_ttl_s': minimum,
+                            'effective_negative_ttl_s': min(ttl, minimum)})
+    result['answer_ttl_s'] = sorted(set(answer_ttls))[:64]
+    if soa:
+        result['soa'] = soa[:8]
+    if negative_ttls:
+        result['negative_ttl_s'] = min(negative_ttls)
+    return result
+
+
+def diagnostic_dig(host, record_type, timeout):
+    executable = shutil.which('dig')
+    if not executable:
+        return {'status': 'unavailable', 'available': False}
+    if timeout < 1:
+        return {'status': 'skipped', 'available': True, 'reason': 'worker_deadline_near'}
+    # No @server: use the runner's configured resolver. dig and the macOS system
+    # resolver are distinct paths, so record both instead of substituting one.
+    command = [executable, '+time=2', '+tries=1', '+noall', '+comments', '+answer',
+               '+authority', host, record_type]
+    try:
+        completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   text=True, encoding='utf-8', errors='replace', timeout=timeout,
+                                   check=False)
+    except subprocess.TimeoutExpired:
+        return {'status': 'timeout', 'available': True}
+    return summarize_dig(completed.stdout, completed.returncode)
+
+
+def diagnostic_doh(host, timeout):
+    # Read-only public-record comparison, never a resolver for application
+    # traffic. Returned addresses are discarded and cannot influence readiness.
+    opener = build_opener(NoRedirects(), HTTPSHandler(context=ssl.create_default_context()))
+    request = Request('https://cloudflare-dns.com/dns-query?' + urlencode({'name': host, 'type': 'A'}),
+                      headers={'Accept': 'application/dns-json', 'Cache-Control': 'no-store',
+                               'User-Agent': 'Shengjian-Cloudflare-Diagnostics'})
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            body = response.read(16385)
+            result = {'status': 'response', 'http_status': response.status,
+                      'tls_verification': True, 'redirects_followed': False}
+            if len(body) > 16384:
+                return {**result, 'response_exceeds_diagnostic_limit': True}
+            payload = json.loads(body)
+            if not isinstance(payload, dict):
+                return {**result, 'json_object': False}
+            rcode = payload.get('Status')
+            result['rcode_number'] = rcode if isinstance(rcode, int) and 0 <= rcode <= 65535 else None
+            result['rcode'] = {0: 'NOERROR', 1: 'FORMERR', 2: 'SERVFAIL', 3: 'NXDOMAIN',
+                               4: 'NOTIMP', 5: 'REFUSED'}.get(result['rcode_number'], 'other')
+            answers = payload.get('Answer', [])
+            answers = [item for item in answers if isinstance(item, dict)] if isinstance(answers, list) else []
+            result['answer_count'] = len(answers)
+            result['answer_types'] = {}
+            ttls = []
+            for item in answers:
+                kind = {1: 'A', 5: 'CNAME', 28: 'AAAA'}.get(item.get('type'), 'other')
+                result['answer_types'][kind] = result['answer_types'].get(kind, 0) + 1
+                ttl = item.get('TTL')
+                if isinstance(ttl, int) and 0 <= ttl <= 2**32 - 1:
+                    ttls.append(ttl)
+            result['answer_ttl_s'] = sorted(set(ttls))[:64]
+            authority = payload.get('Authority', [])
+            soa = []
+            for item in authority[:64] if isinstance(authority, list) else []:
+                if not isinstance(item, dict) or item.get('type') != 6:
+                    continue
+                ttl, data = item.get('TTL'), item.get('data')
+                fields = data.split() if isinstance(data, str) else []
+                if isinstance(ttl, int) and 0 <= ttl <= 2**32 - 1 and fields and fields[-1].isdigit():
+                    minimum = int(fields[-1])
+                    soa.append({'record_ttl_s': ttl, 'minimum_ttl_s': minimum,
+                                'effective_negative_ttl_s': min(ttl, minimum)})
+            if soa:
+                result['soa'] = soa[:8]
+            return result
+    except HTTPError as error:
+        error.close()
+        return {'status': 'response', 'http_status': error.code,
+                'tls_verification': True, 'redirects_followed': False}
+
+
+def diagnostic_worker(host, timeout):
+    """Run in a disposable process: getaddrinfo has no reliable socket timeout."""
+    require(candidate_hostname(host), 'invalid diagnostic hostname')
+    timeout = max(.05, min(float(timeout), 11))
+    started = time.monotonic()
+    deadline = started + timeout
+    results = queue.Queue()
+    jobs = {
+        'getaddrinfo_unspecified': lambda: diagnostic_resolve(host, socket.AF_UNSPEC),
+        'getaddrinfo_ipv4': lambda: diagnostic_resolve(host, socket.AF_INET),
+        'getaddrinfo_ipv6': lambda: diagnostic_resolve(host, socket.AF_INET6),
+        'default_proxy': lambda: diagnostic_proxy_presence(host),
+        'default_https': lambda: diagnostic_https(host, min(6, timeout)),
+        # Leave time for subprocess.run to kill and reap dig before this
+        # disposable Python process exits, including a nearly exhausted budget.
+        'dig_a': lambda: diagnostic_dig(host, 'A', min(4, deadline - time.monotonic() - .5)),
+        'dig_aaaa': lambda: diagnostic_dig(host, 'AAAA', min(4, deadline - time.monotonic() - .5)),
+        'cloudflare_doh_a': lambda: diagnostic_doh(host, min(4, timeout)),
+    }
+
+    def collect(name, check):
+        before = time.monotonic()
+        try:
+            result = check()
+        except Exception as error:
+            result = {'status': 'error', **diagnostic_error(error)}
+        result['elapsed_s'] = round(time.monotonic() - before, 3)
+        results.put((name, result))
+
+    for name, check in jobs.items():
+        threading.Thread(target=collect, args=(name, check), daemon=True).start()
+    checks = {}
+    while len(checks) < len(jobs):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            name, result = results.get(timeout=remaining)
+        except queue.Empty:
+            break
+        checks[name] = result
+    for name in jobs.keys() - checks.keys():
+        checks[name] = {'status': 'timeout'}
+    return checks
+
+
+def stop_diagnostic_process(process, deadline):
+    if process.poll() is None:
+        if os.name == 'nt':
+            try:
+                subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=max(.1, min(1, deadline - time.monotonic())), check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    try:
+        process.communicate(timeout=max(.1, min(.5, deadline - time.monotonic())))
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
+def collect_diagnostics(host, budget):
+    remaining = budget.deadline - time.monotonic()
+    if remaining < 3:
+        return {'status': 'skipped', 'reason': 'overall_deadline_near'}
+    allowance = min(DIAGNOSTIC_LIMIT_SECONDS, remaining)
+    deadline = time.monotonic() + allowance
+    # Reserve two seconds inside the existing E2E budget for killing/reaping a
+    # hung resolver process. The hostname goes through stdin, never argv/logs.
+    execution_timeout = allowance - 2
+    process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--diagnostics-worker'],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, encoding='utf-8', errors='replace', start_new_session=os.name != 'nt',
+        creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0) if os.name == 'nt' else 0)
+    try:
+        payload = json.dumps({'host': host, 'timeout': max(.05, execution_timeout - 1)})
+        stdout, _ = process.communicate(payload, timeout=max(.1, deadline - time.monotonic() - 2))
+        if process.returncode != 0:
+            return {'status': 'worker_error', 'returncode': process.returncode}
+        checks = json.loads(stdout)
+        require(isinstance(checks, dict), 'diagnostic worker returned invalid JSON')
+        return {'status': 'completed', 'checks': checks}
+    except subprocess.TimeoutExpired:
+        return {'status': 'worker_timeout'}
+    except (ValueError, CheckFailed):
+        return {'status': 'worker_output_invalid'}
+    finally:
+        stop_diagnostic_process(process, deadline)
+
+
+def diagnostic_message(value, evidence):
+    value = evidence.redact(str(value))[:1000]
+    value = re.sub(r'(?i)\b[a-z][a-z0-9+.-]*://[^\s<>\"\']+', '[address redacted]', value)
+    value = re.sub(r'(?i)(?<![\w])(?:[a-z0-9_-]+\.)+[a-z0-9_-]+', '[host redacted]', value)
+    return re.sub(r'(?i)(?<![\w])(?:[0-9a-f]{0,4}:){2,}[0-9a-f:.]*(?:%[\w]+)?',
+                  '[address redacted]', value)
+
+
+class PublicDiagnostics:
+    def __init__(self, evidence, budget):
+        self.evidence, self.budget = evidence, budget
+        self.last_started = None
+        self.count = 0
+
+    def observe(self, state):
+        host = candidate_hostname(state.get('candidate_host'))
+        if host and host not in self.evidence.secrets:
+            self.evidence.secrets.append(host)
+        now = time.monotonic()
+        if (not host or not state.get('managed') or state.get('stage') != 'verifying'
+                or not state.get('last_error') or self.count >= 2
+                or (self.last_started is not None and now - self.last_started < DIAGNOSTIC_INTERVAL_SECONDS)):
+            return
+        self.last_started, self.count = now, self.count + 1
+        entry = {
+            'captured_at': datetime.now(timezone.utc).isoformat(),
+            'candidate_host_sha256': hashlib.sha256(host.encode('ascii')).hexdigest(),
+            'frozen_service': {name: diagnostic_message(state.get(name, ''), self.evidence)
+                               for name in ('phase', 'stage', 'error_code', 'last_error')},
+            'managed_at_capture': bool(state.get('managed')),
+            'ready_at_capture': bool(state.get('ready')),
+            'url_assignments': state.get('url_assignments'),
+            'tls_verification': True,
+            'diagnostics_do_not_set_ready': True,
+        }
+        print(f'[Cloudflare E2E] capturing bounded DNS/HTTPS diagnostics ({self.count}/2)', flush=True)
+        try:
+            entry.update(collect_diagnostics(host, self.budget))
+        except Exception as error:
+            entry.update(status='collection_error', error_type=type(error).__name__)
+        entry['elapsed_s'] = round(time.monotonic() - now, 3)
+        self.evidence.result['diagnostics'].append(self.evidence.redact(entry))
 
 
 class PublicClient:
@@ -390,12 +731,14 @@ def start_tunnel(service, args, evidence, reference_hash):
     last_transition = None
     binary_checked = False
     transitions = evidence.result.setdefault('tunnel_transitions', [])
+    diagnostics = PublicDiagnostics(evidence, service.budget)
     while True:
         require(service.process.poll() is None, 'service exited while creating the tunnel')
         require(snapshot.get('mode') == 'cloudflare' and snapshot.get('enabled'),
                 'service did not select Cloudflare mode')
         state = snapshot.get('cloudflare')
         require(isinstance(state, dict), 'service is missing Cloudflare diagnostics; rebuild the package')
+        diagnostics.observe(state)
         transition = {name: state.get(name, '') for name in ('phase', 'stage', 'error_code', 'error')}
         if transition != last_transition:
             transitions.append(evidence.redact(transition))
@@ -589,4 +932,8 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    if sys.argv[1:] == ['--diagnostics-worker']:
+        request = json.loads(sys.stdin.read(4096))
+        print(json.dumps(diagnostic_worker(request.get('host'), request.get('timeout', 10))), flush=True)
+    else:
+        raise SystemExit(main())
