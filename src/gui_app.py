@@ -22,6 +22,7 @@ import peer_share
 import mac_tunnel
 import relay_client
 import connection_modes
+import mobile_modern
 from http.client import HTTPConnection
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -4008,6 +4009,7 @@ def html_page(access_key: str, server_name: str) -> str:
   </script>
 </body>
 </html>'''
+    page = mobile_modern.apply(page)
     if IS_MACOS:
         from ios_mobile import apply
         return apply(page)
