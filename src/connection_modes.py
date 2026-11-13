@@ -7,11 +7,12 @@ from urllib.parse import quote
 import peer_share
 import relay_client
 import rtc_bridge
+import mac_tunnel
 
 MODES = {
     'public': ('固定公网', '经自己的服务器中转，域名固定，适合跨网络稳定连接。'),
-    'cloudflare': ('CF 隧道', '经 Cloudflare 加密连接，不需要自建服务器。'),
-    'p2p': ('P2P 直连', '服务器只协助握手，文字和文件直接在设备间加密传送。'),
+    'cloudflare': ('公网连接（推荐）', '内置 Cloudflare Quick Tunnel，无需账号与手动配置；首次开启会自动生成临时地址。'),
+    'p2p': ('P2P 直连（实验）', '实验性设备直连；受 NAT 和 UDP 限制，失败后需手动切换其他方式，不会静默改走服务器中转。'),
     'lan': ('局域网', '同一 Wi-Fi 或内网直接连接，不经过公网服务器。'),
 }
 
@@ -24,7 +25,7 @@ class ConnectionModes:
         self.lock = threading.RLock()
         self.config = peer_share.load_json(self.path, {})
         if self.config.get('mode') not in MODES:
-            self.config = {'mode': 'public' if relay_client.phone_url(root, True) else 'lan', 'enabled': True}
+            self.config = {'mode': 'public' if relay_client.phone_url(root, True) else ('cloudflare' if mac_tunnel.find_binary() else 'lan'), 'enabled': True}
 
     def url(self):
         if not self.config['enabled']: return ''
@@ -67,7 +68,8 @@ class ConnectionModes:
                 'p2p': dict(engine.status) if engine else {'available': rtc_bridge.available(), 'connections': 0},
                 'modes': [{'id': ident, 'title': title, 'description': detail,
                            'configured': configured if ident in ('public', 'p2p') else True,
-                           'available': rtc_bridge.available() if ident == 'p2p' else True}
+                           'available': rtc_bridge.available() if ident == 'p2p' else True,
+                           'experimental': ident == 'p2p'}
                           for ident, (title, detail) in MODES.items()]}
 
     def select(self, mode, enabled=True):
