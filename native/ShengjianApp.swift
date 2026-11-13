@@ -635,7 +635,7 @@ struct SettingsView:View {
                     Divider()
                     settingsRow("arrow.clockwise","重新配对","刷新二维码，让旧连接失效",color:.blue) { Task { await model.regenerate() } }
                 } }
-                HStack { Spacer(); VStack(spacing:6) { Image(systemName:"waveform.bubble.fill").font(.system(size:24)).foregroundStyle(accent.opacity(0.7)); Text("声笺 1.4.1").font(.system(size:12,weight:.medium)); Text("想法，自在流动。").font(.system(size:11)).foregroundStyle(.tertiary) }; Spacer() }.padding(.top,8)
+                HStack { Spacer(); VStack(spacing:6) { Image(systemName:"waveform.bubble.fill").font(.system(size:24)).foregroundStyle(accent.opacity(0.7)); Text("声笺 1.4.2").font(.system(size:12,weight:.medium)); Text("想法，自在流动。").font(.system(size:11)).foregroundStyle(.tertiary) }; Spacer() }.padding(.top,8)
             }.padding(32).frame(maxWidth:780).frame(maxWidth:.infinity)
         }
     }
