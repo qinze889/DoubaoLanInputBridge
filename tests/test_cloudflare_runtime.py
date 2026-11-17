@@ -1188,7 +1188,8 @@ def test_dns_wait_is_clamped_to_original_startup_deadline(active_manager, monkey
     manager.deadline_at = manager.attempt_started + mac_tunnel.STARTUP_TIMEOUT
     allocate(manager)
     register(manager)
-    assert manager.dns_grace_until == manager.dns_wait_until == 106.0
+    assert manager.dns_grace_until == 100.0 + mac_tunnel.DNS_GRACE
+    assert manager.dns_wait_until == 106.0
 
     clock[0] = manager.deadline_at
     manager._verify(manager.generation, manager.cancel)
