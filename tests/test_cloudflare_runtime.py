@@ -757,10 +757,10 @@ def test_start_uses_explicit_empty_config_and_records_elapsed_time(tmp_path, mon
         status = manager.status()
 
         assert json.loads(config_path.read_text()) == {}
-        assert command[command.index("--protocol") + 1] == "http2"
+        assert command[command.index("--protocol") + 1] == "auto"
         assert command[command.index("--url") + 1] == "http://127.0.0.1:34567"
         assert status["stage"] == "allocating"
-        assert status["protocol"] == "http2"
+        assert status["protocol"] == "auto"
         assert status["binary_path"] == str(Path(binary).resolve())
         assert 4 <= status["elapsed_seconds"] <= 5
         assert status["ready"] is False
@@ -1188,7 +1188,8 @@ def test_dns_wait_is_clamped_to_original_startup_deadline(active_manager, monkey
     manager.deadline_at = manager.attempt_started + mac_tunnel.STARTUP_TIMEOUT
     allocate(manager)
     register(manager)
-    assert manager.dns_grace_until == manager.dns_wait_until == 106.0
+    assert manager.dns_grace_until == 100.0 + mac_tunnel.DNS_GRACE
+    assert manager.dns_wait_until == 106.0
 
     clock[0] = manager.deadline_at
     manager._verify(manager.generation, manager.cancel)
