@@ -109,7 +109,7 @@ export default function ConnectionPanel({ apiGet, apiPost, onState }: {
     {(error || state?.error) && <p className="machine-error" role="alert">{error || state?.error}</p>}
     {state?.enabled && state.cloudflare && <details className="connection-advanced">
       <summary><ChevronDown size={15}/>连接诊断</summary>
-      <p>{cloudflareStage || state.cloudflare.stage} · {state.cloudflare.elapsed_seconds} 秒 · HTTP/2（TCP 7844）</p>
+      <p>{cloudflareStage || state.cloudflare.stage} · {state.cloudflare.elapsed_seconds} 秒 · {state.cloudflare.protocol === 'auto' ? 'QUIC / HTTP/2 自动选择' : state.cloudflare.protocol === 'http2' ? 'HTTP/2（TCP 7844）' : 'QUIC（UDP 7844）'}</p>
       {state.cloudflare.last_error && <p className="machine-error">{state.cloudflare.last_error}</p>}
       <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 240, overflow: 'auto' }}>{state.cloudflare.log_tail || '等待 Cloudflare 日志…'}</pre>
     </details>}
