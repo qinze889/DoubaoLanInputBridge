@@ -25,7 +25,7 @@ PROBE_TIMEOUT = 8
 PROBE_INTERVAL = 15
 RETRY_INTERVAL = 2
 READY_MAX_AGE = PROBE_INTERVAL + PROBE_TIMEOUT + RETRY_INTERVAL
-DNS_GRACE = 10
+DNS_GRACE = 4
 DNS_WAIT_LIMIT = 30
 DNS_OBSERVE_TIMEOUT = 3
 DNS_OBSERVE_INTERVAL = 4
@@ -190,7 +190,7 @@ class TunnelManager:
         self.error = ''
         self.last_error = ''
         self.binary_path = ''
-        self.protocol = 'http2'
+        self.protocol = 'auto'
         self.connections = set()
         self.probe_epoch = 0
         self.verified_at = 0
@@ -248,8 +248,8 @@ class TunnelManager:
             self.logs.clear()
             self.gateway = PublicGateway(self.origin_port)
             threading.Thread(target=self.gateway.serve_forever, daemon=True).start()
-            # Keep the explicit TCP transport while diagnosing connectivity.
-            # HTTP/2 tunnels use TCP 7844, not the browser's HTTPS 443 route.
+            # Let cloudflared negotiate QUIC and fall back to HTTP/2 when UDP
+            # is blocked; forcing TCP can stall some Windows networks.
             command = [self.binary_path, 'tunnel', '--config', str(empty), '--no-autoupdate',
                        '--url', f'http://127.0.0.1:{self.gateway.server_port}',
                        '--metrics', '127.0.0.1:0', '--protocol', self.protocol, '--loglevel', 'info']
@@ -334,7 +334,7 @@ class TunnelManager:
                         self.deadline_at = self.attempt_started + STARTUP_TIMEOUT
                     self.phase = 'starting'
                     self.stage = 'reconnecting' if self.verified_at else ('connecting' if self.url else 'allocating')
-            # Background QUIC/management prechecks also log ERR in HTTP/2 mode.
+            # Transport/management prechecks can log ERR during auto fallback.
             # Preserve them in the log, but do not treat every ERR as a root cause.
             lower = line.lower()
             is_error = line.startswith('ERR ') or ' ERR ' in line or 'level=error' in line
@@ -567,8 +567,8 @@ class TunnelManager:
     def _failure_message(self, prefix):
         detail = {
             'allocating': '未能申请 Cloudflare 临时地址',
-            'connecting': '未连通 Cloudflare 边缘（HTTP/2，TCP 7844）',
-            'reconnecting': 'Cloudflare 边缘连接中断后未能恢复（TCP 7844）',
+            'connecting': '未连通 Cloudflare 边缘（QUIC/HTTP2 自动选择）',
+            'reconnecting': 'Cloudflare 边缘连接中断后未能恢复（QUIC/HTTP2）',
             'verifying': 'Cloudflare 已注册连接，但本机未能验证公网地址及本地服务',
         }.get(self.stage, '公网连接未通过验证')
         return f'{prefix}：{detail}。' + (f'最近错误：{self.last_error}' if self.last_error else '请展开连接诊断查看日志。')
