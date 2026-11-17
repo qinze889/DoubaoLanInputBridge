@@ -5,12 +5,13 @@ import json
 import hashlib
 import re
 import secrets
+import ssl
 import threading
 import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, urlencode, urlsplit
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.request import Request, build_opener, HTTPRedirectHandler, HTTPSHandler
 
 GET_PATHS = {'/files/shared', '/files/download', '/prompt/library'}
 POST_PATHS = {'/send', '/prompt/enrich', '/files/clipboard', '/files/paste', '/files/share'}
@@ -22,6 +23,17 @@ PEER_HEADERS = {'X-Shengjian-Peer', 'X-Shengjian-Time', 'X-Shengjian-Nonce', 'X-
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
+
+
+def verified_relay_ssl_context():
+    """Retain system trust and add pinned certifi roots for frozen desktop apps."""
+    import certifi
+
+    context = ssl.create_default_context()
+    # PyInstaller may preserve absolute OpenSSL build-machine paths. Never
+    # disable certificate or hostname validation to work around those paths.
+    context.load_verify_locations(cafile=certifi.where())
+    return context
 
 
 def valid_route(method, path):
@@ -60,7 +72,8 @@ class RelayClient:
             from rtc_bridge import RTCBridge
             self.rtc = RTCBridge(lambda job: self.execute(job, allow_signal=False))
         self.status = {'phase': 'off', 'error': '', 'last_seen': 0}
-        self.opener = build_opener(NoRedirect())
+        self.opener = (build_opener(NoRedirect(), HTTPSHandler(context=verified_relay_ssl_context()))
+                       if parsed.scheme == 'https' else build_opener(NoRedirect()))
 
     def start(self):
         if not self.thread or not self.thread.is_alive():
