@@ -73,6 +73,23 @@ def test_auth_offline_and_private_routes(relay):
     assert request(relay, 'GET', '/admin/qr?id=' + device['device_id'], headers=admin)[0] == 200
 
 
+def test_fast_authenticated_connector_handshake_preserves_offline_security(relay):
+    device, _, _ = enroll(relay)
+    ident = device['device_id']
+    headers = {'Authorization': 'Bearer ' + device['token']}
+    assert request(relay, 'GET', f'/connector/{ident}/poll?handshake=1')[0] == 401
+    started = time.monotonic()
+    status, raw, _ = request(
+        relay, 'GET', f'/connector/{ident}/poll?can_paste=1&mode=public&handshake=1', headers=headers)
+    assert time.monotonic() - started < 1.5
+    assert status == 200
+    assert json.loads(raw) == {'ok': True, 'requests': []}
+    assert ident in relay.seen
+    assert relay.capabilities[ident] is True
+    assert relay.modes[ident] == 'public'
+    assert not relay.jobs
+
+
 def test_phone_text_and_file_roundtrip(relay, monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(bridge, 'current_access_key', lambda fallback='': 'local-only-key')

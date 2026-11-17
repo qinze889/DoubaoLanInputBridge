@@ -51,6 +51,25 @@ def test_bad_bundled_ca_fails_closed(monkeypatch, tmp_path, bundle_kind):
         relay_client.RelayClient(config(), 8765, lambda: "local-key")
 
 
+def test_first_poll_uses_fast_handshake_then_normal_long_poll():
+    client = relay_client.RelayClient(config("http://127.0.0.1:8765"), 8765, lambda: "local-key")
+    client.capability = lambda: "1"
+    called = []
+
+    def call(suffix, body=None):
+        called.append(suffix)
+        if len(called) == 2:
+            client.stop_event.set()
+        return {'ok': True, 'requests': []}
+
+    client.call = call
+    client.run()
+    assert len(called) == 2
+    assert "&handshake=1" in called[0]
+    assert "&handshake=" not in called[1]
+    assert client._handshake_pending is False
+
+
 def test_http_local_relay_does_not_require_certifi(monkeypatch, tmp_path):
     monkeypatch.setattr(certifi, "where", lambda: str(tmp_path / "missing"))
     client = relay_client.RelayClient(config("http://127.0.0.1:8765"), 8765, lambda: "local-key")

@@ -291,9 +291,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if action == 'poll' and method == 'GET':
                 from urllib.parse import parse_qs
-                can_paste = (parse_qs(urlsplit(self.path).query).get('can_paste') or ['0'])[0] == '1'
-                mode = (parse_qs(urlsplit(self.path).query).get('mode') or ['public'])[0]
-                session = (parse_qs(urlsplit(self.path).query).get('session') or [''])[0]
+                query = parse_qs(urlsplit(self.path).query)
+                can_paste = (query.get('can_paste') or ['0'])[0] == '1'
+                mode = (query.get('mode') or ['public'])[0]
+                session = (query.get('session') or [''])[0]
+                handshake = (query.get('handshake') or ['0'])[0] == '1'
                 if session and not re.fullmatch(r'[a-f0-9]{32}', session): raise ValueError('session')
                 if mode not in ('public', 'p2p'): raise ValueError('mode')
                 deadline = time.monotonic() + 20
@@ -303,6 +305,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.capabilities[ident] = can_paste
                     self.server.modes[ident] = mode
                     self.server.seen[ident] = time.monotonic()
+                    # The first authenticated poll can acknowledge the desktop
+                    # immediately instead of waiting for the 20s long-poll.
+                    # Legacy clients omit handshake and retain existing behavior.
+                    if handshake:
+                        self.send(200, {'ok': True, 'requests': []})
+                        return
                     while True:
                         if self.server.pollers.get(ident) != session:
                             self.send(200, {'ok': True, 'requests': []})
