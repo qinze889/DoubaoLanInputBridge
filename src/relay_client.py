@@ -72,11 +72,13 @@ class RelayClient:
             from rtc_bridge import RTCBridge
             self.rtc = RTCBridge(lambda job: self.execute(job, allow_signal=False))
         self.status = {'phase': 'off', 'error': '', 'last_seen': 0}
+        self._handshake_pending = True
         self.opener = (build_opener(NoRedirect(), HTTPSHandler(context=verified_relay_ssl_context()))
                        if parsed.scheme == 'https' else build_opener(NoRedirect()))
 
     def start(self):
         if not self.thread or not self.thread.is_alive():
+            self.status.update(phase='connecting', error='')
             self.thread = threading.Thread(target=self.run, daemon=True)
             self.thread.start()
 
@@ -175,7 +177,11 @@ class RelayClient:
     def run(self):
         while not self.stop_event.is_set():
             try:
-                reply = self.call('/poll?can_paste=' + self.capability() + '&mode=' + ('p2p' if self.mode == 'p2p' else 'public') + '&session=' + self.session)
+                suffix = '/poll?can_paste=' + self.capability() + '&mode=' + ('p2p' if self.mode == 'p2p' else 'public') + '&session=' + self.session
+                if self._handshake_pending:
+                    suffix += '&handshake=1'
+                reply = self.call(suffix)
+                self._handshake_pending = False
                 if self.stop_event.is_set():
                     return
                 self.status.update(phase='online', error='', last_seen=time.time())
