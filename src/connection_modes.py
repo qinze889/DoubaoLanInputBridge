@@ -8,6 +8,8 @@ import peer_share
 import relay_client
 import rtc_bridge
 
+DEFAULT_PUBLIC_ORIGIN = 'https://test.xjiaoai.com/shengjian/'
+
 MODES = {
     'public': ('固定公网', '经自己的服务器中转，域名固定，适合跨网络稳定连接。'),
     'cloudflare': ('公网连接（推荐）', '内置 Cloudflare Quick Tunnel，无需账号与手动配置；首次开启会自动生成临时地址。'),
@@ -59,15 +61,18 @@ class ConnectionModes:
         cloudflare = self.server.quick_tunnel.status() if mode == 'cloudflare' else None
         if not enabled: phase, error = 'off', ''
         elif mode in ('public', 'p2p'):
-            phase = client.status['phase'] if client else 'error'
-            error = client.status['error'] if client else '请导入这台机器的服务器配置'
+            phase = client.status['phase'] if client else ('error' if configured else 'activation_required')
+            error = client.status['error'] if client else ('设备连接器未启动，请重试' if configured else '')
         elif mode == 'cloudflare':
             phase, error = cloudflare['phase'], cloudflare['error']
         else: phase, error = ('ready', '') if self.url() else ('error', '未检测到可用局域网地址')
         engine = getattr(client, 'rtc', None)
+        url = self.url() if phase in ('ready', 'online') else ''
         return {'mode': mode, 'enabled': enabled, 'phase': phase, 'error': error,
+                'activation_required': enabled and mode in ('public', 'p2p') and not configured,
+                'activation_url': DEFAULT_PUBLIC_ORIGIN,
                 'cloudflare': cloudflare,
-                'ready': enabled and phase in ('ready', 'online'), 'url': self.url(),
+                'ready': enabled and phase in ('ready', 'online') and bool(url), 'url': url,
                 'peer_endpoint': self.peer_endpoint(),
                 'p2p': dict(engine.status) if engine else {'available': rtc_bridge.available(), 'connections': 0},
                 'modes': [{'id': ident, 'title': title, 'description': detail,
@@ -78,8 +83,6 @@ class ConnectionModes:
 
     def select(self, mode, enabled=True, restart=False):
         if mode not in MODES: raise ValueError('请选择四种连接方式之一')
-        if enabled and mode in ('public', 'p2p') and not relay_client.phone_url(self.root, True):
-            raise ValueError('请先导入本机的服务器配置 relay.json')
         if enabled and mode == 'p2p' and not rtc_bridge.available():
             raise ValueError('安装包缺少 P2P 组件，请安装完整版本')
         with self.lock:
@@ -96,7 +99,7 @@ class ConnectionModes:
             self.config = {'mode': mode, 'enabled': bool(enabled)}
             peer_share.atomic_json(self.path, self.config)
             relay_path = self.root/'relay.json'
-            if relay_path.exists():
+            if relay_client.phone_url(self.root, True):
                 relay = peer_share.load_json(relay_path, {})
                 relay['enabled'] = bool(enabled and mode in ('public', 'p2p'))
                 relay['connection_mode'] = mode
