@@ -2,6 +2,12 @@
 
 发行包与完整说明以 [GitHub Releases](https://github.com/qinze889/DoubaoLanInputBridge/releases) 为准。`VERSION` 表示当前分支源码版本。
 
+## 1.4.4 — 2026-11-25
+
+- 固定公网连接器使用可信 CA，并在连接时立即完成已验证的握手，避免等待长轮询才报告在线。
+- Cloudflare 临时隧道改为自适应传输，保持 HTTPS 身份验证后才显示二维码。
+- Windows 与 Mac 安装包同步纳入以上已合并的公网修复（#22、#23）。
+
 ## 1.4.3 — 2026-11-13
 
 - 修复 Cloudflare 新建临时域名尚未生效时的过早查询：首次正常访问前留出发布期，并进行有界、可选的 DNS 发布观察，仍由正常 HTTPS 访问决定就绪。
