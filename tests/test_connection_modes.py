@@ -98,3 +98,30 @@ def test_explicit_cloudflare_retry_stops_previous_attempt(tmp_path, monkeypatch)
     assert server.quick_tunnel.started == 2
     assert manager.snapshot()['cloudflare']['ready']
 
+
+
+def test_fresh_install_fixed_public_selection_does_not_leak_error_into_cloudflare(tmp_path, monkeypatch):
+    server, manager, _ = setup_modes(tmp_path, monkeypatch)
+    assert manager.select('cloudflare')['ready']
+    state = manager.select('public')
+    assert state['mode'] == 'public'
+    assert state['phase'] == 'activation_required'
+    assert state['activation_required']
+    assert state['activation_url'] == modes.DEFAULT_PUBLIC_ORIGIN
+    assert not state['ready'] and not state['url'] and not state['error']
+    assert not server.quick_tunnel.ready
+    state = manager.select('cloudflare')
+    assert state['ready'] and not state['activation_required'] and not state['error']
+    assert state['url'].startswith('https://test.trycloudflare.com/')
+    assert not (tmp_path/'relay.json').exists()
+
+
+def test_fixed_public_does_not_expose_qr_before_verified_connection(tmp_path, monkeypatch):
+    server, manager, _ = setup_modes(tmp_path, monkeypatch)
+    config = {'url': modes.DEFAULT_PUBLIC_ORIGIN, 'device_id': 'a'*24, 'token': 'b'*43, 'mobile_token': 'c'*43}
+    manager.import_config(config)
+    server.relay.status['phase'] = 'connecting'
+    state = manager.snapshot()
+    assert not state['ready'] and not state['url']
+    server.relay.status['phase'] = 'online'
+    assert manager.snapshot()['ready'] and manager.snapshot()['url']

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Cloud, Globe, LoaderCircle, Network, RotateCw, Wifi } from 'lucide-react'
 
 export type ConnectionState = {
@@ -8,6 +8,8 @@ export type ConnectionState = {
   phase: string
   url: string
   error: string
+  activation_required?: boolean
+  activation_url?: string
   cloudflare?: { stage: string; elapsed_seconds: number; protocol: string; last_error: string; log_tail: string } | null
   p2p: { connections: number }
   modes: { id: string; title: string; description: string; available: boolean; configured: boolean; experimental?: boolean }[]
@@ -27,8 +29,11 @@ export default function ConnectionPanel({ apiGet, apiPost, onState }: {
   const [state, setState] = useState<ConnectionState | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const refreshId = useRef(0)
   const refresh = useCallback(async () => {
+    const id = ++refreshId.current
     const next = await apiGet<ConnectionState>('/desktop/connections')
+    if (id !== refreshId.current) return
     setState(next)
     onState?.(next)
   }, [apiGet, onState])
@@ -42,6 +47,7 @@ export default function ConnectionPanel({ apiGet, apiPost, onState }: {
 
   async function run(action: () => Promise<unknown>) {
     setBusy(true)
+    ++refreshId.current
     setError('')
     try { await action(); await refresh() }
     catch (reason) { setError(reason instanceof Error ? reason.message : '连接配置未完成') }
@@ -52,7 +58,7 @@ export default function ConnectionPanel({ apiGet, apiPost, onState }: {
   const p2p = state?.modes.find(mode => mode.id === 'p2p')
   const activeTitle = state?.modes.find(mode => mode.id === state.mode)?.title ?? '连接'
   const cloudflareStage = state?.cloudflare && cloudflareStages[state.cloudflare.stage]
-  const status = !state?.enabled ? '连接已关闭' : state.ready ? activeTitle + '已就绪' : state.phase === 'error' ? '连接失败' : cloudflareStage || '正在建立连接'
+  const status = !state?.enabled ? '连接已关闭' : state.ready ? activeTitle + '已就绪' : state.activation_required ? '需要绑定本机设备' : state.phase === 'error' ? '连接失败' : cloudflareStage || '正在建立连接'
 
   function modeButton(mode: ConnectionState['modes'][number]) {
     const Icon = icons[mode.id as keyof typeof icons] || Globe
@@ -94,7 +100,7 @@ export default function ConnectionPanel({ apiGet, apiPost, onState }: {
 
     <div className="connection-heading connection-status-actions">
       <span role="status">{busy && <LoaderCircle size={14} className="spin"/>}{status}{state?.mode === 'p2p' && state.ready && ' · ' + state.p2p.connections + ' 个直连'}</span>
-      {state?.enabled && !state.ready && !busy && <button className="connection-retry" type="button" onClick={() => void run(() => apiPost('/desktop/connections', { mode: state.mode, enabled: true, retry: true }))}><RotateCw size={14}/>重试</button>}
+      {state?.enabled && !state.ready && !state.activation_required && !busy && <button className="connection-retry" type="button" onClick={() => void run(() => apiPost('/desktop/connections', { mode: state.mode, enabled: true, retry: true }))}><RotateCw size={14}/>重试</button>}
       <label className="connection-import">导入自建服务器配置
         <input type="file" accept=".json,application/json" hidden disabled={busy} onChange={event => {
           const file = event.target.files?.[0]
@@ -106,6 +112,10 @@ export default function ConnectionPanel({ apiGet, apiPost, onState }: {
         }}/>
       </label>
     </div>
+    {state?.activation_required && <div className="connection-description">
+      <p>固定公网服务器：{state.activation_url}</p>
+      <p>首次使用需要绑定本机设备。请在服务器管理后台添加设备，再导入该设备的独立配置。已有配置的电脑无需重复绑定。</p>
+    </div>}
     {(error || state?.error) && <p className="machine-error" role="alert">{error || state?.error}</p>}
     {state?.enabled && state.cloudflare && <details className="connection-advanced">
       <summary><ChevronDown size={15}/>连接诊断</summary>
